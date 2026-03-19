@@ -309,6 +309,7 @@ func (m Model) renderHelp() string {
   Keybindings:
 
   n         Create new task
+  i         Import existing Claude session
   Enter     Focus active task window
   p         Park task (move to background)
   u         Unpark task (bring back)
@@ -316,8 +317,9 @@ func (m Model) renderHelp() string {
   t         Thaw frozen task (resume)
   x         Kill task (with confirmation)
   c         Mark task completed
+  s         Toggle sort (created / priority)
   r         Refresh AI summaries
-  /         Filter tasks
+  /         Filter tasks (esc to clear)
   ?         Toggle this help
   j/k       Navigate up/down
   q         Quit krang (tasks keep running)
