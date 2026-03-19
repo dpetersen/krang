@@ -2,9 +2,19 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
+
+type TaskFlags struct {
+	NoSandbox                  bool `json:"no_sandbox,omitempty"`
+	DangerouslySkipPermissions bool `json:"dangerously_skip_permissions,omitempty"`
+}
+
+func (f TaskFlags) HasNonDefault() bool {
+	return f.NoSandbox || f.DangerouslySkipPermissions
+}
 
 type TaskState string
 
@@ -38,6 +48,7 @@ type Task struct {
 	Summary        string
 	SummaryHash    string
 	TranscriptPath string
+	Flags          TaskFlags
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -51,11 +62,15 @@ func NewTaskStore(database *sql.DB) *TaskStore {
 }
 
 func (s *TaskStore) Create(task *Task) error {
-	_, err := s.db.Exec(
-		`INSERT INTO tasks (id, name, prompt, state, attention, session_id, cwd, tmux_window)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+	flagsJSON, err := json.Marshal(task.Flags)
+	if err != nil {
+		return fmt.Errorf("marshaling flags: %w", err)
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO tasks (id, name, prompt, state, attention, session_id, cwd, tmux_window, flags)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.Name, task.Prompt, task.State, task.Attention,
-		task.SessionID, task.Cwd, task.TmuxWindow,
+		task.SessionID, task.Cwd, task.TmuxWindow, string(flagsJSON),
 	)
 	if err != nil {
 		return fmt.Errorf("creating task: %w", err)
@@ -76,7 +91,7 @@ func (s *TaskStore) List() ([]Task, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,
 		        COALESCE(session_id, ''), cwd, COALESCE(tmux_window, ''),
-		        summary, summary_hash, transcript_path, created_at, updated_at
+		        summary, summary_hash, transcript_path, flags, created_at, updated_at
 		 FROM tasks
 		 WHERE state NOT IN ('completed', 'failed')
 		 ORDER BY created_at ASC`,
@@ -93,7 +108,7 @@ func (s *TaskStore) ListAll() ([]Task, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,
 		        COALESCE(session_id, ''), cwd, COALESCE(tmux_window, ''),
-		        summary, summary_hash, transcript_path, created_at, updated_at
+		        summary, summary_hash, transcript_path, flags, created_at, updated_at
 		 FROM tasks
 		 ORDER BY created_at ASC`,
 	)
@@ -109,7 +124,7 @@ func (s *TaskStore) GetBySessionID(sessionID string) (*Task, error) {
 	row := s.db.QueryRow(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,
 		        COALESCE(session_id, ''), cwd, COALESCE(tmux_window, ''),
-		        summary, summary_hash, transcript_path, created_at, updated_at
+		        summary, summary_hash, transcript_path, flags, created_at, updated_at
 		 FROM tasks WHERE session_id = ?`,
 		sessionID,
 	)
@@ -185,6 +200,19 @@ func (s *TaskStore) UpdateSummary(id, summary, summaryHash string) error {
 	return err
 }
 
+func (s *TaskStore) UpdateFlags(id string, flags TaskFlags) error {
+	flagsJSON, err := json.Marshal(flags)
+	if err != nil {
+		return fmt.Errorf("marshaling flags: %w", err)
+	}
+	_, err = s.db.Exec(
+		`UPDATE tasks SET flags = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 WHERE id = ?`,
+		string(flagsJSON), id,
+	)
+	return err
+}
+
 func (s *TaskStore) Delete(id string) error {
 	_, err := s.db.Exec(`DELETE FROM tasks WHERE id = ?`, id)
 	return err
@@ -194,14 +222,15 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 	var tasks []Task
 	for rows.Next() {
 		var t Task
-		var createdAt, updatedAt string
+		var createdAt, updatedAt, flagsJSON string
 		if err := rows.Scan(
 			&t.ID, &t.Name, &t.Prompt, &t.State, &t.Attention,
 			&t.SessionID, &t.Cwd, &t.TmuxWindow,
-			&t.Summary, &t.SummaryHash, &t.TranscriptPath, &createdAt, &updatedAt,
+			&t.Summary, &t.SummaryHash, &t.TranscriptPath, &flagsJSON, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning task: %w", err)
 		}
+		_ = json.Unmarshal([]byte(flagsJSON), &t.Flags)
 		t.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 		t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 		tasks = append(tasks, t)
@@ -211,14 +240,15 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 
 func scanTask(row *sql.Row) (*Task, error) {
 	var t Task
-	var createdAt, updatedAt string
+	var createdAt, updatedAt, flagsJSON string
 	if err := row.Scan(
 		&t.ID, &t.Name, &t.Prompt, &t.State, &t.Attention,
 		&t.SessionID, &t.Cwd, &t.TmuxWindow,
-		&t.Summary, &t.SummaryHash, &t.TranscriptPath, &createdAt, &updatedAt,
+		&t.Summary, &t.SummaryHash, &t.TranscriptPath, &flagsJSON, &createdAt, &updatedAt,
 	); err != nil {
 		return nil, err
 	}
+	_ = json.Unmarshal([]byte(flagsJSON), &t.Flags)
 	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 	return &t, nil

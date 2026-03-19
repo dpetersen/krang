@@ -43,4 +43,7 @@ const (
 	ModeImportSessionID
 	ModeSitRep
 	ModeSitRepLoading
+	ModeFlagEdit
+	ModeNewFlags
+	ModeConfirmRelaunch
 )

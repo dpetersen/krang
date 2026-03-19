@@ -38,4 +38,7 @@ var (
 
 	debugLogStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("240"))
+
+	flagSkullStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("208"))
 )

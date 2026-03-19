@@ -28,7 +28,30 @@ func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession string
 	return &Manager{tasks: tasks, events: events, activeSession: activeSession}
 }
 
-func (m *Manager) CreateTask(name, prompt, cwd string) (*db.Task, error) {
+func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool) string {
+	var cmd string
+	if flags.NoSandbox {
+		cmd = "claude"
+	} else {
+		cmd = "safehouse claude"
+	}
+
+	if resume {
+		cmd += " --resume " + shellQuote(name)
+	} else {
+		cmd += " --session-id " + sessionID
+		cmd += " --name " + shellQuote(name)
+	}
+
+	if flags.DangerouslySkipPermissions {
+		cmd += " --dangerously-skip-permissions"
+	}
+
+	cmd += "; echo ''; echo 'Claude exited. Press Enter to close.'; read"
+	return cmd
+}
+
+func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags) (*db.Task, error) {
 	taskID := ulid.Make().String()
 	sessionID := uuid.New().String()
 
@@ -40,13 +63,10 @@ func (m *Manager) CreateTask(name, prompt, cwd string) (*db.Task, error) {
 		Attention: db.AttentionOK,
 		SessionID: sessionID,
 		Cwd:       cwd,
+		Flags:     flags,
 	}
 
-	claudeCmd := fmt.Sprintf(
-		"safehouse claude --session-id %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
-		sessionID,
-		shellQuote(name),
-	)
+	claudeCmd := buildClaudeCommand(sessionID, name, flags, false)
 
 	windowName := tmux.WindowName(name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, cwd, claudeCmd)
@@ -300,16 +320,55 @@ func (m *Manager) Wake(taskID string) error {
 		return fmt.Errorf("task %s has no session ID to resume", task.Name)
 	}
 
-	claudeCmd := fmt.Sprintf(
-		"safehouse claude --resume %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
-		task.SessionID,
-		shellQuote(task.Name),
-	)
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true)
 
 	windowName := tmux.WindowName(task.Name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
 	if err != nil {
 		return fmt.Errorf("creating tmux window for wake: %w", err)
+	}
+
+	if err := m.tasks.UpdateTmuxWindow(task.ID, windowID); err != nil {
+		return err
+	}
+
+	return m.tasks.UpdateState(task.ID, db.StateActive)
+}
+
+func (m *Manager) Relaunch(taskID string) error {
+	tasks, err := m.tasks.ListAll()
+	if err != nil {
+		return err
+	}
+
+	task := findTask(tasks, taskID)
+	if task == nil {
+		return fmt.Errorf("task not found: %s", taskID)
+	}
+	if task.State != db.StateActive && task.State != db.StateParked {
+		return fmt.Errorf("task %s cannot be relaunched (state: %s)", task.Name, task.State)
+	}
+
+	// If parked, unpark first.
+	if task.State == db.StateParked {
+		if err := m.Unpark(taskID); err != nil {
+			return fmt.Errorf("unparking for relaunch: %w", err)
+		}
+	}
+
+	// Shut down Claude and wait for the process to exit so the
+	// session file is fully persisted before we --resume it.
+	if task.TmuxWindow != "" {
+		m.shutdownClaudeForRelaunch(task)
+	}
+
+	// Build new command with --resume and current flags.
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true)
+
+	windowName := tmux.WindowName(task.Name)
+	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
+	if err != nil {
+		return fmt.Errorf("creating tmux window for relaunch: %w", err)
 	}
 
 	if err := m.tasks.UpdateTmuxWindow(task.ID, windowID); err != nil {
@@ -400,6 +459,37 @@ func (m *Manager) gracefulCloseWindow(task *db.Task) {
 	}
 
 	_ = m.events.Log(task.ID, "graceful_shutdown_timeout", "fell back to kill-window")
+	_ = tmux.KillWindow(task.TmuxWindow)
+}
+
+// shutdownClaudeForRelaunch SIGINTs the Claude process, waits for it
+// to exit (ensuring the session file is persisted), then kills the
+// tmux window. Unlike gracefulCloseWindow, this waits for the process
+// rather than the window, avoiding the race where kill-window
+// interrupts Claude before it finishes saving.
+func (m *Manager) shutdownClaudeForRelaunch(task *db.Task) {
+	shellPID, err := tmux.PanePID(task.TmuxWindow)
+	if err != nil {
+		_ = m.events.Log(task.ID, "shutdown_warning", "could not get pane PID: "+err.Error())
+		_ = tmux.KillWindow(task.TmuxWindow)
+		return
+	}
+
+	claudePID := findClaudeChild(shellPID)
+	if claudePID > 0 {
+		_ = syscall.Kill(claudePID, syscall.SIGINT)
+
+		// Wait for the Claude process to exit, not the window.
+		deadline := time.Now().Add(gracefulShutdownTimeout)
+		for time.Now().Before(deadline) {
+			if err := syscall.Kill(claudePID, 0); err != nil {
+				// Process gone — session is saved.
+				break
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+
 	_ = tmux.KillWindow(task.TmuxWindow)
 }
 

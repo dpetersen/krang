@@ -43,7 +43,36 @@ type Model struct {
 	sitRepViewport viewport.Model
 	sitRepContent  string
 
+	flagEditCursor int
+	pendingFlags   db.TaskFlags
+	flagEditTaskID string
+
 	debugLog []string
+}
+
+type flagDefinition struct {
+	Label             string
+	Description       string
+	Get               func(db.TaskFlags) bool
+	Set               func(*db.TaskFlags, bool)
+	RequiresRelaunch  bool
+}
+
+var flagDefinitions = []flagDefinition{
+	{
+		Label:            "No Sandbox",
+		Description:      "Launch claude directly (skip safehouse)",
+		Get:              func(f db.TaskFlags) bool { return f.NoSandbox },
+		Set:              func(f *db.TaskFlags, v bool) { f.NoSandbox = v },
+		RequiresRelaunch: true,
+	},
+	{
+		Label:            "Skip Permissions",
+		Description:      "Pass --dangerously-skip-permissions",
+		Get:              func(f db.TaskFlags) bool { return f.DangerouslySkipPermissions },
+		Set:              func(f *db.TaskFlags, v bool) { f.DangerouslySkipPermissions = v },
+		RequiresRelaunch: true,
+	},
 }
 
 func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession string) Model {
@@ -232,7 +261,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleImportNameKey(msg)
 	case ModeImportSessionID:
 		return m.handleImportSessionIDKey(msg)
-		return m.handleFilterKey(msg)
+	case ModeFlagEdit, ModeNewFlags:
+		return m.handleFlagEditKey(msg)
+	case ModeConfirmRelaunch:
+		return m.handleConfirmRelaunchKey(msg)
 	default:
 		return m.handleNormalKey(msg)
 	}
@@ -309,6 +341,16 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.nameInput.Focus()
 		return m, m.nameInput.Cursor.BlinkCmd()
 
+	case "F":
+		t := m.selectedTask()
+		if t != nil && t.State != db.StateCompleted && t.State != db.StateFailed {
+			m.flagEditTaskID = t.ID
+			m.pendingFlags = t.Flags
+			m.flagEditCursor = 0
+			m.mode = ModeFlagEdit
+		}
+		return m, nil
+
 	case "?":
 		m.mode = ModeHelp
 		return m, nil
@@ -361,7 +403,12 @@ func (m Model) handleNewPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		name := m.pendingNewName
 		m.mode = ModeNormal
 		m.pendingNewName = ""
-		return m, m.createTask(name, prompt)
+		return m, m.createTask(name, prompt, db.TaskFlags{})
+	case "ctrl+f":
+		m.pendingFlags = db.TaskFlags{}
+		m.flagEditCursor = 0
+		m.mode = ModeNewFlags
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -465,6 +512,108 @@ func (m Model) generateSitRep() tea.Msg {
 	}
 
 	return SitRepResultMsg{Content: content}
+}
+
+func (m Model) handleFlagEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = ModeNormal
+		return m, nil
+	case "j", "down":
+		if m.flagEditCursor < len(flagDefinitions)-1 {
+			m.flagEditCursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.flagEditCursor > 0 {
+			m.flagEditCursor--
+		}
+		return m, nil
+	case " ":
+		fd := flagDefinitions[m.flagEditCursor]
+		fd.Set(&m.pendingFlags, !fd.Get(m.pendingFlags))
+		return m, nil
+	case "enter":
+		if m.mode == ModeNewFlags {
+			prompt := strings.TrimSpace(m.promptInput.Value())
+			name := m.pendingNewName
+			flags := m.pendingFlags
+			m.mode = ModeNormal
+			m.pendingNewName = ""
+			return m, m.createTask(name, prompt, flags)
+		}
+		// ModeFlagEdit on an existing task.
+		taskID := m.flagEditTaskID
+		newFlags := m.pendingFlags
+
+		var originalTask *db.Task
+		for i := range m.tasks {
+			if m.tasks[i].ID == taskID {
+				originalTask = &m.tasks[i]
+				break
+			}
+		}
+		if originalTask == nil {
+			m.mode = ModeNormal
+			return m, nil
+		}
+
+		// For dormant tasks, just save flags directly.
+		if originalTask.State == db.StateDormant {
+			m.mode = ModeNormal
+			return m, func() tea.Msg {
+				if err := m.taskStore.UpdateFlags(taskID, newFlags); err != nil {
+					return ErrorMsg{Err: err}
+				}
+				return m.refreshTasks()
+			}
+		}
+
+		// Check if any relaunch-requiring flag changed.
+		relaunchNeeded := false
+		for _, fd := range flagDefinitions {
+			if fd.RequiresRelaunch && fd.Get(newFlags) != fd.Get(originalTask.Flags) {
+				relaunchNeeded = true
+				break
+			}
+		}
+
+		if !relaunchNeeded {
+			m.mode = ModeNormal
+			return m, func() tea.Msg {
+				if err := m.taskStore.UpdateFlags(taskID, newFlags); err != nil {
+					return ErrorMsg{Err: err}
+				}
+				return m.refreshTasks()
+			}
+		}
+
+		// Need confirmation for relaunch.
+		m.mode = ModeConfirmRelaunch
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		taskID := m.flagEditTaskID
+		flags := m.pendingFlags
+		m.mode = ModeNormal
+		return m, func() tea.Msg {
+			if err := m.taskStore.UpdateFlags(taskID, flags); err != nil {
+				return ErrorMsg{Err: err}
+			}
+			if err := m.manager.Relaunch(taskID); err != nil {
+				return ErrorMsg{Err: err}
+			}
+			return m.refreshTasks()
+		}
+	default:
+		m.mode = ModeNormal
+		return m, nil
+	}
 }
 
 func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -630,13 +779,13 @@ func (m Model) doSummarize() tea.Msg {
 	return SummariesUpdatedMsg{DebugLines: debugLines}
 }
 
-func (m Model) createTask(name, prompt string) tea.Cmd {
+func (m Model) createTask(name, prompt string, flags db.TaskFlags) tea.Cmd {
 	return func() tea.Msg {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return ErrorMsg{Err: fmt.Errorf("getting cwd: %w", err)}
 		}
-		if _, err := m.manager.CreateTask(name, prompt, cwd); err != nil {
+		if _, err := m.manager.CreateTask(name, prompt, cwd, flags); err != nil {
 			return ErrorMsg{Err: err}
 		}
 		return m.refreshTasks()

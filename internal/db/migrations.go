@@ -63,3 +63,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
 const schemaV3 = `
 ALTER TABLE tasks ADD COLUMN transcript_path TEXT NOT NULL DEFAULT '';
 `
+
+const schemaV4 = `
+ALTER TABLE tasks ADD COLUMN flags TEXT NOT NULL DEFAULT '{}';
+`

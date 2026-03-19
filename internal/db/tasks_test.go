@@ -230,6 +230,89 @@ func TestTaskUpdateSummary(t *testing.T) {
 	}
 }
 
+func TestTaskFlagsHasNonDefault(t *testing.T) {
+	if (TaskFlags{}).HasNonDefault() {
+		t.Error("zero-value flags should not be non-default")
+	}
+	if !(TaskFlags{NoSandbox: true}).HasNonDefault() {
+		t.Error("NoSandbox should be non-default")
+	}
+	if !(TaskFlags{DangerouslySkipPermissions: true}).HasNonDefault() {
+		t.Error("DangerouslySkipPermissions should be non-default")
+	}
+}
+
+func TestTaskCreateWithFlags(t *testing.T) {
+	store := NewTaskStore(openTestDB(t))
+
+	task := &Task{
+		ID: "01ABC", Name: "flagged", State: StateActive,
+		Attention: AttentionOK, Cwd: "/tmp",
+		Flags: TaskFlags{NoSandbox: true, DangerouslySkipPermissions: true},
+	}
+	if err := store.Create(task); err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if !tasks[0].Flags.NoSandbox {
+		t.Error("expected NoSandbox to be true")
+	}
+	if !tasks[0].Flags.DangerouslySkipPermissions {
+		t.Error("expected DangerouslySkipPermissions to be true")
+	}
+}
+
+func TestTaskUpdateFlags(t *testing.T) {
+	store := NewTaskStore(openTestDB(t))
+
+	task := &Task{
+		ID: "01ABC", Name: "flags-update", State: StateActive,
+		Attention: AttentionOK, Cwd: "/tmp",
+	}
+	if err := store.Create(task); err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+
+	if err := store.UpdateFlags("01ABC", TaskFlags{NoSandbox: true}); err != nil {
+		t.Fatalf("updating flags: %v", err)
+	}
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if !tasks[0].Flags.NoSandbox {
+		t.Error("expected NoSandbox after update")
+	}
+	if tasks[0].Flags.DangerouslySkipPermissions {
+		t.Error("expected DangerouslySkipPermissions to remain false")
+	}
+}
+
+func TestTaskFlagsDefaultEmpty(t *testing.T) {
+	store := NewTaskStore(openTestDB(t))
+
+	task := &Task{
+		ID: "01ABC", Name: "no-flags", State: StateActive,
+		Attention: AttentionOK, Cwd: "/tmp",
+	}
+	if err := store.Create(task); err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if tasks[0].Flags.HasNonDefault() {
+		t.Error("default flags should not be non-default")
+	}
+}
+
 func TestTaskDelete(t *testing.T) {
 	store := NewTaskStore(openTestDB(t))
 

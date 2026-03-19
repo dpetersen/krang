@@ -28,6 +28,8 @@ func (m Model) View() string {
 		b.WriteString("\n")
 		b.WriteString(inputLabelStyle.Render(fmt.Sprintf("Prompt for %s: ", m.pendingNewName)))
 		b.WriteString(m.promptInput.View())
+		b.WriteString("\n")
+		b.WriteString(headerStyle.Render("  Enter to create, Ctrl+F for flags"))
 	case ModeConfirmKill:
 		t := m.selectedTask()
 		if t != nil {
@@ -49,6 +51,12 @@ func (m Model) View() string {
 	case ModeHelp:
 		b.WriteString("\n")
 		b.WriteString(m.renderHelp())
+	case ModeFlagEdit, ModeNewFlags:
+		b.WriteString("\n")
+		b.WriteString(m.renderFlagEdit())
+	case ModeConfirmRelaunch:
+		b.WriteString("\n")
+		b.WriteString(errorStyle.Render("Flags changed. Claude will be relaunched (session resumes). Proceed? [y/N]"))
 	default:
 		if m.filterText != "" {
 			b.WriteString(headerStyle.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
@@ -226,6 +234,9 @@ func (m Model) renderRow(index int, t db.Task, nameW, cwdW, companionCount int) 
 	if len(name) > nameW {
 		name = name[:nameW-1] + "~"
 	}
+	if t.Flags.HasNonDefault() {
+		name = flagSkullStyle.Render("☠") + " " + name
+	}
 
 	cwd := relativeCwd(t.Cwd)
 	if len(cwd) > cwdW {
@@ -300,6 +311,9 @@ func (m Model) renderStatusBar() string {
 		case db.StateDormant:
 			hints = append(hints, "[t]haw")
 		}
+		if t.State != db.StateCompleted && t.State != db.StateFailed {
+			hints = append(hints, "[F]lags")
+		}
 		hints = append(hints, "[x]kill", "[c]omplete")
 	}
 
@@ -356,6 +370,7 @@ func (m Model) renderHelp() string {
   t         Thaw frozen task (resume)
   x         Kill task (with confirmation)
   c         Mark task completed
+  F         Edit task flags (sandbox, permissions)
   s         Toggle sort (created / priority)
   S         Sit rep (briefing on all active tasks)
   r         Refresh AI summaries
@@ -379,6 +394,40 @@ func (m Model) renderHelp() string {
   Press any key to close`
 
 	return headerStyle.Render(help)
+}
+
+func (m Model) renderFlagEdit() string {
+	var b strings.Builder
+
+	title := "Task Flags"
+	if m.mode == ModeFlagEdit {
+		for _, t := range m.tasks {
+			if t.ID == m.flagEditTaskID {
+				title += ": " + t.Name
+				break
+			}
+		}
+	} else {
+		title += ": " + m.pendingNewName
+	}
+	b.WriteString(inputLabelStyle.Render("  " + title))
+	b.WriteString("\n\n")
+
+	for i, fd := range flagDefinitions {
+		cursor := "  "
+		if i == m.flagEditCursor {
+			cursor = "> "
+		}
+		check := "[ ]"
+		if fd.Get(m.pendingFlags) {
+			check = "[x]"
+		}
+		b.WriteString(fmt.Sprintf("  %s%s %s — %s\n", cursor, check, fd.Label, fd.Description))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render("  j/k: navigate  space: toggle  enter: apply  esc: cancel"))
+	return b.String()
 }
 
 func (m Model) renderDebugLog() string {
