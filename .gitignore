@@ -1,2 +1,4 @@
 # Built binary
 /krang
+# Dev database
+.krang-dev.db*

@@ -10,17 +10,23 @@ import (
 )
 
 func Open() (*sql.DB, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("finding home dir: %w", err)
+	dbPath := os.Getenv("KRANG_DB")
+	if dbPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("finding home dir: %w", err)
+		}
+		dbDir := filepath.Join(home, ".config", "krang")
+		if err := os.MkdirAll(dbDir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating config dir: %w", err)
+		}
+		dbPath = filepath.Join(dbDir, "krang.db")
+	} else {
+		dbDir := filepath.Dir(dbPath)
+		if err := os.MkdirAll(dbDir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating db dir: %w", err)
+		}
 	}
-
-	dbDir := filepath.Join(home, ".config", "krang")
-	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		return nil, fmt.Errorf("creating config dir: %w", err)
-	}
-
-	dbPath := filepath.Join(dbDir, "krang.db")
 	database, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)

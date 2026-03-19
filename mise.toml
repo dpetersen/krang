@@ -12,6 +12,7 @@ depends = ["build"]
 run = "./krang setup"
 
 [tasks.run]
-description = "Build, install hooks, and launch krang"
+description = "Build, install hooks, and launch krang (dev DB)"
 depends = ["build", "setup"]
+env = { KRANG_DB = ".krang-dev.db" }
 run = "./krang"
