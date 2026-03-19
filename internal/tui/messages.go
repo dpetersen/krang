@@ -19,6 +19,11 @@ type HookEventMsg struct {
 
 type ReconcileTickMsg struct{}
 
+type SitRepResultMsg struct {
+	Content string
+	Err     error
+}
+
 type SummaryTickMsg struct{}
 
 type SummariesUpdatedMsg struct {
@@ -36,4 +41,6 @@ const (
 	ModeFilter
 	ModeImportName
 	ModeImportSessionID
+	ModeSitRep
+	ModeSitRepLoading
 )

@@ -6,12 +6,14 @@ import (
 
 // HookEvent represents the JSON payload from Claude Code hooks.
 type HookEvent struct {
-	SessionID        string `json:"session_id"`
-	HookEventName    string `json:"hook_event_name"`
-	Cwd              string `json:"cwd"`
-	NotificationType string `json:"notification_type,omitempty"`
-	ToolName         string `json:"tool_name,omitempty"`
-	RawPayload       string `json:"-"`
+	SessionID            string `json:"session_id"`
+	HookEventName        string `json:"hook_event_name"`
+	Cwd                  string `json:"cwd"`
+	TranscriptPath       string `json:"transcript_path,omitempty"`
+	NotificationType     string `json:"notification_type,omitempty"`
+	ToolName             string `json:"tool_name,omitempty"`
+	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
+	RawPayload           string `json:"-"`
 }
 
 // AttentionFromEvent maps a hook event to the appropriate attention state.

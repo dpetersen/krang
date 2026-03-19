@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/summary"
@@ -37,6 +39,9 @@ type Model struct {
 	pendingNewName    string
 	pendingImportName string
 	filterText        string
+
+	sitRepViewport viewport.Model
+	sitRepContent  string
 
 	debugLog []string
 }
@@ -137,6 +142,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refreshTasks
 
+	case SitRepResultMsg:
+		if msg.Err != nil {
+			m.appendDebugLog(fmt.Sprintf("[%s] ERROR: sit rep: %v",
+				time.Now().Format("15:04:05"), msg.Err))
+			m.mode = ModeNormal
+			return m, nil
+		}
+		m.sitRepContent = msg.Content
+		contentWidth := m.width - 2
+		contentHeight := m.height - 4
+		if contentWidth < 30 {
+			contentWidth = 30
+		}
+		if contentHeight < 6 {
+			contentHeight = 6
+		}
+
+		renderer, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(contentWidth),
+		)
+		var rendered string
+		if err == nil {
+			rendered, err = renderer.Render(msg.Content)
+		}
+		if err != nil {
+			rendered = wordWrap(msg.Content, contentWidth)
+		}
+
+		m.sitRepViewport = viewport.New(contentWidth, contentHeight)
+		m.sitRepViewport.SetContent(rendered)
+		m.mode = ModeSitRep
+		return m, nil
+
 	case ReconcileTickMsg:
 		return m, tea.Batch(
 			m.doReconcile,
@@ -182,6 +221,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ModeHelp:
 		m.mode = ModeNormal
 		return m, nil
+	case ModeSitRepLoading:
+		// No input while loading.
+		return m, nil
+	case ModeSitRep:
+		return m.handleSitRepKey(msg)
 	case ModeFilter:
 		return m.handleFilterKey(msg)
 	case ModeImportName:
@@ -254,6 +298,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		return m, m.doSummarize
+
+	case "S":
+		m.mode = ModeSitRepLoading
+		return m, m.generateSitRep
 
 	case "i":
 		m.mode = ModeImportName
@@ -388,6 +436,35 @@ func (m Model) handleImportSessionIDKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.sessionIDInput, cmd = m.sessionIDInput.Update(msg)
 	return m, cmd
+}
+
+func (m Model) handleSitRepKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "esc", "S":
+		m.mode = ModeNormal
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.sitRepViewport, cmd = m.sitRepViewport.Update(msg)
+	return m, cmd
+}
+
+func (m Model) generateSitRep() tea.Msg {
+	tasks, err := m.taskStore.List()
+	if err != nil {
+		return SitRepResultMsg{Err: err}
+	}
+
+	content, err := summary.GenerateSitRep(summary.SitRepInput{
+		Tasks:      tasks,
+		ScreenRows: m.height,
+		ScreenCols: m.width,
+	})
+	if err != nil {
+		return SitRepResultMsg{Err: err}
+	}
+
+	return SitRepResultMsg{Content: content}
 }
 
 func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -680,6 +757,10 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 
 		if event.Cwd != "" && event.Cwd != t.Cwd {
 			_ = m.taskStore.UpdateCwd(t.ID, event.Cwd)
+		}
+
+		if event.TranscriptPath != "" && event.TranscriptPath != t.TranscriptPath {
+			_ = m.taskStore.UpdateTranscriptPath(t.ID, event.TranscriptPath)
 		}
 
 		if event.HookEventName == "TaskCompleted" {

@@ -63,8 +63,47 @@ func (m Model) View() string {
 		b.WriteString(debugSection)
 	}
 
+	if m.mode == ModeSitRepLoading {
+		return titleStyle.Render(" KRANG") + "  " + headerStyle.Render("Generating sit rep...") + "\n"
+	}
+	if m.mode == ModeSitRep {
+		header := titleStyle.Render(" SIT REP") + "  " + headerStyle.Render("(q/esc to close, j/k to scroll)")
+		return header + "\n\n" + m.sitRepViewport.View() + "\n"
+	}
+
 	return b.String()
 }
+
+func wordWrap(text string, width int) string {
+	var result strings.Builder
+	for _, line := range strings.Split(text, "\n") {
+		if len(line) <= width {
+			result.WriteString(line)
+			result.WriteByte('\n')
+			continue
+		}
+		remaining := line
+		for len(remaining) > width {
+			breakAt := width
+			// Try to break at a space.
+			for i := width; i > width/2; i-- {
+				if remaining[i] == ' ' {
+					breakAt = i
+					break
+				}
+			}
+			result.WriteString(remaining[:breakAt])
+			result.WriteByte('\n')
+			remaining = strings.TrimLeft(remaining[breakAt:], " ")
+		}
+		if remaining != "" {
+			result.WriteString(remaining)
+			result.WriteByte('\n')
+		}
+	}
+	return strings.TrimRight(result.String(), "\n")
+}
+
 
 func (m Model) renderHeader() string {
 	activeCt, parkedCt, dormantCt := 0, 0, 0
@@ -266,7 +305,7 @@ func (m Model) renderStatusBar() string {
 
 	hints = append(hints, "[i]mport")
 	if len(m.tasks) > 0 {
-		hints = append(hints, "re[s]ort", "[/]filter")
+		hints = append(hints, "[S]itrep", "re[s]ort", "[/]filter")
 	}
 	hints = append(hints, "[?]help", "[q]uit")
 
@@ -318,6 +357,7 @@ func (m Model) renderHelp() string {
   x         Kill task (with confirmation)
   c         Mark task completed
   s         Toggle sort (created / priority)
+  S         Sit rep (briefing on all active tasks)
   r         Refresh AI summaries
   /         Filter tasks (esc to clear)
   ?         Toggle this help

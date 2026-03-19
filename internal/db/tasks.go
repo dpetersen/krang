@@ -34,11 +34,12 @@ type Task struct {
 	Attention   AttentionState
 	SessionID   string
 	Cwd         string
-	TmuxWindow  string
-	Summary     string
-	SummaryHash string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	TmuxWindow     string
+	Summary        string
+	SummaryHash    string
+	TranscriptPath string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type TaskStore struct {
@@ -75,7 +76,7 @@ func (s *TaskStore) List() ([]Task, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,
 		        COALESCE(session_id, ''), cwd, COALESCE(tmux_window, ''),
-		        summary, summary_hash, created_at, updated_at
+		        summary, summary_hash, transcript_path, created_at, updated_at
 		 FROM tasks
 		 WHERE state NOT IN ('completed', 'failed')
 		 ORDER BY created_at ASC`,
@@ -92,7 +93,7 @@ func (s *TaskStore) ListAll() ([]Task, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,
 		        COALESCE(session_id, ''), cwd, COALESCE(tmux_window, ''),
-		        summary, summary_hash, created_at, updated_at
+		        summary, summary_hash, transcript_path, created_at, updated_at
 		 FROM tasks
 		 ORDER BY created_at ASC`,
 	)
@@ -108,7 +109,7 @@ func (s *TaskStore) GetBySessionID(sessionID string) (*Task, error) {
 	row := s.db.QueryRow(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,
 		        COALESCE(session_id, ''), cwd, COALESCE(tmux_window, ''),
-		        summary, summary_hash, created_at, updated_at
+		        summary, summary_hash, transcript_path, created_at, updated_at
 		 FROM tasks WHERE session_id = ?`,
 		sessionID,
 	)
@@ -138,6 +139,15 @@ func (s *TaskStore) UpdateCwd(id, cwd string) error {
 		`UPDATE tasks SET cwd = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 		 WHERE id = ?`,
 		cwd, id,
+	)
+	return err
+}
+
+func (s *TaskStore) UpdateTranscriptPath(id, transcriptPath string) error {
+	_, err := s.db.Exec(
+		`UPDATE tasks SET transcript_path = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 WHERE id = ?`,
+		transcriptPath, id,
 	)
 	return err
 }
@@ -188,7 +198,7 @@ func scanTasks(rows *sql.Rows) ([]Task, error) {
 		if err := rows.Scan(
 			&t.ID, &t.Name, &t.Prompt, &t.State, &t.Attention,
 			&t.SessionID, &t.Cwd, &t.TmuxWindow,
-			&t.Summary, &t.SummaryHash, &createdAt, &updatedAt,
+			&t.Summary, &t.SummaryHash, &t.TranscriptPath, &createdAt, &updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning task: %w", err)
 		}
@@ -205,7 +215,7 @@ func scanTask(row *sql.Row) (*Task, error) {
 	if err := row.Scan(
 		&t.ID, &t.Name, &t.Prompt, &t.State, &t.Attention,
 		&t.SessionID, &t.Cwd, &t.TmuxWindow,
-		&t.Summary, &t.SummaryHash, &createdAt, &updatedAt,
+		&t.Summary, &t.SummaryHash, &t.TranscriptPath, &createdAt, &updatedAt,
 	); err != nil {
 		return nil, err
 	}

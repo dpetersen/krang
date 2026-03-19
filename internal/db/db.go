@@ -54,7 +54,12 @@ func migrate(database *sql.DB) error {
 	if _, err := database.Exec(schemaV1); err != nil {
 		return err
 	}
-	// V2: drop UNIQUE on name.
-	_, err := database.Exec(schemaV2)
-	return err
+	// V2: recreate tasks table without UNIQUE on name, with transcript_path.
+	// Must disable foreign keys around the table swap.
+	database.Exec("PRAGMA foreign_keys=OFF")
+	database.Exec(schemaV2)
+	database.Exec("PRAGMA foreign_keys=ON")
+	// V3: add transcript_path for DBs where V2 ran before it included the column.
+	database.Exec(schemaV3)
+	return nil
 }
