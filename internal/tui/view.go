@@ -221,6 +221,14 @@ func (m Model) countCompanions(tasks []db.Task) map[string]int {
 	return counts
 }
 
+func padRight(s string, width int) string {
+	visible := lipgloss.Width(s)
+	if visible >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-visible)
+}
+
 func (m Model) renderRow(index int, t db.Task, nameW, cwdW, companionCount int) string {
 	cursor := "  "
 	if index == m.cursor {
@@ -255,10 +263,12 @@ func (m Model) renderRow(index int, t db.Task, nameW, cwdW, companionCount int) 
 		summary = summary[:maxSummaryW-1] + "~"
 	}
 
-	row := fmt.Sprintf(
-		"%s%-4d %-*s %-8s %-6s %-*s %s",
-		cursor, index+1, nameW, name, stateStr, attnStr, cwdW, cwd, summary,
-	)
+	row := cursor + padRight(fmt.Sprintf("%-4d", index+1), 4) + " " +
+		padRight(name, nameW) + " " +
+		padRight(stateStr, 8) + " " +
+		padRight(attnStr, 6) + " " +
+		padRight(cwd, cwdW) + " " +
+		summary
 
 	if index == m.cursor {
 		return selectedStyle.Render(row)
