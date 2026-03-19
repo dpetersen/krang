@@ -11,6 +11,7 @@ const hookURL = "http://127.0.0.1:19283/hooks/event"
 
 var hookedEvents = []string{
 	"SessionStart",
+	"UserPromptSubmit",
 	"Stop",
 	"PermissionRequest",
 	"TaskCompleted",

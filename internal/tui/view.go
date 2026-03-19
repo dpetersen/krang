@@ -40,6 +40,12 @@ func (m Model) View() string {
 		b.WriteString(m.renderStatusBar())
 	}
 
+	debugSection := m.renderDebugLog()
+	if debugSection != "" {
+		b.WriteString("\n\n")
+		b.WriteString(debugSection)
+	}
+
 	return b.String()
 }
 
@@ -196,4 +202,19 @@ func (m Model) renderStatusBar() string {
 	hints = append(hints, "[q]uit")
 
 	return statusBarStyle.Render(strings.Join(hints, "  "))
+}
+
+func (m Model) renderDebugLog() string {
+	if len(m.debugLog) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("  Events"))
+	b.WriteString("\n")
+	for _, line := range m.debugLog {
+		b.WriteString(debugLogStyle.Render("  " + line))
+		b.WriteString("\n")
+	}
+	return b.String()
 }

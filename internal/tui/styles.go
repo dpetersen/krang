@@ -35,4 +35,7 @@ var (
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("196"))
+
+	debugLogStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("240"))
 )

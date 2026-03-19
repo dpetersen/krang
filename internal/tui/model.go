@@ -9,16 +9,20 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/task"
 )
 
 type Model struct {
-	manager *task.Manager
-	tasks   []db.Task
-	cursor  int
-	mode    InputMode
-	width   int
-	height  int
+	manager    *task.Manager
+	taskStore  *db.TaskStore
+	eventStore *db.EventStore
+	hookEvents <-chan hooks.HookEvent
+	tasks      []db.Task
+	cursor     int
+	mode       InputMode
+	width      int
+	height     int
 
 	nameInput   textinput.Model
 	promptInput textinput.Model
@@ -27,9 +31,11 @@ type Model struct {
 	errorExpires time.Time
 
 	pendingNewName string
+
+	debugLog []string
 }
 
-func NewModel(manager *task.Manager) Model {
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent) Model {
 	nameInput := textinput.New()
 	nameInput.Placeholder = "task-name"
 	nameInput.CharLimit = 40
@@ -40,6 +46,9 @@ func NewModel(manager *task.Manager) Model {
 
 	return Model{
 		manager:     manager,
+		taskStore:   taskStore,
+		eventStore:  eventStore,
+		hookEvents:  hookEvents,
 		nameInput:   nameInput,
 		promptInput: promptInput,
 	}
@@ -49,6 +58,7 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.refreshTasks,
 		m.reconcileTick(),
+		m.waitForHookEvent(),
 	)
 }
 
@@ -65,6 +75,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = len(m.tasks) - 1
 		}
 		return m, nil
+
+	case HookEventMsg:
+		t, _ := m.taskStore.GetBySessionID(msg.Event.SessionID)
+		if t == nil {
+			// Not a krang-managed session — ignore it.
+			return m, m.waitForHookEvent()
+		}
+
+		logLine := fmt.Sprintf("[%s] %s task=%s",
+			time.Now().Format("15:04:05"),
+			msg.Event.HookEventName,
+			t.Name,
+		)
+		if msg.Event.NotificationType != "" {
+			logLine += " type=" + msg.Event.NotificationType
+		}
+		if msg.Event.ToolName != "" {
+			logLine += " tool=" + msg.Event.ToolName
+		}
+		m.debugLog = append(m.debugLog, logLine)
+		const maxDebugLines = 8
+		if len(m.debugLog) > maxDebugLines {
+			m.debugLog = m.debugLog[len(m.debugLog)-maxDebugLines:]
+		}
+		return m, tea.Batch(
+			m.handleHookEvent(msg.Event),
+			m.waitForHookEvent(),
+		)
 
 	case ReconcileTickMsg:
 		return m, tea.Batch(
@@ -326,6 +364,39 @@ func (m Model) killSelected() tea.Cmd {
 		if err := m.manager.Kill(t.ID); err != nil {
 			return ErrorMsg{Err: err}
 		}
+		return m.refreshTasks()
+	}
+}
+
+func (m Model) waitForHookEvent() tea.Cmd {
+	return func() tea.Msg {
+		event, ok := <-m.hookEvents
+		if !ok {
+			return nil
+		}
+		return HookEventMsg{Event: event}
+	}
+}
+
+func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
+	return func() tea.Msg {
+		// Task lookup already done in Update — safe to look up again for the DB writes.
+		t, err := m.taskStore.GetBySessionID(event.SessionID)
+		if err != nil || t == nil {
+			return m.refreshTasks()
+		}
+
+		_ = m.eventStore.Log(t.ID, event.HookEventName, event.RawPayload)
+
+		attention, ok := hooks.AttentionFromEvent(event)
+		if ok {
+			_ = m.taskStore.UpdateAttention(t.ID, attention)
+		}
+
+		if event.HookEventName == "TaskCompleted" {
+			_ = m.taskStore.UpdateState(t.ID, db.StateCompleted)
+		}
+
 		return m.refreshTasks()
 	}
 }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/hooks"
 )
 
 type TasksRefreshedMsg struct {
@@ -10,6 +11,10 @@ type TasksRefreshedMsg struct {
 
 type ErrorMsg struct {
 	Err error
+}
+
+type HookEventMsg struct {
+	Event hooks.HookEvent
 }
 
 type ReconcileTickMsg struct{}

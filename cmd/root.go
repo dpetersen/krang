@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/task"
 	"github.com/dpetersen/krang/internal/tmux"
 	"github.com/dpetersen/krang/internal/tui"
@@ -34,6 +35,10 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("detecting current session: %w", err)
 	}
 
+	if krangWindowID, err := tmux.ActiveWindowID(activeSession); err == nil {
+		_ = tmux.RenameWindow(krangWindowID, "krang")
+	}
+
 	if err := tmux.EnsureParkedSession(); err != nil {
 		return fmt.Errorf("setting up parked session: %w", err)
 	}
@@ -52,7 +57,16 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("initial reconciliation: %w", err)
 	}
 
-	model := tui.NewModel(manager)
+	hookEvents := make(chan hooks.HookEvent, 64)
+	hookServer := hooks.NewServer(func(event hooks.HookEvent) {
+		hookEvents <- event
+	})
+	if err := hookServer.Start(); err != nil {
+		return fmt.Errorf("starting hook server on %s: %w", hooks.ListenAddr, err)
+	}
+	defer hookServer.Stop()
+
+	model := tui.NewModel(manager, taskStore, eventStore, hookEvents)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := program.Run(); err != nil {

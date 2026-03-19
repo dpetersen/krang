@@ -1,0 +1,17 @@
+[tasks.build]
+description = "Build the krang binary"
+run = "go build -o krang ."
+
+[tasks.test]
+description = "Run all tests"
+run = "go test ./..."
+
+[tasks.setup]
+description = "Install Claude Code hooks"
+depends = ["build"]
+run = "./krang setup"
+
+[tasks.run]
+description = "Build, install hooks, and launch krang"
+depends = ["build", "setup"]
+run = "./krang"
