@@ -23,6 +23,7 @@
 
 ## UI Polish
 
+- **tmux window color coding** — set the tmux window/tab style to match attention state (red for permission requests, yellow for waiting, etc.) so the status bar itself signals which tasks need attention without switching to the krang TUI
 - **Notification sound/bell** — terminal bell when attention changes to permission or waiting
 - **macOS notifications** — via `terminal-notifier` for attention changes when not looking at krang
 - **Configurable keybindings**
@@ -31,7 +32,42 @@
 ## Integration
 
 - **Obsidian Kanban sync** — create tasks from Kanban cards, mark cards done when tasks complete
-- **Multi-instance support** — if ever needed, could namespace the port and DB path
+- **Multi-instance support** — see below
+
+## Multi-Instance Support & Resilient Hooks
+
+The current hook design hardcodes `http://127.0.0.1:19283` as a global HTTP hook. This causes two problems: errors when Krang isn't running (or hooks are installed but nothing is listening), and only one Krang instance can run at a time.
+
+### Design
+
+Replace HTTP hooks with a **command hook** that delegates via environment variable:
+
+1. **Relay script** (`~/.config/krang/hooks/relay.sh`) — a static script installed once. Reads event JSON from stdin, checks for `KRANG_PORT`, and forwards to the local Krang instance. If `KRANG_PORT` is unset, exits silently.
+
+   ```bash
+   #!/bin/bash
+   [ -z "$KRANG_PORT" ] && exit 0
+   cat | curl -s -X POST -H 'Content-Type: application/json' \
+     -d @- "http://127.0.0.1:$KRANG_PORT/hooks/event" >/dev/null 2>&1
+   exit 0
+   ```
+
+2. **Dynamic port** — Krang picks a free port on startup instead of hardcoding 19283. The port is stored in the DB or a pidfile so the TUI can display it.
+
+3. **Environment propagation** — when Krang spawns Claude sessions via tmux, it sets `KRANG_PORT=<port>` in the environment. The relay script in those sessions routes events back to the correct Krang instance.
+
+4. **Hook installation** — instead of writing `type: "http"` entries, Krang installs `type: "command"` entries pointing at the relay script. The script is static and never needs updating; all routing is driven by the env var.
+
+### Benefits
+
+- **No errors when Krang isn't running** — unset env var means the hook is a no-op
+- **Multiple instances** — two Krangs on different ports receive events only from their own spawned sessions
+- **No global state collision** — each instance uses its own DB (already supported via `KRANG_DB`)
+
+### Edge Cases
+
+- **Pre-existing sessions** — Claude sessions started before Krang won't have `KRANG_PORT`. Import can adopt them but they'll be silent until restarted. Could mitigate with a fallback port file.
+- **Port stability across restarts** — if Krang crashes and restarts on a different port, running sessions still point at the old port. Options: prefer reusing the last port, or write the port to a well-known file that the relay script reads as a fallback.
 
 ## Workspace Management (Big Feature)
 
