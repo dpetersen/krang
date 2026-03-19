@@ -124,6 +124,15 @@ func (s *TaskStore) UpdateAttention(id string, attention AttentionState) error {
 	return err
 }
 
+func (s *TaskStore) UpdateSessionID(id, sessionID string) error {
+	_, err := s.db.Exec(
+		`UPDATE tasks SET session_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 WHERE id = ?`,
+		sessionID, id,
+	)
+	return err
+}
+
 func (s *TaskStore) UpdateTmuxWindow(id string, tmuxWindow string) error {
 	var windowVal any
 	if tmuxWindow == "" {

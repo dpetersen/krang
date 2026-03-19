@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
+	"github.com/dpetersen/krang/internal/summary"
 	"github.com/dpetersen/krang/internal/task"
 )
 
@@ -17,8 +18,10 @@ type Model struct {
 	manager    *task.Manager
 	taskStore  *db.TaskStore
 	eventStore *db.EventStore
-	hookEvents <-chan hooks.HookEvent
-	tasks      []db.Task
+	hookEvents      <-chan hooks.HookEvent
+	summaryPipeline *summary.Pipeline
+	activeSession   string
+	tasks           []db.Task
 	cursor     int
 	mode       InputMode
 	width      int
@@ -27,15 +30,12 @@ type Model struct {
 	nameInput   textinput.Model
 	promptInput textinput.Model
 
-	lastError    string
-	errorExpires time.Time
-
 	pendingNewName string
 
 	debugLog []string
 }
 
-func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent) Model {
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession string) Model {
 	nameInput := textinput.New()
 	nameInput.Placeholder = "task-name"
 	nameInput.CharLimit = 40
@@ -45,12 +45,14 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	promptInput.CharLimit = 500
 
 	return Model{
-		manager:     manager,
-		taskStore:   taskStore,
-		eventStore:  eventStore,
-		hookEvents:  hookEvents,
-		nameInput:   nameInput,
-		promptInput: promptInput,
+		manager:         manager,
+		taskStore:        taskStore,
+		eventStore:       eventStore,
+		hookEvents:       hookEvents,
+		summaryPipeline: summaryPipeline,
+		activeSession:   activeSession,
+		nameInput:       nameInput,
+		promptInput:      promptInput,
 	}
 }
 
@@ -59,6 +61,7 @@ func (m Model) Init() tea.Cmd {
 		m.refreshTasks,
 		m.reconcileTick(),
 		m.waitForHookEvent(),
+		m.summaryTick(),
 	)
 }
 
@@ -78,8 +81,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case HookEventMsg:
 		t, _ := m.taskStore.GetBySessionID(msg.Event.SessionID)
+
+		// On SessionStart with unknown ID, try to adopt it for a
+		// recently woken task whose old session ID no longer matches.
+		if t == nil && msg.Event.HookEventName == "SessionStart" {
+			t = m.tryAdoptSession(msg.Event)
+		}
+
 		if t == nil {
-			// Not a krang-managed session — ignore it.
 			return m, m.waitForHookEvent()
 		}
 
@@ -94,15 +103,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Event.ToolName != "" {
 			logLine += " tool=" + msg.Event.ToolName
 		}
-		m.debugLog = append(m.debugLog, logLine)
-		const maxDebugLines = 8
-		if len(m.debugLog) > maxDebugLines {
-			m.debugLog = m.debugLog[len(m.debugLog)-maxDebugLines:]
-		}
+		m.appendDebugLog(logLine)
 		return m, tea.Batch(
 			m.handleHookEvent(msg.Event),
 			m.waitForHookEvent(),
 		)
+
+	case SummaryTickMsg:
+		return m, tea.Batch(
+			m.doSummarize,
+			m.summaryTick(),
+		)
+
+	case SummariesUpdatedMsg:
+		for _, line := range msg.DebugLines {
+			m.appendDebugLog(line)
+		}
+		return m, m.refreshTasks
 
 	case ReconcileTickMsg:
 		return m, tea.Batch(
@@ -111,8 +128,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case ErrorMsg:
-		m.lastError = msg.Err.Error()
-		m.errorExpires = time.Now().Add(5 * time.Second)
+		m.appendDebugLog(fmt.Sprintf("[%s] ERROR: %v",
+			time.Now().Format("15:04:05"), msg.Err))
 		return m, nil
 
 	case tea.KeyMsg:
@@ -192,6 +209,9 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "c":
 		return m, m.completeSelected()
+
+	case "r":
+		return m, m.doSummarize
 	}
 
 	return m, nil
@@ -249,6 +269,43 @@ func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+const maxDebugLines = 20
+
+func (m *Model) appendDebugLog(line string) {
+	m.debugLog = append(m.debugLog, line)
+	if len(m.debugLog) > maxDebugLines {
+		m.debugLog = m.debugLog[len(m.debugLog)-maxDebugLines:]
+	}
+}
+
+// tryAdoptSession matches an unknown SessionStart to an active task
+// whose cwd matches the event's cwd. This handles resumed sessions
+// which get a new session ID.
+func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
+	tasks, err := m.taskStore.List()
+	if err != nil {
+		return nil
+	}
+
+	for _, t := range tasks {
+		if t.State != db.StateActive {
+			continue
+		}
+		if t.TmuxWindow == "" {
+			continue
+		}
+		if t.Cwd == event.Cwd {
+			_ = m.taskStore.UpdateSessionID(t.ID, event.SessionID)
+			m.appendDebugLog(fmt.Sprintf("[%s] adopted session for task=%s",
+				time.Now().Format("15:04:05"), t.Name))
+			updated := t
+			updated.SessionID = event.SessionID
+			return &updated
+		}
+	}
+	return nil
+}
+
 func (m Model) selectedTask() *db.Task {
 	if m.cursor < 0 || m.cursor >= len(m.tasks) {
 		return nil
@@ -275,6 +332,43 @@ func (m Model) doReconcile() tea.Msg {
 		return ErrorMsg{Err: err}
 	}
 	return m.refreshTasks()
+}
+
+func (m Model) summaryTick() tea.Cmd {
+	return tea.Tick(30*time.Second, func(time.Time) tea.Msg {
+		return SummaryTickMsg{}
+	})
+}
+
+func (m Model) doSummarize() tea.Msg {
+	now := time.Now().Format("15:04:05")
+	var debugLines []string
+
+	if m.summaryPipeline == nil {
+		debugLines = append(debugLines, fmt.Sprintf("[%s] summary: pipeline is nil", now))
+		return SummariesUpdatedMsg{DebugLines: debugLines}
+	}
+
+	tasks, err := m.taskStore.List()
+	if err != nil {
+		debugLines = append(debugLines, fmt.Sprintf("[%s] summary: list error: %v", now, err))
+		return SummariesUpdatedMsg{DebugLines: debugLines}
+	}
+
+	eligible := 0
+	for _, t := range tasks {
+		if t.TmuxWindow != "" && (t.State == db.StateActive || t.State == db.StateParked) {
+			eligible++
+		}
+	}
+	debugLines = append(debugLines, fmt.Sprintf("[%s] summary: running for %d eligible tasks", now, eligible))
+
+	results := m.summaryPipeline.SummarizeAll(tasks)
+	for _, r := range results {
+		debugLines = append(debugLines, fmt.Sprintf("[%s] summary: %s", now, r))
+	}
+
+	return SummariesUpdatedMsg{DebugLines: debugLines}
 }
 
 func (m Model) createTask(name, prompt string) tea.Cmd {

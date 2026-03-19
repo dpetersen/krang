@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
+	"github.com/dpetersen/krang/internal/summary"
 	"github.com/dpetersen/krang/internal/task"
 	"github.com/dpetersen/krang/internal/tmux"
 	"github.com/dpetersen/krang/internal/tui"
@@ -35,7 +36,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("detecting current session: %w", err)
 	}
 
-	if krangWindowID, err := tmux.ActiveWindowID(activeSession); err == nil {
+	if krangWindowID, err := tmux.CurrentWindowID(); err == nil {
 		_ = tmux.RenameWindow(krangWindowID, "krang")
 	}
 
@@ -66,7 +67,9 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 	defer hookServer.Stop()
 
-	model := tui.NewModel(manager, taskStore, eventStore, hookEvents)
+	summaryPipeline := summary.NewPipeline(taskStore)
+
+	model := tui.NewModel(manager, taskStore, eventStore, hookEvents, summaryPipeline, activeSession)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := program.Run(); err != nil {

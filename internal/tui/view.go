@@ -32,10 +32,6 @@ func (m Model) View() string {
 			b.WriteString(errorStyle.Render(fmt.Sprintf("Kill task %q? [y/N]", t.Name)))
 		}
 	} else {
-		if m.lastError != "" && time.Now().Before(m.errorExpires) {
-			b.WriteString("\n")
-			b.WriteString(errorStyle.Render("Error: " + m.lastError))
-		}
 		b.WriteString("\n")
 		b.WriteString(m.renderStatusBar())
 	}
@@ -199,7 +195,7 @@ func (m Model) renderStatusBar() string {
 		hints = append(hints, "[x]kill", "[c]omplete")
 	}
 
-	hints = append(hints, "[q]uit")
+	hints = append(hints, "[r]efresh", "[q]uit")
 
 	return statusBarStyle.Render(strings.Join(hints, "  "))
 }

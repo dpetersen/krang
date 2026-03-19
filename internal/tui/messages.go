@@ -19,6 +19,12 @@ type HookEventMsg struct {
 
 type ReconcileTickMsg struct{}
 
+type SummaryTickMsg struct{}
+
+type SummariesUpdatedMsg struct {
+	DebugLines []string
+}
+
 type InputMode int
 
 const (

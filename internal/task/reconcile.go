@@ -13,24 +13,15 @@ func (m *Manager) Reconcile() error {
 		return err
 	}
 
-	activeWindows, err := tmux.ListWindows(m.activeSession)
-	if err != nil {
-		return err
-	}
-	parkedWindows, err := tmux.ListWindows(tmux.ParkedSession)
-	if err != nil {
-		return err
-	}
-
+	// Collect live K! windows from both sessions.
 	liveWindowIDs := make(map[string]bool)
-	for _, w := range activeWindows {
-		if strings.HasPrefix(w.Name, tmux.WindowPrefix) {
-			liveWindowIDs[w.ID] = true
-		}
-	}
-	for _, w := range parkedWindows {
-		if strings.HasPrefix(w.Name, tmux.WindowPrefix) {
-			liveWindowIDs[w.ID] = true
+
+	for _, session := range []string{m.activeSession, tmux.ParkedSession} {
+		windows, _ := tmux.ListWindows(session)
+		for _, w := range windows {
+			if strings.HasPrefix(w.Name, tmux.WindowPrefix) {
+				liveWindowIDs[w.ID] = true
+			}
 		}
 	}
 
@@ -42,7 +33,10 @@ func (m *Manager) Reconcile() error {
 			continue
 		}
 
-		if !liveWindowIDs[task.TmuxWindow] {
+		// Before marking as gone, double-check the window exists
+		// directly. This handles cases where the window is in a
+		// session we didn't enumerate.
+		if !liveWindowIDs[task.TmuxWindow] && !tmux.WindowExists(task.TmuxWindow) {
 			if task.SessionID != "" {
 				_ = m.tasks.UpdateState(task.ID, db.StateDormant)
 			} else {

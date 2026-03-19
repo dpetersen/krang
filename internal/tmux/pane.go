@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -53,6 +54,25 @@ func PanePID(windowID string) (int, error) {
 		return 0, fmt.Errorf("parsing pane PID: %w", err)
 	}
 	return pid, nil
+}
+
+// CurrentWindowID returns the window ID of the pane this process is
+// running in, using the TMUX_PANE environment variable.
+func CurrentWindowID() (string, error) {
+	paneID := os.Getenv("TMUX_PANE")
+	if paneID == "" {
+		return "", fmt.Errorf("TMUX_PANE not set")
+	}
+	cmd := exec.Command(
+		"tmux", "display-message",
+		"-t", paneID,
+		"-p", "#{window_id}",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("getting window ID for pane %s: %w", paneID, err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func PaneDead(windowID string) bool {
