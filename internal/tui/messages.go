@@ -32,4 +32,6 @@ const (
 	ModeNewName
 	ModeNewPrompt
 	ModeConfirmKill
+	ModeHelp
+	ModeFilter
 )

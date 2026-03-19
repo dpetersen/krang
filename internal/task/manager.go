@@ -84,6 +84,9 @@ func (m *Manager) Park(taskID string) error {
 	if err := tmux.MoveWindow(task.TmuxWindow, tmux.ParkedSession); err != nil {
 		return fmt.Errorf("moving window to parked: %w", err)
 	}
+	for _, cID := range tmux.FindCompanions(m.activeSession, task.Name) {
+		_ = tmux.MoveWindow(cID, tmux.ParkedSession)
+	}
 
 	return m.tasks.UpdateState(task.ID, db.StateParked)
 }
@@ -105,6 +108,9 @@ func (m *Manager) Unpark(taskID string) error {
 	if err := tmux.MoveWindow(task.TmuxWindow, m.activeSession); err != nil {
 		return fmt.Errorf("moving window to active: %w", err)
 	}
+	for _, cID := range tmux.FindCompanions(tmux.ParkedSession, task.Name) {
+		_ = tmux.MoveWindow(cID, m.activeSession)
+	}
 
 	return m.tasks.UpdateState(task.ID, db.StateActive)
 }
@@ -112,7 +118,7 @@ func (m *Manager) Unpark(taskID string) error {
 func (m *Manager) Dormify(taskID string) error {
 	tasks, err := m.tasks.List()
 	if err != nil {
-		return err
+		return fmt.Errorf("dormify list: %w", err)
 	}
 
 	task := findTask(tasks, taskID)
@@ -123,15 +129,26 @@ func (m *Manager) Dormify(taskID string) error {
 		return fmt.Errorf("task %s cannot be dormified (state: %s)", task.Name, task.State)
 	}
 
+	// Update state first so reconcile doesn't race us.
+	if err := m.tasks.UpdateState(task.ID, db.StateDormant); err != nil {
+		return fmt.Errorf("dormify state update: %w", err)
+	}
+
+	for _, session := range []string{m.activeSession, tmux.ParkedSession} {
+		for _, cID := range tmux.FindCompanions(session, task.Name) {
+			_ = tmux.KillWindow(cID)
+		}
+	}
+
 	if task.TmuxWindow != "" {
 		m.gracefulCloseWindow(task)
 	}
 
 	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
-		return err
+		return fmt.Errorf("dormify clear window: %w", err)
 	}
 
-	return m.tasks.UpdateState(task.ID, db.StateDormant)
+	return nil
 }
 
 func (m *Manager) Wake(taskID string) error {
@@ -182,15 +199,18 @@ func (m *Manager) Kill(taskID string) error {
 		return fmt.Errorf("task not found: %s", taskID)
 	}
 
-	if task.TmuxWindow != "" {
-		m.gracefulCloseWindow(task)
+	if err := m.tasks.UpdateState(task.ID, db.StateFailed); err != nil {
+		return err
 	}
-
 	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
 		return err
 	}
 
-	return m.tasks.UpdateState(task.ID, db.StateFailed)
+	if task.TmuxWindow != "" {
+		m.gracefulCloseWindow(task)
+	}
+
+	return nil
 }
 
 func (m *Manager) Complete(taskID string) error {
@@ -204,18 +224,21 @@ func (m *Manager) Complete(taskID string) error {
 		return fmt.Errorf("task not found: %s", taskID)
 	}
 
-	if task.TmuxWindow != "" {
-		m.gracefulCloseWindow(task)
-	}
-
-	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
+	if err := m.tasks.UpdateState(task.ID, db.StateCompleted); err != nil {
 		return err
 	}
 	if err := m.tasks.UpdateAttention(task.ID, db.AttentionDone); err != nil {
 		return err
 	}
+	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
+		return err
+	}
 
-	return m.tasks.UpdateState(task.ID, db.StateCompleted)
+	if task.TmuxWindow != "" {
+		m.gracefulCloseWindow(task)
+	}
+
+	return nil
 }
 
 // gracefulCloseWindow finds the Claude process in the tmux pane, sends

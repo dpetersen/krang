@@ -29,8 +29,10 @@ type Model struct {
 
 	nameInput   textinput.Model
 	promptInput textinput.Model
+	filterInput textinput.Model
 
 	pendingNewName string
+	filterText     string
 
 	debugLog []string
 }
@@ -44,6 +46,10 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	promptInput.Placeholder = "prompt for Claude (optional, Enter to skip)"
 	promptInput.CharLimit = 500
 
+	filterInput := textinput.New()
+	filterInput.Placeholder = "filter tasks..."
+	filterInput.CharLimit = 40
+
 	return Model{
 		manager:         manager,
 		taskStore:        taskStore,
@@ -53,6 +59,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		activeSession:   activeSession,
 		nameInput:       nameInput,
 		promptInput:      promptInput,
+		filterInput:     filterInput,
 	}
 }
 
@@ -158,6 +165,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleNewPromptKey(msg)
 	case ModeConfirmKill:
 		return m.handleConfirmKillKey(msg)
+	case ModeHelp:
+		m.mode = ModeNormal
+		return m, nil
+	case ModeFilter:
+		return m.handleFilterKey(msg)
 	default:
 		return m.handleNormalKey(msg)
 	}
@@ -165,11 +177,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "esc":
+		if m.filterText != "" {
+			m.filterText = ""
+			m.cursor = 0
+		}
+		return m, nil
+
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
 	case "j", "down":
-		if m.cursor < len(m.tasks)-1 {
+		if m.cursor < len(m.filteredTasks())-1 {
 			m.cursor++
 		}
 		return m, nil
@@ -212,6 +231,16 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		return m, m.doSummarize
+
+	case "?":
+		m.mode = ModeHelp
+		return m, nil
+
+	case "/":
+		m.mode = ModeFilter
+		m.filterInput.Reset()
+		m.filterInput.Focus()
+		return m, m.filterInput.Cursor.BlinkCmd()
 	}
 
 	return m, nil
@@ -255,6 +284,25 @@ func (m Model) handleNewPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.promptInput, cmd = m.promptInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = ModeNormal
+		m.filterText = ""
+		m.cursor = 0
+		return m, nil
+	case "enter":
+		m.mode = ModeNormal
+		m.filterText = strings.TrimSpace(m.filterInput.Value())
+		m.cursor = 0
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
 	return m, cmd
 }
 
@@ -306,11 +354,28 @@ func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 	return nil
 }
 
+func (m Model) filteredTasks() []db.Task {
+	if m.filterText == "" {
+		return m.tasks
+	}
+	filter := strings.ToLower(m.filterText)
+	var filtered []db.Task
+	for _, t := range m.tasks {
+		if strings.Contains(strings.ToLower(t.Name), filter) ||
+			strings.Contains(strings.ToLower(string(t.State)), filter) ||
+			strings.Contains(strings.ToLower(t.Summary), filter) {
+			filtered = append(filtered, t)
+		}
+	}
+	return filtered
+}
+
 func (m Model) selectedTask() *db.Task {
-	if m.cursor < 0 || m.cursor >= len(m.tasks) {
+	tasks := m.filteredTasks()
+	if m.cursor < 0 || m.cursor >= len(tasks) {
 		return nil
 	}
-	return &m.tasks[m.cursor]
+	return &tasks[m.cursor]
 }
 
 func (m Model) refreshTasks() tea.Msg {

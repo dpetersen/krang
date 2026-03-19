@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/tmux"
 )
 
 func (m Model) View() string {
@@ -17,21 +18,32 @@ func (m Model) View() string {
 	b.WriteString(m.renderTable())
 	b.WriteString("\n")
 
-	if m.mode == ModeNewName {
+	switch m.mode {
+	case ModeNewName:
 		b.WriteString("\n")
 		b.WriteString(inputLabelStyle.Render("Task name: "))
 		b.WriteString(m.nameInput.View())
-	} else if m.mode == ModeNewPrompt {
+	case ModeNewPrompt:
 		b.WriteString("\n")
 		b.WriteString(inputLabelStyle.Render(fmt.Sprintf("Prompt for %s: ", m.pendingNewName)))
 		b.WriteString(m.promptInput.View())
-	} else if m.mode == ModeConfirmKill {
+	case ModeConfirmKill:
 		t := m.selectedTask()
 		if t != nil {
 			b.WriteString("\n")
 			b.WriteString(errorStyle.Render(fmt.Sprintf("Kill task %q? [y/N]", t.Name)))
 		}
-	} else {
+	case ModeFilter:
+		b.WriteString("\n")
+		b.WriteString(inputLabelStyle.Render("Filter: "))
+		b.WriteString(m.filterInput.View())
+	case ModeHelp:
+		b.WriteString("\n")
+		b.WriteString(m.renderHelp())
+	default:
+		if m.filterText != "" {
+			b.WriteString(headerStyle.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
+		}
 		b.WriteString("\n")
 		b.WriteString(m.renderStatusBar())
 	}
@@ -77,12 +89,16 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderTable() string {
-	if len(m.tasks) == 0 {
+	tasks := m.filteredTasks()
+	if len(tasks) == 0 {
+		if m.filterText != "" {
+			return headerStyle.Render("  No tasks match filter.")
+		}
 		return headerStyle.Render("  No tasks. Press [n] to create one.")
 	}
 
 	nameW := 20
-	for _, t := range m.tasks {
+	for _, t := range tasks {
 		if len(t.Name) > nameW {
 			nameW = len(t.Name)
 		}
@@ -102,10 +118,11 @@ func (m Model) renderTable() string {
 	b.WriteString(headerStyle.Render("  " + strings.Repeat("-", m.width-4)))
 	b.WriteString("\n")
 
-	for i, t := range m.tasks {
-		line := m.renderRow(i, t, nameW)
+	companionCounts := m.countCompanions(tasks)
+	for i, t := range tasks {
+		line := m.renderRow(i, t, nameW, companionCounts[t.Name])
 		b.WriteString(line)
-		if i < len(m.tasks)-1 {
+		if i < len(tasks)-1 {
 			b.WriteString("\n")
 		}
 	}
@@ -113,13 +130,31 @@ func (m Model) renderTable() string {
 	return b.String()
 }
 
-func (m Model) renderRow(index int, t db.Task, nameW int) string {
+func (m Model) countCompanions(tasks []db.Task) map[string]int {
+	counts := make(map[string]int)
+	for _, t := range tasks {
+		if t.TmuxWindow == "" {
+			continue
+		}
+		session := m.activeSession
+		if t.State == db.StateParked {
+			session = tmux.ParkedSession
+		}
+		counts[t.Name] = len(tmux.FindCompanions(session, t.Name))
+	}
+	return counts
+}
+
+func (m Model) renderRow(index int, t db.Task, nameW int, companionCount int) string {
 	cursor := "  "
 	if index == m.cursor {
 		cursor = "> "
 	}
 
 	name := t.Name
+	if companionCount > 0 {
+		name += strings.Repeat("+", companionCount)
+	}
 	if len(name) > nameW {
 		name = name[:nameW-1] + "~"
 	}
@@ -195,9 +230,44 @@ func (m Model) renderStatusBar() string {
 		hints = append(hints, "[x]kill", "[c]omplete")
 	}
 
-	hints = append(hints, "[r]efresh", "[q]uit")
+	hints = append(hints, "[r]efresh", "[/]filter", "[?]help", "[q]uit")
 
 	return statusBarStyle.Render(strings.Join(hints, "  "))
+}
+
+func (m Model) renderHelp() string {
+	help := `
+  Keybindings:
+
+  n         Create new task
+  Enter     Focus active task window
+  p         Park task (move to background)
+  u         Unpark task (bring back)
+  d         Dormify task (save & close)
+  w         Wake dormant task (resume)
+  x         Kill task (with confirmation)
+  c         Mark task completed
+  r         Refresh AI summaries
+  /         Filter tasks
+  ?         Toggle this help
+  j/k       Navigate up/down
+  q         Quit krang (tasks keep running)
+
+  Task States:
+  active    Running in current tmux session
+  parked    Running in background session
+  dormant   Saved, not running (can wake)
+
+  Attention:
+  ok        Claude is working
+  wait      Claude finished, needs your input
+  PERM      Permission prompt blocking
+  ERR       Something went wrong
+  done      Task self-reported complete
+
+  Press any key to close`
+
+	return headerStyle.Render(help)
 }
 
 func (m Model) renderDebugLog() string {

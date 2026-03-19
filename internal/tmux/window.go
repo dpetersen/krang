@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-const WindowPrefix = "K!"
+const (
+	WindowPrefix    = "K!"
+	CompanionPrefix = "KF!"
+)
 
 type WindowInfo struct {
 	ID   string // stable @N identifier
@@ -72,6 +75,26 @@ func ListWindows(session string) ([]WindowInfo, error) {
 		windows = append(windows, WindowInfo{ID: parts[0], Name: parts[1]})
 	}
 	return windows, nil
+}
+
+func CompanionWindowName(taskName string) string {
+	return CompanionPrefix + taskName
+}
+
+// FindCompanions returns window IDs for any KF!<taskName> windows in the given session.
+func FindCompanions(session, taskName string) []string {
+	windows, err := ListWindows(session)
+	if err != nil {
+		return nil
+	}
+	target := CompanionPrefix + taskName
+	var companions []string
+	for _, w := range windows {
+		if w.Name == target {
+			companions = append(companions, w.ID)
+		}
+	}
+	return companions
 }
 
 func RenameWindow(windowID, newName string) error {
