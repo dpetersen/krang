@@ -1,0 +1,3 @@
+classify:
+  package_run:
+  - tmux

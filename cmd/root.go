@@ -1,0 +1,63 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/task"
+	"github.com/dpetersen/krang/internal/tmux"
+	"github.com/dpetersen/krang/internal/tui"
+	"github.com/spf13/cobra"
+)
+
+var rootCmd = &cobra.Command{
+	Use:   "krang",
+	Short: "Task orchestration for Claude Code sessions",
+	RunE:  runTUI,
+}
+
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func runTUI(cmd *cobra.Command, args []string) error {
+	if !tmux.InsideTmux() {
+		return fmt.Errorf("krang must be run inside tmux")
+	}
+
+	activeSession, err := tmux.CurrentSession()
+	if err != nil {
+		return fmt.Errorf("detecting current session: %w", err)
+	}
+
+	if err := tmux.EnsureParkedSession(); err != nil {
+		return fmt.Errorf("setting up parked session: %w", err)
+	}
+
+	database, err := db.Open()
+	if err != nil {
+		return fmt.Errorf("opening database: %w", err)
+	}
+	defer database.Close()
+
+	taskStore := db.NewTaskStore(database)
+	eventStore := db.NewEventStore(database)
+	manager := task.NewManager(taskStore, eventStore, activeSession)
+
+	if err := manager.Reconcile(); err != nil {
+		return fmt.Errorf("initial reconciliation: %w", err)
+	}
+
+	model := tui.NewModel(manager)
+	program := tea.NewProgram(model, tea.WithAltScreen())
+
+	if _, err := program.Run(); err != nil {
+		return fmt.Errorf("running TUI: %w", err)
+	}
+
+	return nil
+}
