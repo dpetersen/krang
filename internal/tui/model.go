@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ type Model struct {
 	activeSession   string
 	tasks           []db.Task
 	cursor     int
+	sortByPriority bool
 	mode       InputMode
 	width      int
 	height     int
@@ -231,10 +233,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "u":
 		return m, m.unparkSelected()
 
-	case "d":
+	case "f":
 		return m, m.dormifySelected()
 
-	case "w":
+	case "t":
 		return m, m.wakeSelected()
 
 	case "x":
@@ -245,6 +247,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "c":
 		return m, m.completeSelected()
+
+	case "s":
+		m.sortByPriority = !m.sortByPriority
+		return m, nil
 
 	case "r":
 		return m, m.doSummarize
@@ -433,12 +439,28 @@ func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 }
 
 func (m Model) filteredTasks() []db.Task {
+	var tasks []db.Task
+
+	if m.sortByPriority {
+		// Priority mode: active only, sorted by attention urgency.
+		for _, t := range m.tasks {
+			if t.State == db.StateActive {
+				tasks = append(tasks, t)
+			}
+		}
+		sort.SliceStable(tasks, func(i, j int) bool {
+			return attentionPriority(tasks[i].Attention) < attentionPriority(tasks[j].Attention)
+		})
+	} else {
+		tasks = m.tasks
+	}
+
 	if m.filterText == "" {
-		return m.tasks
+		return tasks
 	}
 	filter := strings.ToLower(m.filterText)
 	var filtered []db.Task
-	for _, t := range m.tasks {
+	for _, t := range tasks {
 		if strings.Contains(strings.ToLower(t.Name), filter) ||
 			strings.Contains(strings.ToLower(string(t.State)), filter) ||
 			strings.Contains(strings.ToLower(t.Summary), filter) {
@@ -446,6 +468,23 @@ func (m Model) filteredTasks() []db.Task {
 		}
 	}
 	return filtered
+}
+
+func attentionPriority(a db.AttentionState) int {
+	switch a {
+	case db.AttentionPermission:
+		return 0
+	case db.AttentionError:
+		return 1
+	case db.AttentionWaiting:
+		return 2
+	case db.AttentionOK:
+		return 3
+	case db.AttentionDone:
+		return 4
+	default:
+		return 5
+	}
 }
 
 func (m Model) selectedTask() *db.Task {

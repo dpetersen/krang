@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -116,32 +117,87 @@ func findSessionCwd(sessionID string) (string, error) {
 	return "", fmt.Errorf("session %s not found in any project directory", sessionID)
 }
 
-// decodeCwdFromDirName attempts to reconstruct the original path from
-// a Claude project directory name. Claude replaces all non-alphanumeric
-// chars with '-'. We try the path as-is with / substitution, then
-// verify it exists. If not, we walk backwards trying common patterns.
-func decodeCwdFromDirName(dirName string) string {
-	// Try simple decode: leading - is /, all - are /
-	candidate := "/" + strings.ReplaceAll(dirName[1:], "-", "/")
-	if pathExists(candidate) {
-		return candidate
+// encodePath encodes a path the same way Claude does for project
+// directory names: replace all non-alphanumeric chars with '-'.
+func encodePath(path string) string {
+	var b strings.Builder
+	for _, r := range path {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
 	}
-
-	// Try with common dot-prefixed directories (.local, .config, etc.)
-	// The pattern "--" often means "/-" which is "/." in the original.
-	candidate = "/" + strings.ReplaceAll(dirName[1:], "-", "/")
-	candidate = strings.ReplaceAll(candidate, "//", "/.")
-	if pathExists(candidate) {
-		return candidate
-	}
-
-	// Fallback: return the naive decode even if it doesn't exist.
-	return "/" + strings.ReplaceAll(dirName[1:], "-", "/")
+	return b.String()
 }
 
-func pathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+// decodeCwdFromDirName reconstructs the original filesystem path from
+// a Claude project directory name by walking the filesystem and
+// matching encoded directory names at each level.
+func decodeCwdFromDirName(encoded string) string {
+	// Walk the filesystem greedily, matching the longest directory
+	// name at each level whose encoding matches the next segment.
+	result := resolveEncoded("/", encoded[1:]) // skip leading -
+	if result != "" {
+		return result
+	}
+	// Fallback: naive decode.
+	return "/" + strings.ReplaceAll(encoded[1:], "-", "/")
+}
+
+func resolveEncoded(currentPath, remaining string) string {
+	if remaining == "" {
+		return currentPath
+	}
+
+	entries, err := os.ReadDir(currentPath)
+	if err != nil {
+		return ""
+	}
+
+	// Try longest matches first to prefer "vercel-marketplace-integration"
+	// over "vercel" + "marketplace" + "integration".
+	type candidate struct {
+		name    string
+		restLen int
+	}
+	var candidates []candidate
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		entryEncoded := encodePath(entry.Name())
+		if strings.HasPrefix(remaining, entryEncoded) {
+			rest := remaining[len(entryEncoded):]
+			// rest must be empty (exact match) or start with -
+			// (path separator).
+			if rest == "" || rest[0] == '-' {
+				if rest != "" {
+					rest = rest[1:] // skip the separator -
+				}
+				candidates = append(candidates, candidate{entry.Name(), len(rest)})
+			}
+		}
+	}
+
+	// Sort by shortest remaining (longest match first).
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].restLen < candidates[j].restLen
+	})
+
+	for _, c := range candidates {
+		rest := remaining[len(encodePath(c.name)):]
+		if rest != "" {
+			rest = rest[1:]
+		}
+		result := resolveEncoded(filepath.Join(currentPath, c.name), rest)
+		if result != "" {
+			return result
+		}
+	}
+
+	return ""
 }
 
 func (m *Manager) Park(taskID string) error {

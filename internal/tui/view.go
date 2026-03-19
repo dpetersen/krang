@@ -81,9 +81,13 @@ func (m Model) renderHeader() string {
 
 	clock := time.Now().Format("15:04:05")
 	title := titleStyle.Render("KRANG")
+	sortIndicator := ""
+	if m.sortByPriority {
+		sortIndicator = " | Priority"
+	}
 	stats := headerStyle.Render(fmt.Sprintf(
-		"Active: %d | Parked: %d | Dormant: %d",
-		activeCt, parkedCt, dormantCt,
+		"Active: %d | Parked: %d | Frozen: %d%s",
+		activeCt, parkedCt, dormantCt, sortIndicator,
 	))
 
 	krangCwd := tildeify(krangWorkingDir())
@@ -219,7 +223,7 @@ func renderState(state db.TaskState) string {
 	case db.StateParked:
 		return stateParkedStyle.Render("parked")
 	case db.StateDormant:
-		return stateDormantStyle.Render("dormant")
+		return stateDormantStyle.Render("frozen")
 	default:
 		return string(state)
 	}
@@ -251,16 +255,20 @@ func (m Model) renderStatusBar() string {
 	if t != nil {
 		switch t.State {
 		case db.StateActive:
-			hints = append(hints, "[enter]focus", "[p]ark", "[d]ormify")
+			hints = append(hints, "[enter]focus", "[p]ark", "[f]reeze")
 		case db.StateParked:
-			hints = append(hints, "[u]npark", "[d]ormify")
+			hints = append(hints, "[u]npark", "[f]reeze")
 		case db.StateDormant:
-			hints = append(hints, "[w]ake")
+			hints = append(hints, "[t]haw")
 		}
 		hints = append(hints, "[x]kill", "[c]omplete")
 	}
 
-	hints = append(hints, "[i]mport", "[r]efresh", "[/]filter", "[?]help", "[q]uit")
+	hints = append(hints, "[i]mport")
+	if len(m.tasks) > 0 {
+		hints = append(hints, "re[s]ort", "[/]filter")
+	}
+	hints = append(hints, "[?]help", "[q]uit")
 
 	return statusBarStyle.Render(strings.Join(hints, "  "))
 }
@@ -304,8 +312,8 @@ func (m Model) renderHelp() string {
   Enter     Focus active task window
   p         Park task (move to background)
   u         Unpark task (bring back)
-  d         Dormify task (save & close)
-  w         Wake dormant task (resume)
+  f         Freeze task (save & close)
+  t         Thaw frozen task (resume)
   x         Kill task (with confirmation)
   c         Mark task completed
   r         Refresh AI summaries
@@ -317,7 +325,7 @@ func (m Model) renderHelp() string {
   Task States:
   active    Running in current tmux session
   parked    Running in background session
-  dormant   Saved, not running (can wake)
+  frozen    Saved, not running (can thaw)
 
   Attention:
   ok        Claude is working
