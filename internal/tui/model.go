@@ -27,12 +27,14 @@ type Model struct {
 	width      int
 	height     int
 
-	nameInput   textinput.Model
-	promptInput textinput.Model
-	filterInput textinput.Model
+	nameInput      textinput.Model
+	promptInput    textinput.Model
+	filterInput    textinput.Model
+	sessionIDInput textinput.Model
 
-	pendingNewName string
-	filterText     string
+	pendingNewName    string
+	pendingImportName string
+	filterText        string
 
 	debugLog []string
 }
@@ -50,6 +52,10 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	filterInput.Placeholder = "filter tasks..."
 	filterInput.CharLimit = 40
 
+	sessionIDInput := textinput.New()
+	sessionIDInput.Placeholder = "Claude session ID (UUID)"
+	sessionIDInput.CharLimit = 80
+
 	return Model{
 		manager:         manager,
 		taskStore:        taskStore,
@@ -57,9 +63,10 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		hookEvents:       hookEvents,
 		summaryPipeline: summaryPipeline,
 		activeSession:   activeSession,
-		nameInput:       nameInput,
-		promptInput:      promptInput,
-		filterInput:     filterInput,
+		nameInput:      nameInput,
+		promptInput:    promptInput,
+		filterInput:    filterInput,
+		sessionIDInput: sessionIDInput,
 	}
 }
 
@@ -143,7 +150,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
-	if m.mode == ModeNewName {
+	if m.mode == ModeNewName || m.mode == ModeImportName {
 		var cmd tea.Cmd
 		m.nameInput, cmd = m.nameInput.Update(msg)
 		return m, cmd
@@ -151,6 +158,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.mode == ModeNewPrompt {
 		var cmd tea.Cmd
 		m.promptInput, cmd = m.promptInput.Update(msg)
+		return m, cmd
+	}
+	if m.mode == ModeImportSessionID {
+		var cmd tea.Cmd
+		m.sessionIDInput, cmd = m.sessionIDInput.Update(msg)
 		return m, cmd
 	}
 
@@ -169,6 +181,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeNormal
 		return m, nil
 	case ModeFilter:
+		return m.handleFilterKey(msg)
+	case ModeImportName:
+		return m.handleImportNameKey(msg)
+	case ModeImportSessionID:
+		return m.handleImportSessionIDKey(msg)
 		return m.handleFilterKey(msg)
 	default:
 		return m.handleNormalKey(msg)
@@ -232,6 +249,12 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.doSummarize
 
+	case "i":
+		m.mode = ModeImportName
+		m.nameInput.Reset()
+		m.nameInput.Focus()
+		return m, m.nameInput.Cursor.BlinkCmd()
+
 	case "?":
 		m.mode = ModeHelp
 		return m, nil
@@ -255,6 +278,11 @@ func (m Model) handleNewNameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		name := strings.TrimSpace(m.nameInput.Value())
 		if name == "" {
 			m.mode = ModeNormal
+			return m, nil
+		}
+		if m.taskStore.NameInUse(name) {
+			m.appendDebugLog(fmt.Sprintf("[%s] ERROR: name %q already in use",
+				time.Now().Format("15:04:05"), name))
 			return m, nil
 		}
 		m.pendingNewName = name
@@ -303,6 +331,56 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleImportNameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = ModeNormal
+		return m, nil
+	case "enter":
+		name := strings.TrimSpace(m.nameInput.Value())
+		if name == "" {
+			m.mode = ModeNormal
+			return m, nil
+		}
+		if m.taskStore.NameInUse(name) {
+			m.appendDebugLog(fmt.Sprintf("[%s] ERROR: name %q already in use",
+				time.Now().Format("15:04:05"), name))
+			return m, nil
+		}
+		m.pendingImportName = name
+		m.mode = ModeImportSessionID
+		m.sessionIDInput.Reset()
+		m.sessionIDInput.Focus()
+		return m, m.sessionIDInput.Cursor.BlinkCmd()
+	}
+
+	var cmd tea.Cmd
+	m.nameInput, cmd = m.nameInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleImportSessionIDKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = ModeNormal
+		return m, nil
+	case "enter":
+		sessionID := strings.TrimSpace(m.sessionIDInput.Value())
+		if sessionID == "" {
+			m.mode = ModeNormal
+			return m, nil
+		}
+		name := m.pendingImportName
+		m.mode = ModeNormal
+		m.pendingImportName = ""
+		return m, m.importTask(name, sessionID)
+	}
+
+	var cmd tea.Cmd
+	m.sessionIDInput, cmd = m.sessionIDInput.Update(msg)
 	return m, cmd
 }
 
@@ -449,6 +527,15 @@ func (m Model) createTask(name, prompt string) tea.Cmd {
 	}
 }
 
+func (m Model) importTask(name, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.manager.ImportTask(name, sessionID); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return m.refreshTasks()
+	}
+}
+
 func (m Model) focusSelected() tea.Cmd {
 	t := m.selectedTask()
 	if t == nil || t.TmuxWindow == "" {
@@ -550,6 +637,10 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 		attention, ok := hooks.AttentionFromEvent(event)
 		if ok {
 			_ = m.taskStore.UpdateAttention(t.ID, attention)
+		}
+
+		if event.Cwd != "" && event.Cwd != t.Cwd {
+			_ = m.taskStore.UpdateCwd(t.ID, event.Cwd)
 		}
 
 		if event.HookEventName == "TaskCompleted" {

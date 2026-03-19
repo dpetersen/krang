@@ -62,6 +62,15 @@ func (s *TaskStore) Create(task *Task) error {
 	return nil
 }
 
+func (s *TaskStore) NameInUse(name string) bool {
+	var count int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM tasks WHERE name = ? AND state NOT IN ('completed', 'failed')`,
+		name,
+	).Scan(&count)
+	return err == nil && count > 0
+}
+
 func (s *TaskStore) List() ([]Task, error) {
 	rows, err := s.db.Query(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,
@@ -120,6 +129,15 @@ func (s *TaskStore) UpdateAttention(id string, attention AttentionState) error {
 		`UPDATE tasks SET attention = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 		 WHERE id = ?`,
 		attention, id,
+	)
+	return err
+}
+
+func (s *TaskStore) UpdateCwd(id, cwd string) error {
+	_, err := s.db.Exec(
+		`UPDATE tasks SET cwd = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 WHERE id = ?`,
+		cwd, id,
 	)
 	return err
 }

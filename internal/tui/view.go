@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +38,14 @@ func (m Model) View() string {
 		b.WriteString("\n")
 		b.WriteString(inputLabelStyle.Render("Filter: "))
 		b.WriteString(m.filterInput.View())
+	case ModeImportName:
+		b.WriteString("\n")
+		b.WriteString(inputLabelStyle.Render("Import name: "))
+		b.WriteString(m.nameInput.View())
+	case ModeImportSessionID:
+		b.WriteString("\n")
+		b.WriteString(inputLabelStyle.Render(fmt.Sprintf("Session ID for %s: ", m.pendingImportName)))
+		b.WriteString(m.sessionIDInput.View())
 	case ModeHelp:
 		b.WriteString("\n")
 		b.WriteString(m.renderHelp())
@@ -77,15 +86,23 @@ func (m Model) renderHeader() string {
 		activeCt, parkedCt, dormantCt,
 	))
 
+	krangCwd := tildeify(krangWorkingDir())
+	cwdStr := headerStyle.Render(krangCwd)
+
 	left := fmt.Sprintf(" %s  %s", title, stats)
 	right := headerStyle.Render(clock)
 
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
+	totalUsed := lipgloss.Width(left) + lipgloss.Width(cwdStr) + lipgloss.Width(right)
+	leftGap := (m.width - totalUsed) / 2
+	if leftGap < 1 {
+		leftGap = 1
+	}
+	rightGap := m.width - lipgloss.Width(left) - leftGap - lipgloss.Width(cwdStr) - lipgloss.Width(right)
+	if rightGap < 1 {
+		rightGap = 1
 	}
 
-	return left + strings.Repeat(" ", gap) + right
+	return left + strings.Repeat(" ", leftGap) + cwdStr + strings.Repeat(" ", rightGap) + right
 }
 
 func (m Model) renderTable() string {
@@ -98,18 +115,26 @@ func (m Model) renderTable() string {
 	}
 
 	nameW := 20
+	cwdW := 3
 	for _, t := range tasks {
 		if len(t.Name) > nameW {
 			nameW = len(t.Name)
+		}
+		rc := relativeCwd(t.Cwd)
+		if len(rc) > cwdW {
+			cwdW = len(rc)
 		}
 	}
 	if nameW > 30 {
 		nameW = 30
 	}
+	if cwdW > 25 {
+		cwdW = 25
+	}
 
 	header := fmt.Sprintf(
-		"  %-4s %-*s %-8s %-6s %s",
-		"#", nameW, "Name", "State", "Attn", "Summary",
+		"  %-4s %-*s %-8s %-6s %-*s %s",
+		"#", nameW, "Name", "State", "Attn", cwdW, "Cwd", "Summary",
 	)
 
 	var b strings.Builder
@@ -120,7 +145,7 @@ func (m Model) renderTable() string {
 
 	companionCounts := m.countCompanions(tasks)
 	for i, t := range tasks {
-		line := m.renderRow(i, t, nameW, companionCounts[t.Name])
+		line := m.renderRow(i, t, nameW, cwdW, companionCounts[t.Name])
 		b.WriteString(line)
 		if i < len(tasks)-1 {
 			b.WriteString("\n")
@@ -145,7 +170,7 @@ func (m Model) countCompanions(tasks []db.Task) map[string]int {
 	return counts
 }
 
-func (m Model) renderRow(index int, t db.Task, nameW int, companionCount int) string {
+func (m Model) renderRow(index int, t db.Task, nameW, cwdW, companionCount int) string {
 	cursor := "  "
 	if index == m.cursor {
 		cursor = "> "
@@ -159,11 +184,16 @@ func (m Model) renderRow(index int, t db.Task, nameW int, companionCount int) st
 		name = name[:nameW-1] + "~"
 	}
 
+	cwd := relativeCwd(t.Cwd)
+	if len(cwd) > cwdW {
+		cwd = cwd[:cwdW-1] + "~"
+	}
+
 	stateStr := renderState(t.State)
 	attnStr := renderAttention(t.Attention)
 
 	summary := t.Summary
-	maxSummaryW := m.width - 4 - nameW - 8 - 6 - 8
+	maxSummaryW := m.width - 4 - nameW - 8 - 6 - cwdW - 10
 	if maxSummaryW < 10 {
 		maxSummaryW = 10
 	}
@@ -172,8 +202,8 @@ func (m Model) renderRow(index int, t db.Task, nameW int, companionCount int) st
 	}
 
 	row := fmt.Sprintf(
-		"%s%-4d %-*s %-8s %-6s %s",
-		cursor, index+1, nameW, name, stateStr, attnStr, summary,
+		"%s%-4d %-*s %-8s %-6s %-*s %s",
+		cursor, index+1, nameW, name, stateStr, attnStr, cwdW, cwd, summary,
 	)
 
 	if index == m.cursor {
@@ -230,9 +260,40 @@ func (m Model) renderStatusBar() string {
 		hints = append(hints, "[x]kill", "[c]omplete")
 	}
 
-	hints = append(hints, "[r]efresh", "[/]filter", "[?]help", "[q]uit")
+	hints = append(hints, "[i]mport", "[r]efresh", "[/]filter", "[?]help", "[q]uit")
 
 	return statusBarStyle.Render(strings.Join(hints, "  "))
+}
+
+func krangWorkingDir() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "?"
+	}
+	return cwd
+}
+
+func tildeify(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
+func relativeCwd(taskCwd string) string {
+	krangCwd := krangWorkingDir()
+	if krangCwd != "" && strings.HasPrefix(taskCwd, krangCwd+"/") {
+		rel := taskCwd[len(krangCwd)+1:]
+		return rel
+	}
+	if taskCwd == krangCwd {
+		return "."
+	}
+	return tildeify(taskCwd)
 }
 
 func (m Model) renderHelp() string {

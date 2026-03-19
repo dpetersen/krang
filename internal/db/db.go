@@ -45,6 +45,10 @@ func Open() (*sql.DB, error) {
 }
 
 func migrate(database *sql.DB) error {
-	_, err := database.Exec(schemaV1)
+	if _, err := database.Exec(schemaV1); err != nil {
+		return err
+	}
+	// V2: drop UNIQUE on name.
+	_, err := database.Exec(schemaV2)
 	return err
 }

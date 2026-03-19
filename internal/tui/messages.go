@@ -34,4 +34,6 @@ const (
 	ModeConfirmKill
 	ModeHelp
 	ModeFilter
+	ModeImportName
+	ModeImportSessionID
 )

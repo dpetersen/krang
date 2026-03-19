@@ -37,21 +37,26 @@ func TestTaskCreate(t *testing.T) {
 	}
 }
 
-func TestTaskCreateDuplicateNameFails(t *testing.T) {
+func TestNameInUse(t *testing.T) {
 	store := NewTaskStore(openTestDB(t))
 
 	task := &Task{
-		ID: "01ABC", Name: "dup", State: StateActive, Attention: AttentionOK, Cwd: "/tmp",
+		ID: "01ABC", Name: "my-task", State: StateActive, Attention: AttentionOK, Cwd: "/tmp",
 	}
 	if err := store.Create(task); err != nil {
-		t.Fatalf("creating first task: %v", err)
+		t.Fatalf("creating task: %v", err)
 	}
 
-	task2 := &Task{
-		ID: "01DEF", Name: "dup", State: StateActive, Attention: AttentionOK, Cwd: "/tmp",
+	if !store.NameInUse("my-task") {
+		t.Error("expected name to be in use")
 	}
-	if err := store.Create(task2); err == nil {
-		t.Fatal("expected error creating duplicate name, got nil")
+
+	// Complete the task — name should be freed.
+	if err := store.UpdateState("01ABC", StateCompleted); err != nil {
+		t.Fatalf("completing task: %v", err)
+	}
+	if store.NameInUse("my-task") {
+		t.Error("expected name to be free after completion")
 	}
 }
 

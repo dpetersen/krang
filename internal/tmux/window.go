@@ -23,7 +23,8 @@ func WindowName(taskName string) string {
 func CreateWindow(session, name, shellCommand string) (string, error) {
 	cmd := exec.Command(
 		"tmux", "new-window",
-		"-t", session,
+		"-a",
+		"-t", session+":",
 		"-n", name,
 		"-P", "-F", "#{window_id}",
 		shellCommand,

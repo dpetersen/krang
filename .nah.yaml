@@ -1,3 +1,5 @@
 classify:
   package_run:
   - tmux
+actions:
+  db_write: allow

@@ -2,7 +2,9 @@ package task
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -40,7 +42,7 @@ func (m *Manager) CreateTask(name, prompt, cwd string) (*db.Task, error) {
 	}
 
 	claudeCmd := fmt.Sprintf(
-		"cd %s && claude --session-id %s --name %s",
+		"cd %s && safehouse claude --session-id %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
 		shellQuote(cwd),
 		sessionID,
 		shellQuote(name),
@@ -65,6 +67,81 @@ func (m *Manager) CreateTask(name, prompt, cwd string) (*db.Task, error) {
 	}
 
 	return task, nil
+}
+
+func (m *Manager) ImportTask(name, sessionID string) error {
+	taskID := ulid.Make().String()
+
+	cwd, err := findSessionCwd(sessionID)
+	if err != nil {
+		return fmt.Errorf("could not find session %s in Claude projects: %w", sessionID, err)
+	}
+
+	task := &db.Task{
+		ID:        taskID,
+		Name:      name,
+		State:     db.StateDormant,
+		Attention: db.AttentionOK,
+		SessionID: sessionID,
+		Cwd:       cwd,
+	}
+
+	return m.tasks.Create(task)
+}
+
+// findSessionCwd searches ~/.claude/projects/ for a session ID file
+// and decodes the cwd from the containing directory name.
+func findSessionCwd(sessionID string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	projectsDir := filepath.Join(home, ".claude", "projects")
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return "", fmt.Errorf("reading projects dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sessionFile := filepath.Join(projectsDir, entry.Name(), sessionID+".jsonl")
+		if _, err := os.Stat(sessionFile); err == nil {
+			return decodeCwdFromDirName(entry.Name()), nil
+		}
+	}
+
+	return "", fmt.Errorf("session %s not found in any project directory", sessionID)
+}
+
+// decodeCwdFromDirName attempts to reconstruct the original path from
+// a Claude project directory name. Claude replaces all non-alphanumeric
+// chars with '-'. We try the path as-is with / substitution, then
+// verify it exists. If not, we walk backwards trying common patterns.
+func decodeCwdFromDirName(dirName string) string {
+	// Try simple decode: leading - is /, all - are /
+	candidate := "/" + strings.ReplaceAll(dirName[1:], "-", "/")
+	if pathExists(candidate) {
+		return candidate
+	}
+
+	// Try with common dot-prefixed directories (.local, .config, etc.)
+	// The pattern "--" often means "/-" which is "/." in the original.
+	candidate = "/" + strings.ReplaceAll(dirName[1:], "-", "/")
+	candidate = strings.ReplaceAll(candidate, "//", "/.")
+	if pathExists(candidate) {
+		return candidate
+	}
+
+	// Fallback: return the naive decode even if it doesn't exist.
+	return "/" + strings.ReplaceAll(dirName[1:], "-", "/")
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (m *Manager) Park(taskID string) error {
@@ -169,7 +246,7 @@ func (m *Manager) Wake(taskID string) error {
 	}
 
 	claudeCmd := fmt.Sprintf(
-		"cd %s && claude --resume %s --name %s",
+		"cd %s && safehouse claude --resume %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
 		shellQuote(task.Cwd),
 		task.SessionID,
 		shellQuote(task.Name),
