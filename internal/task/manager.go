@@ -43,14 +43,13 @@ func (m *Manager) CreateTask(name, prompt, cwd string) (*db.Task, error) {
 	}
 
 	claudeCmd := fmt.Sprintf(
-		"cd %s && safehouse claude --session-id %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
-		shellQuote(cwd),
+		"safehouse claude --session-id %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
 		sessionID,
 		shellQuote(name),
 	)
 
 	windowName := tmux.WindowName(name)
-	windowID, err := tmux.CreateWindow(m.activeSession, windowName, claudeCmd)
+	windowID, err := tmux.CreateWindow(m.activeSession, windowName, cwd, claudeCmd)
 	if err != nil {
 		return nil, fmt.Errorf("creating tmux window: %w", err)
 	}
@@ -302,14 +301,13 @@ func (m *Manager) Wake(taskID string) error {
 	}
 
 	claudeCmd := fmt.Sprintf(
-		"cd %s && safehouse claude --resume %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
-		shellQuote(task.Cwd),
+		"safehouse claude --resume %s --name %s; echo ''; echo 'Claude exited. Press Enter to close.'; read",
 		task.SessionID,
 		shellQuote(task.Name),
 	)
 
 	windowName := tmux.WindowName(task.Name)
-	windowID, err := tmux.CreateWindow(m.activeSession, windowName, claudeCmd)
+	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
 	if err != nil {
 		return fmt.Errorf("creating tmux window for wake: %w", err)
 	}
