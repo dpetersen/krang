@@ -8,10 +8,7 @@
 
 ## Task Management
 
-- **Bulk operations** — park/freeze all, unpark all, etc.
-- **Task notes** — attach freeform notes to tasks for your own context
-- **Task history view** — see completed/failed tasks, maybe with their final summaries
-- **Auto-freeze idle tasks** — after N minutes of no activity, offer to freeze
+- **Task history view** — see completed/failed tasks with their final summaries, with the ability to revive them
 
 ## ~~Companion Windows~~ (Done)
 
@@ -24,9 +21,6 @@
 ## UI Polish
 
 - ~~**tmux window color coding** — set the tmux window/tab style to match attention state (red for permission requests, yellow for waiting, etc.) so the status bar itself signals which tasks need attention without switching to the krang TUI~~ (Done)
-- **Notification sound/bell** — terminal bell when attention changes to permission or waiting
-- **macOS notifications** — via `terminal-notifier` for attention changes when not looking at krang
-- **Configurable keybindings**
 - **Color themes**
 
 ## Integration
