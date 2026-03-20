@@ -8,7 +8,39 @@ import (
 )
 
 type Config struct {
-	SandboxCommand string `json:"sandbox_command"`
+	SandboxCommand        string `json:"sandbox_command"`
+	WindowColorsEnabled   *bool  `json:"window_colors_enabled,omitempty"`
+	WindowColorPermission string `json:"window_color_permission,omitempty"`
+	WindowColorWaiting    string `json:"window_color_waiting,omitempty"`
+}
+
+const (
+	DefaultColorPermission = "red"
+	DefaultColorWaiting    = "yellow"
+)
+
+func (c Config) WindowColorsActive() bool {
+	return c.WindowColorsEnabled == nil || *c.WindowColorsEnabled
+}
+
+func (c Config) WindowColor(attention string) string {
+	if !c.WindowColorsActive() {
+		return ""
+	}
+	switch attention {
+	case "permission":
+		if c.WindowColorPermission != "" {
+			return c.WindowColorPermission
+		}
+		return DefaultColorPermission
+	case "waiting":
+		if c.WindowColorWaiting != "" {
+			return c.WindowColorWaiting
+		}
+		return ""
+	default:
+		return ""
+	}
 }
 
 // Path returns the resolved config file path, checking

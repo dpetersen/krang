@@ -97,6 +97,70 @@ func TestWriteAndLoad(t *testing.T) {
 	}
 }
 
+func TestWindowColorDefaults(t *testing.T) {
+	cfg := Config{}
+	if got := cfg.WindowColor("permission"); got != "red" {
+		t.Errorf("expected default 'red' for permission, got %q", got)
+	}
+	if got := cfg.WindowColor("waiting"); got != "" {
+		t.Errorf("expected empty string for waiting by default, got %q", got)
+	}
+}
+
+func TestWindowColorCustomOverrides(t *testing.T) {
+	cfg := Config{
+		WindowColorPermission: "colour196",
+		WindowColorWaiting:    "#ffaa00",
+	}
+	if got := cfg.WindowColor("permission"); got != "colour196" {
+		t.Errorf("expected 'colour196', got %q", got)
+	}
+	if got := cfg.WindowColor("waiting"); got != "#ffaa00" {
+		t.Errorf("expected '#ffaa00', got %q", got)
+	}
+}
+
+func TestWindowColorUnstyledStates(t *testing.T) {
+	cfg := Config{}
+	for _, state := range []string{"ok", "done", "error", ""} {
+		if got := cfg.WindowColor(state); got != "" {
+			t.Errorf("expected empty string for state %q, got %q", state, got)
+		}
+	}
+}
+
+func TestWindowColorsEnabledByDefault(t *testing.T) {
+	cfg := Config{}
+	if !cfg.WindowColorsActive() {
+		t.Error("expected window colors enabled by default (nil pointer)")
+	}
+}
+
+func TestWindowColorsDisabled(t *testing.T) {
+	disabled := false
+	cfg := Config{WindowColorsEnabled: &disabled}
+	if cfg.WindowColorsActive() {
+		t.Error("expected window colors disabled")
+	}
+	if got := cfg.WindowColor("permission"); got != "" {
+		t.Errorf("expected empty string when disabled, got %q", got)
+	}
+	if got := cfg.WindowColor("waiting"); got != "" {
+		t.Errorf("expected empty string when disabled, got %q", got)
+	}
+}
+
+func TestWindowColorsExplicitlyEnabled(t *testing.T) {
+	enabled := true
+	cfg := Config{WindowColorsEnabled: &enabled}
+	if !cfg.WindowColorsActive() {
+		t.Error("expected window colors enabled")
+	}
+	if got := cfg.WindowColor("permission"); got != "red" {
+		t.Errorf("expected 'red', got %q", got)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

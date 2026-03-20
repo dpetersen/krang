@@ -75,7 +75,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	summaryPipeline := summary.NewPipeline(taskStore)
 
-	model := tui.NewModel(manager, taskStore, eventStore, hookEvents, summaryPipeline, activeSession)
+	model := tui.NewModel(manager, taskStore, eventStore, hookEvents, summaryPipeline, activeSession, cfg)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := program.Run(); err != nil {

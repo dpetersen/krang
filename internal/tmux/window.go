@@ -3,6 +3,7 @@ package tmux
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -123,6 +124,49 @@ func CompactWindows(session string) error {
 		return fmt.Errorf("compacting windows in %s: %s: %w", session, strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+var fgColorPattern = regexp.MustCompile(`fg=[^],]*`)
+
+func SetWindowStyle(windowID, fgColor string) error {
+	// Set window-status-style for simple/default themes.
+	style := "fg=" + fgColor
+	cmd := exec.Command("tmux", "set-window-option", "-t", windowID, "window-status-style", style)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("setting window-status-style on %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
+	}
+
+	// For themes with inline #[fg=...] in the format string, override the
+	// format with our color substituted in. Only set if the global format
+	// contains fg= references; otherwise the style above is sufficient.
+	globalFormat, err := globalOption("window-status-format")
+	if err == nil && fgColorPattern.MatchString(globalFormat) {
+		modified := fgColorPattern.ReplaceAllString(globalFormat, "fg="+fgColor)
+		cmd = exec.Command("tmux", "set-window-option", "-t", windowID, "window-status-format", modified)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("setting window-status-format on %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
+		}
+	}
+
+	return nil
+}
+
+func ClearWindowStyle(windowID string) error {
+	for _, option := range []string{"window-status-style", "window-status-format"} {
+		cmd := exec.Command("tmux", "set-window-option", "-u", "-t", windowID, option)
+		// Ignore errors — the option may not have been set.
+		_ = cmd.Run()
+	}
+	return nil
+}
+
+func globalOption(name string) (string, error) {
+	cmd := exec.Command("tmux", "show-options", "-gv", name)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func RenameWindow(windowID, newName string) error {

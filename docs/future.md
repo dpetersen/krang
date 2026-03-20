@@ -23,7 +23,7 @@
 
 ## UI Polish
 
-- **tmux window color coding** — set the tmux window/tab style to match attention state (red for permission requests, yellow for waiting, etc.) so the status bar itself signals which tasks need attention without switching to the krang TUI
+- ~~**tmux window color coding** — set the tmux window/tab style to match attention state (red for permission requests, yellow for waiting, etc.) so the status bar itself signals which tasks need attention without switching to the krang TUI~~ (Done)
 - **Notification sound/bell** — terminal bell when attention changes to permission or waiting
 - **macOS notifications** — via `terminal-notifier` for attention changes when not looking at krang
 - **Configurable keybindings**

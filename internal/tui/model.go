@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/summary"
@@ -25,6 +26,7 @@ type Model struct {
 	hookEvents      <-chan hooks.HookEvent
 	summaryPipeline *summary.Pipeline
 	activeSession   string
+	cfg             config.Config
 	tasks           []db.Task
 	cursor     int
 	sortByPriority bool
@@ -49,6 +51,8 @@ type Model struct {
 	flagEditTaskID string
 
 	debugLog []string
+
+	windowStylesSynced bool
 }
 
 type flagDefinition struct {
@@ -76,7 +80,7 @@ var flagDefinitions = []flagDefinition{
 	},
 }
 
-func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession string) Model {
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession string, cfg config.Config) Model {
 	nameInput := textinput.New()
 	nameInput.Placeholder = "task-name"
 	nameInput.CharLimit = 40
@@ -100,6 +104,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		hookEvents:       hookEvents,
 		summaryPipeline: summaryPipeline,
 		activeSession:   activeSession,
+		cfg:             cfg,
 		nameInput:      nameInput,
 		promptInput:    promptInput,
 		filterInput:    filterInput,
@@ -127,6 +132,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks = msg.Tasks
 		if m.cursor >= len(m.tasks) && len(m.tasks) > 0 {
 			m.cursor = len(m.tasks) - 1
+		}
+		if !m.windowStylesSynced {
+			m.windowStylesSynced = true
+			return m, m.syncWindowStyles()
 		}
 		return m, nil
 
@@ -909,6 +918,9 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 		attention, ok := hooks.AttentionFromEvent(event)
 		if ok {
 			_ = m.taskStore.UpdateAttention(t.ID, attention)
+			if t.TmuxWindow != "" {
+				applyWindowStyle(t.TmuxWindow, attention, m.cfg)
+			}
 		}
 
 		if event.Cwd != "" && event.Cwd != t.Cwd {
@@ -924,6 +936,28 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 		}
 
 		return m.refreshTasks()
+	}
+}
+
+func applyWindowStyle(windowID string, attention db.AttentionState, cfg config.Config) {
+	color := cfg.WindowColor(string(attention))
+	if color != "" {
+		_ = tmux.SetWindowStyle(windowID, color)
+	} else {
+		_ = tmux.ClearWindowStyle(windowID)
+	}
+}
+
+func (m Model) syncWindowStyles() tea.Cmd {
+	tasks := m.tasks
+	cfg := m.cfg
+	return func() tea.Msg {
+		for _, t := range tasks {
+			if t.TmuxWindow != "" {
+				applyWindowStyle(t.TmuxWindow, t.Attention, cfg)
+			}
+		}
+		return nil
 	}
 }
 
