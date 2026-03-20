@@ -99,6 +99,32 @@ func FindCompanions(session, taskName string) []string {
 	return companions
 }
 
+// CreateWindowAfter creates a new window immediately after the given window.
+func CreateWindowAfter(afterWindowID, name, cwd string) (string, error) {
+	cmd := exec.Command(
+		"tmux", "new-window",
+		"-a",
+		"-c", cwd,
+		"-t", afterWindowID,
+		"-n", name,
+		"-P", "-F", "#{window_id}",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("creating window %s after %s: %s: %w", name, afterWindowID, strings.TrimSpace(string(out)), err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// CompactWindows renumbers all windows in the session sequentially.
+func CompactWindows(session string) error {
+	cmd := exec.Command("tmux", "move-window", "-r", "-t", session+":")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("compacting windows in %s: %s: %w", session, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 func RenameWindow(windowID, newName string) error {
 	cmd := exec.Command("tmux", "rename-window", "-t", windowID, newName)
 	if out, err := cmd.CombinedOutput(); err != nil {

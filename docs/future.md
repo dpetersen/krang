@@ -13,13 +13,13 @@
 - **Task history view** — see completed/failed tasks, maybe with their final summaries
 - **Auto-freeze idle tasks** — after N minutes of no activity, offer to freeze
 
-## Companion Windows
+## ~~Companion Windows~~ (Done)
 
-- **Create companion shortcut** — TUI keybinding to create a `KF!<task>` companion window for the selected task. The new window should be inserted immediately to the right of the task's `K!` window in tmux, pushing other windows over if needed.
+- ~~**Create companion shortcut** — `+` keybinding creates a `KF!<task>` companion window adjacent to the task's `K!` window.~~
 
-## tmux Window Compaction
+## ~~tmux Window Compaction~~ (Done)
 
-- **Compact windows command** — renumber all tmux windows in the active session so they're sequential (0, 1, 2, 3...) with no gaps. Windows tend to accumulate high numbers (10, 11, etc.) as tasks come and go. Could be a TUI keybinding or happen automatically on certain operations. tmux has `move-window -r` which renumbers sequentially.
+- ~~**Compact windows command** — `C` keybinding renumbers all windows sequentially.~~
 
 ## UI Polish
 
@@ -94,5 +94,5 @@ Krang always runs from the LaunchDarkly directory (`~/code/launchdarkly`), which
 
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
 - **Better error surfacing** — some operations fail silently; consider a dedicated error log file
-- **Configurable safehouse command** — not everyone uses safehouse; make the Claude wrapper configurable
+- ~~**Configurable safehouse command** — done: `krang setup` prompts for sandbox command~~
 - **Configurable models** — allow changing the summary (haiku) and sit rep (sonnet) models

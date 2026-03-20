@@ -315,7 +315,7 @@ func (m Model) renderStatusBar() string {
 	if t != nil {
 		switch t.State {
 		case db.StateActive:
-			hints = append(hints, "[enter]focus", "[p]ark", "[f]reeze")
+			hints = append(hints, "[enter]focus", "[+]companion", "[p]ark", "[f]reeze")
 		case db.StateParked:
 			hints = append(hints, "[u]npark", "[f]reeze")
 		case db.StateDormant:
@@ -331,7 +331,7 @@ func (m Model) renderStatusBar() string {
 	if len(m.tasks) > 0 {
 		hints = append(hints, "[S]itrep", "re[s]ort", "[/]filter")
 	}
-	hints = append(hints, "[?]help", "[q]uit")
+	hints = append(hints, "[C]ompact", "[?]help", "[q]uit")
 
 	return statusBarStyle.Render(strings.Join(hints, "  "))
 }
@@ -380,10 +380,12 @@ func (m Model) renderHelp() string {
   t         Thaw frozen task (resume)
   x         Kill task (with confirmation)
   c         Mark task completed
+  +         Create companion window for task
   F         Edit task flags (sandbox, permissions)
   s         Toggle sort (created / priority)
   S         Sit rep (briefing on all active tasks)
   r         Refresh AI summaries
+  C         Compact windows (renumber sequentially)
   /         Filter tasks (esc to clear)
   ?         Toggle this help
   j/k       Navigate up/down

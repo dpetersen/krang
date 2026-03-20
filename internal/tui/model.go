@@ -15,6 +15,7 @@ import (
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/summary"
 	"github.com/dpetersen/krang/internal/task"
+	"github.com/dpetersen/krang/internal/tmux"
 )
 
 type Model struct {
@@ -350,6 +351,12 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeFlagEdit
 		}
 		return m, nil
+
+	case "+":
+		return m, m.createCompanion()
+
+	case "C":
+		return m, m.compactWindows()
 
 	case "?":
 		m.mode = ModeHelp
@@ -917,6 +924,33 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 		}
 
 		return m.refreshTasks()
+	}
+}
+
+func (m Model) createCompanion() tea.Cmd {
+	t := m.selectedTask()
+	if t == nil || t.TmuxWindow == "" {
+		return nil
+	}
+	taskName := t.Name
+	windowID := t.TmuxWindow
+	cwd := t.Cwd
+	return func() tea.Msg {
+		companionName := tmux.CompanionWindowName(taskName)
+		if _, err := tmux.CreateWindowAfter(windowID, companionName, cwd); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return m.refreshTasks()
+	}
+}
+
+func (m Model) compactWindows() tea.Cmd {
+	session := m.activeSession
+	return func() tea.Msg {
+		if err := tmux.CompactWindows(session); err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return nil
 	}
 }
 
