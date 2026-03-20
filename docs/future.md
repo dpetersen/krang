@@ -110,6 +110,10 @@ Krang always runs from the LaunchDarkly directory (`~/code/launchdarkly`), which
 - Should workspace creation be part of `n` (new task) or a separate command?
 - What happens to uncommitted work in workspaces when a task is frozen? (jj workspaces preserve state, but the user should be warned)
 
+## Bugs
+
+- **PERM attention state sticks after permission is resolved** — after approving or denying a permission prompt, the task stays in `PERM` attention state until the next `Stop` (wait) event. Likely no hook event fires between permission resolution and the next stop, so krang never learns Claude resumed. Need to investigate which hook events fire after a permission response and whether there's a gap to fill (e.g., a synthetic clear on any non-PermissionRequest event from the same task).
+
 ## Technical
 
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
