@@ -61,7 +61,7 @@ type flagDefinition struct {
 var flagDefinitions = []flagDefinition{
 	{
 		Label:            "No Sandbox",
-		Description:      "Launch claude directly (skip safehouse)",
+		Description:      "Launch claude directly (skip sandbox wrapper)",
 		Get:              func(f db.TaskFlags) bool { return f.NoSandbox },
 		Set:              func(f *db.TaskFlags, v bool) { f.NoSandbox = v },
 		RequiresRelaunch: true,

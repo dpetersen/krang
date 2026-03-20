@@ -5,6 +5,7 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/summary"
@@ -44,6 +45,11 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("setting up parked session: %w", err)
 	}
 
+	cfg, err := config.Load(config.Path())
+	if err != nil {
+		return err
+	}
+
 	database, err := db.Open()
 	if err != nil {
 		return fmt.Errorf("opening database: %w", err)
@@ -52,7 +58,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	taskStore := db.NewTaskStore(database)
 	eventStore := db.NewEventStore(database)
-	manager := task.NewManager(taskStore, eventStore, activeSession)
+	manager := task.NewManager(taskStore, eventStore, activeSession, cfg.SandboxCommand)
 
 	if err := manager.Reconcile(); err != nil {
 		return fmt.Errorf("initial reconciliation: %w", err)

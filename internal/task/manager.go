@@ -19,21 +19,22 @@ import (
 const gracefulShutdownTimeout = 5 * time.Second
 
 type Manager struct {
-	tasks         *db.TaskStore
-	events        *db.EventStore
-	activeSession string
+	tasks          *db.TaskStore
+	events         *db.EventStore
+	activeSession  string
+	sandboxCommand string
 }
 
-func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession string) *Manager {
-	return &Manager{tasks: tasks, events: events, activeSession: activeSession}
+func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession, sandboxCommand string) *Manager {
+	return &Manager{tasks: tasks, events: events, activeSession: activeSession, sandboxCommand: sandboxCommand}
 }
 
-func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool) string {
+func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool, sandboxCommand string) string {
 	var cmd string
-	if flags.NoSandbox {
+	if flags.NoSandbox || sandboxCommand == "" {
 		cmd = "claude"
 	} else {
-		cmd = "safehouse claude"
+		cmd = sandboxCommand + " claude"
 	}
 
 	if resume {
@@ -66,7 +67,7 @@ func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags) (*db.
 		Flags:     flags,
 	}
 
-	claudeCmd := buildClaudeCommand(sessionID, name, flags, false)
+	claudeCmd := buildClaudeCommand(sessionID, name, flags, false, m.sandboxCommand)
 
 	windowName := tmux.WindowName(name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, cwd, claudeCmd)
@@ -320,7 +321,7 @@ func (m *Manager) Wake(taskID string) error {
 		return fmt.Errorf("task %s has no session ID to resume", task.Name)
 	}
 
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true)
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand)
 
 	windowName := tmux.WindowName(task.Name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
@@ -363,7 +364,7 @@ func (m *Manager) Relaunch(taskID string) error {
 	}
 
 	// Build new command with --resume and current flags.
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true)
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand)
 
 	windowName := tmux.WindowName(task.Name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
