@@ -1,6 +1,7 @@
 package pathutil
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,22 @@ func TestStateFilePath(t *testing.T) {
 	suffix := "krang-state.json"
 	if path[len(path)-len(suffix):] != suffix {
 		t.Errorf("StateFilePath should end with %q, got %q", suffix, path)
+	}
+
+	// Should be under .local/state.
+	if !strings.Contains(path, ".local/state/krang") {
+		t.Errorf("StateFilePath should be under .local/state, got %q", path)
+	}
+}
+
+func TestDataDir(t *testing.T) {
+	dir := DataDir("/Users/alice/dev/krang")
+	if dir == "" {
+		t.Fatal("DataDir returned empty string")
+	}
+
+	// Should be under .local/share.
+	if !strings.Contains(dir, ".local/share/krang") {
+		t.Errorf("DataDir should be under .local/share, got %q", dir)
 	}
 }

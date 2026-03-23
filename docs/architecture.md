@@ -26,19 +26,46 @@ A task is a unit of work with a Claude Code session. It has a name, a state, an 
 └─────────────────────────────────┘
 ```
 
+## Multi-Instance Support
+
+Multiple krang instances can run simultaneously for different working directories (e.g., different metarepos). Each instance is identified by `<basename>-<4 hex SHA-256>` of the absolute working directory path.
+
+Per-instance resources:
+- **Dynamic port** — hook server binds to `:0`; port written to a state file
+- **SQLite database** — persistent task/event storage
+- **tmux sessions** — `krang-<instanceID>` (active) and `krang-<instanceID>-parked`
+
+### File Locations
+
+Krang follows XDG conventions for file placement:
+
+| Path | Purpose | Lifecycle |
+|------|---------|-----------|
+| `~/.config/krang/config.json` | Sandbox command, window colors | Permanent, user-edited |
+| `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Written by setup, static |
+| `~/.local/share/krang/instances/<encoded-cwd>/krang.db` | Per-instance SQLite database | Persistent across restarts |
+| `~/.local/state/krang/instances/<encoded-cwd>/krang-state.json` | Per-instance port file | Ephemeral, exists while running |
+
+### Instance Collision Detection
+
+On startup, krang checks for an existing instance:
+1. If a tmux session named `krang-<instanceID>` already exists, error with attach instructions
+2. If a state file exists with a responding `/health` endpoint, error with port info
+3. If a state file exists but the port doesn't respond, treat as stale and overwrite
+
 ## tmux Topology
 
-Krang runs in the user's existing tmux session. It does NOT create a separate session for active tasks.
+Krang renames its tmux session to `krang-<instanceID>` on startup for visibility in `tmux ls`.
 
 ```
-user's tmux session (e.g., "0")
+krang-myproject-a3f2 (attached, active session)
   ├── window 0: "krang" (TUI dashboard)
   ├── window 1: "K!auth-refactor" (@14)     ← managed by krang
   ├── window 2: "K!fix-test" (@15)          ← managed by krang
   ├── window 3: (user's own terminal)       ← NOT touched by krang
   └── window 4: "KF!auth-refactor" (@20)    ← companion window
 
-krang-parked (detached session, holding area)
+krang-myproject-a3f2-parked (detached, holding area)
   └── window 1: "K!update-deps" (@17)       ← parked task
 ```
 
@@ -65,8 +92,8 @@ krang-parked (detached session, holding area)
 
 | State | tmux | Claude | Resumable |
 |-------|------|--------|-----------|
-| Active | Window in user's session | Running | N/A |
-| Parked | Window in `krang-parked` | Running | N/A |
+| Active | Window in krang's session | Running | N/A |
+| Parked | Window in parked session | Running | N/A |
 | Frozen | No window | Not running | Yes, via `--resume` |
 | Completed | No window | Not running | No |
 | Failed | No window | Not running | No |
@@ -89,13 +116,15 @@ Orthogonal to task state. Driven by Claude Code hook events.
 
 ## Event System
 
-Claude Code hooks POST JSON to `http://127.0.0.1:19283/hooks/event`. The hook server runs alongside the TUI in the same process.
+Claude Code hooks are `type: "command"` entries in `~/.claude/settings.json` pointing to a static relay script at `~/.config/krang/hooks/relay.sh`. The relay script reads `KRANG_STATEFILE` (set by krang in each tmux window it creates) to find the current port, then forwards the event via HTTP. Standalone Claude sessions (without `KRANG_STATEFILE`) are unaffected.
+
+The hook server runs alongside the TUI in the same process, bound to a dynamic port on `127.0.0.1`.
 
 **Task correlation:** Krang pre-assigns a UUID via `claude --session-id <uuid>` when creating tasks. Hook payloads include `session_id` which matches.
 
 **Session adoption:** When a frozen task is thawed, `--resume` may assign a new session ID. Krang detects this: when a `SessionStart` arrives with an unknown session ID, it matches to an active task by cwd and updates the stored session ID.
 
-**Hook installation:** `krang setup` merges HTTP hook entries into `~/.claude/settings.json` idempotently, preserving existing user hooks. `krang teardown` removes only krang-owned entries (identified by the krang URL).
+**Hook installation:** `krang setup` writes the relay script and merges command hook entries into `~/.claude/settings.json` idempotently, preserving existing user hooks. It also removes any legacy HTTP-type krang hooks from before multi-instance support. `krang teardown` removes only krang-owned entries (identified by the relay script path).
 
 ## Graceful Shutdown
 
@@ -108,6 +137,8 @@ When completing, killing, or freezing a task:
 5. Fall back to `tmux kill-window` if it doesn't
 
 State is updated before windows are killed so the 10-second reconciliation tick doesn't race and incorrectly transition the task.
+
+When krang itself exits, it prompts to freeze any remaining parked tasks and cleans up the parked session if empty.
 
 ## AI Summaries
 
@@ -138,7 +169,7 @@ Full briefing on all active tasks via `claude -p --model sonnet`:
 
 ## Data Model
 
-SQLite at `~/.config/krang/krang.db` (override with `KRANG_DB` env var). WAL mode for concurrent access.
+SQLite per-instance at `~/.local/share/krang/instances/<encoded-cwd>/krang.db` (override with `KRANG_DB` env var). WAL mode for concurrent access.
 
 **tasks table:** id (ULID), name, prompt, state, attention, session_id, cwd, tmux_window, summary, summary_hash, transcript_path, created_at, updated_at
 
@@ -154,8 +185,7 @@ Task cwd updates live from hook event `cwd` field, which reflects Claude's curre
 
 ## Development
 
-- `KRANG_DB=.krang-dev.db` isolates the dev database (set in mise.toml)
-- Only one krang instance can run at a time (port 19283 + shared DB)
+- `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.json` isolate dev state (set in mise.toml)
 - Uses `jj` for version control, never `git` commands
 - Temp files use `NOCOMMIT-` prefix to avoid jj snapshotting them into commits
-- Claude spawned via `safehouse claude` wrapper for sandboxing
+- Claude sandbox wrapper is configurable via `krang setup`

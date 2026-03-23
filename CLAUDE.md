@@ -5,15 +5,32 @@ TUI task orchestrator for managing multiple Claude Code sessions via tmux.
 ## Architecture
 
 - **Go + Bubble Tea** TUI running in a tmux window
-- **SQLite** at `~/.config/krang/krang.db` for task/event storage (override with `KRANG_DB` env var)
-- **Claude Code HTTP hooks** on `127.0.0.1:19283` for real-time event ingestion
+- **SQLite** per-instance at `~/.local/share/krang/instances/<encoded-cwd>/krang.db` (override with `KRANG_DB` env var)
+- **Claude Code command hooks** via relay script that reads `KRANG_STATEFILE` for the dynamic port
 - **AI summaries** via `claude -p --model haiku` with structured JSON output
-- Claude spawned via `safehouse claude` wrapper
+- Claude spawned via configurable sandbox wrapper
+
+## Multi-Instance Support
+
+Multiple krang instances can run simultaneously for different working directories. Each instance gets:
+- Its own dynamic port (bound to `:0`) with state file at `~/.local/state/krang/instances/<encoded-cwd>/krang-state.json`
+- Its own SQLite database at `~/.local/share/krang/instances/<encoded-cwd>/krang.db`
+- Its own tmux sessions: `krang-<instanceID>` (active) and `krang-<instanceID>-parked`
+- Instance ID format: `<basename>-<4 hex SHA-256 of full path>` (e.g., `krang-496d`)
+
+## File Locations
+
+| Path | Purpose | XDG category |
+|------|---------|-------------|
+| `~/.config/krang/config.json` | Sandbox command, window colors | Config |
+| `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Config |
+| `~/.local/share/krang/instances/…/krang.db` | Per-instance SQLite database | Data |
+| `~/.local/state/krang/instances/…/krang-state.json` | Per-instance port file (ephemeral, exists while running) | State |
 
 ## Task States
 
-- **Active** — tmux window in user's current session, Claude running
-- **Parked** — tmux window moved to `krang-parked` session, still running
+- **Active** — tmux window in krang's session, Claude running
+- **Parked** — tmux window moved to parked session, still running
 - **Frozen** (DB: `dormant`) — no tmux window, session ID saved for `--resume`
 - **Completed/Failed** — terminal states; names freed for reuse
 
@@ -26,9 +43,10 @@ TUI task orchestrator for managing multiple Claude Code sessions via tmux.
 ## Key Packages
 
 - `internal/db/` — SQLite schema, task CRUD, event log
+- `internal/pathutil/` — instance ID, XDG path helpers, Claude path encoding
 - `internal/tmux/` — session/window/pane operations via `tmux` CLI
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
-- `internal/hooks/` — HTTP server for Claude Code hook events, settings.json installer
+- `internal/hooks/` — HTTP server for Claude Code hook events, relay script + settings.json installer
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
 - `internal/tui/` — Bubble Tea model, view, keybindings, messages
 
@@ -43,15 +61,19 @@ mise run setup   # install Claude Code hooks only
 
 Must be run inside tmux. Uses `jj` for version control, not `git`.
 
-Development uses `KRANG_DB=.krang-dev.db` (set in mise.toml) to isolate from the production database.
+Development uses `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.json` (set in mise.toml) to isolate from production paths.
 
 ## Graceful Shutdown
 
 Tasks are shut down via SIGINT to the Claude process (found via `pgrep -P <shell_pid>`), with a 5-second timeout before falling back to `tmux kill-window`. DB state is updated before killing windows to prevent reconcile races.
 
+On krang exit, parked tasks are offered for freezing. If frozen (or none exist), the parked session is cleaned up automatically.
+
 ## Hook Events
 
 Krang listens for: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `TaskCompleted`, `StopFailure`, `Notification`, `SessionEnd`. Events matched to tasks by `session_id`. Resumed sessions adopted via cwd matching on `SessionStart`.
+
+Hooks are `type: "command"` entries in `~/.claude/settings.json` pointing to the relay script. The relay script only forwards events when `KRANG_STATEFILE` is set (which krang does for sessions it launches), so standalone Claude sessions are unaffected.
 
 ## Import
 

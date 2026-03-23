@@ -30,18 +30,28 @@ func InstanceID(cwd string) string {
 	return fmt.Sprintf("%s-%x", basename, hash[:2])
 }
 
-// InstanceDir returns the per-instance config directory for a given
-// working directory.
-func InstanceDir(cwd string) string {
+func homeDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = os.TempDir()
+		return os.TempDir()
 	}
-	return filepath.Join(home, ".config", "krang", "instances", EncodePath(cwd))
+	return home
+}
+
+// DataDir returns the per-instance data directory (for persistent
+// storage like the SQLite database). Uses XDG_DATA_HOME (~/.local/share).
+func DataDir(cwd string) string {
+	return filepath.Join(homeDir(), ".local", "share", "krang", "instances", EncodePath(cwd))
+}
+
+// StateDir returns the per-instance state directory (for ephemeral
+// runtime files like the port state file). Uses XDG_STATE_HOME (~/.local/state).
+func StateDir(cwd string) string {
+	return filepath.Join(homeDir(), ".local", "state", "krang", "instances", EncodePath(cwd))
 }
 
 // StateFilePath returns the path to the krang state file for a given
 // working directory.
 func StateFilePath(cwd string) string {
-	return filepath.Join(InstanceDir(cwd), "krang-state.json")
+	return filepath.Join(StateDir(cwd), "krang-state.json")
 }

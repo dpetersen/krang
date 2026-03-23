@@ -13,7 +13,7 @@ import (
 func Open(cwd string) (*sql.DB, error) {
 	dbPath := os.Getenv("KRANG_DB")
 	if dbPath == "" {
-		dbDir := pathutil.InstanceDir(cwd)
+		dbDir := pathutil.DataDir(cwd)
 		if err := os.MkdirAll(dbDir, 0o755); err != nil {
 			return nil, fmt.Errorf("creating instance dir: %w", err)
 		}
