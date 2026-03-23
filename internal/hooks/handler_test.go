@@ -28,6 +28,11 @@ func TestAttentionFromEvent(t *testing.T) {
 			wantOK:        true,
 		},
 		{
+			event:         HookEvent{HookEventName: "PostToolUse"},
+			wantAttention: db.AttentionOK,
+			wantOK:        true,
+		},
+		{
 			event:         HookEvent{HookEventName: "StopFailure"},
 			wantAttention: db.AttentionError,
 			wantOK:        true,

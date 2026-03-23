@@ -27,6 +27,8 @@ func AttentionFromEvent(event HookEvent) (db.AttentionState, bool) {
 		return db.AttentionWaiting, true
 	case "PermissionRequest":
 		return db.AttentionPermission, true
+	case "PostToolUse":
+		return db.AttentionOK, true
 	case "StopFailure":
 		return db.AttentionError, true
 	case "TaskCompleted":

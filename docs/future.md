@@ -108,7 +108,7 @@ Surface background child processes per task in the TUI and feed that context int
 
 ## Bugs
 
-- **PERM attention state sticks after permission is resolved** — after approving or denying a permission prompt, the task stays in `PERM` attention state until the next `Stop` (wait) event. Likely no hook event fires between permission resolution and the next stop, so krang never learns Claude resumed. Need to investigate which hook events fire after a permission response and whether there's a gap to fill (e.g., a synthetic clear on any non-PermissionRequest event from the same task).
+- ~~**PERM attention state sticks after permission is resolved** — fixed by subscribing to `ToolResult` hook event, which fires immediately after a permission is approved and a tool executes. Maps to `AttentionOK` to clear the PERM state.~~ (Fixed)
 
 ## Technical
 
