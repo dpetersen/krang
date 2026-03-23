@@ -16,6 +16,7 @@ var hookedEvents = []string{
 	"UserPromptSubmit",
 	"Stop",
 	"PermissionRequest",
+	"PostToolUse",
 	"TaskCompleted",
 	"StopFailure",
 	"Notification",
@@ -23,12 +24,17 @@ var hookedEvents = []string{
 }
 
 const relayScript = `#!/bin/bash
+dbg() { [ -n "$KRANG_DEBUG" ] && echo "[$(date '+%H:%M:%S')] relay: $*" >> /tmp/krang-debug.log; }
 [ -z "$KRANG_STATEFILE" ] && exit 0
-[ ! -f "$KRANG_STATEFILE" ] && exit 0
+[ ! -f "$KRANG_STATEFILE" ] && { dbg "statefile not found: $KRANG_STATEFILE"; exit 0; }
 PORT=$(jq -r .port "$KRANG_STATEFILE" 2>/dev/null)
-[ -z "$PORT" ] && exit 0
-cat | curl -s -X POST -H 'Content-Type: application/json' \
-  -d @- "http://127.0.0.1:$PORT/hooks/event" >/dev/null 2>&1
+[ -z "$PORT" ] && { dbg "empty port from $KRANG_STATEFILE"; exit 0; }
+INPUT=$(cat)
+dbg "port=$PORT payload=$INPUT"
+RESP=$(echo "$INPUT" | curl -s -o /dev/null -w '%{http_code}' \
+  -X POST -H 'Content-Type: application/json' \
+  -d @- "http://127.0.0.1:$PORT/hooks/event")
+dbg "http_status=$RESP"
 exit 0
 `
 

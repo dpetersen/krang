@@ -79,7 +79,7 @@ On krang exit, parked tasks are offered for freezing. If frozen (or none exist),
 
 ## Hook Events
 
-Krang listens for: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `TaskCompleted`, `StopFailure`, `Notification`, `SessionEnd`. Events matched to tasks by `session_id`. Resumed sessions adopted via cwd matching on `SessionStart`.
+Krang listens for: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `ToolResult`, `TaskCompleted`, `StopFailure`, `Notification`, `SessionEnd`. Events matched to tasks by `session_id`. Resumed sessions adopted via cwd matching on `SessionStart`.
 
 Hooks are `type: "command"` entries in `~/.claude/settings.json` pointing to the relay script. The relay script only forwards events when `KRANG_STATEFILE` is set (which krang does for sessions it launches), so standalone Claude sessions are unaffected.
 
@@ -95,3 +95,11 @@ Task cwd updates live from hook event payloads. Displayed as relative paths when
 
 - **Created** (default) — all tasks, stable creation order
 - **Priority** — active tasks only, sorted by attention: permission > error > waiting > ok > done
+
+## Sandboxing
+
+Krang itself runs unsandboxed; only the Claude processes inside task windows are sandboxed. The sandbox must pass through `KRANG_STATEFILE` (required) and `KRANG_DEBUG` (optional) env vars, and allow read access to `~/.local/state/krang/` (state file) and read+execute on `~/.config/krang/hooks/` (relay script). No write access to krang paths is needed from inside the sandbox. See README.md for full details.
+
+## Debugging
+
+The Debug task flag (`KRANG_DEBUG=1`) enables relay script logging to `/tmp/krang-debug.log`. Logs the full JSON payload of each hook event and the HTTP status of delivery to krang. Requires relaunch to take effect.

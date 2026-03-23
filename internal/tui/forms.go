@@ -50,6 +50,7 @@ func newTaskCreationForm(nameInUse func(string) bool, huhTheme *huh.Theme) (*huh
 				Options(
 					huh.NewOption("No Sandbox — launch claude directly", "no_sandbox"),
 					huh.NewOption("Skip Permissions — --dangerously-skip-permissions", "skip_perms"),
+					huh.NewOption("Debug — export KRANG_DEBUG=1 for relay logging", "debug"),
 				).
 				Value(&flagChoices),
 		),
@@ -62,6 +63,8 @@ func newTaskCreationForm(nameInUse func(string) bool, huhTheme *huh.Theme) (*huh
 				result.Flags.NoSandbox = true
 			case "skip_perms":
 				result.Flags.DangerouslySkipPermissions = true
+			case "debug":
+				result.Flags.Debug = true
 			}
 		}
 		return formCompletedMsg{formType: formTypeNewTask}
@@ -127,6 +130,9 @@ func newFlagEditForm(currentFlags db.TaskFlags, taskName string, huhTheme *huh.T
 	if currentFlags.DangerouslySkipPermissions {
 		flagChoices = append(flagChoices, "skip_perms")
 	}
+	if currentFlags.Debug {
+		flagChoices = append(flagChoices, "debug")
+	}
 
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -135,6 +141,7 @@ func newFlagEditForm(currentFlags db.TaskFlags, taskName string, huhTheme *huh.T
 				Options(
 					huh.NewOption("No Sandbox — launch claude directly", "no_sandbox"),
 					huh.NewOption("Skip Permissions — --dangerously-skip-permissions", "skip_perms"),
+					huh.NewOption("Debug — export KRANG_DEBUG=1 for relay logging", "debug"),
 				).
 				Value(&flagChoices),
 		),
@@ -148,6 +155,8 @@ func newFlagEditForm(currentFlags db.TaskFlags, taskName string, huhTheme *huh.T
 				result.Flags.NoSandbox = true
 			case "skip_perms":
 				result.Flags.DangerouslySkipPermissions = true
+			case "debug":
+				result.Flags.Debug = true
 			}
 		}
 		return formCompletedMsg{formType: formTypeFlagEdit}

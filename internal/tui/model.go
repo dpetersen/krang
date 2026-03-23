@@ -81,6 +81,13 @@ var flagDefinitions = []flagDefinition{
 		Set:              func(f *db.TaskFlags, v bool) { f.DangerouslySkipPermissions = v },
 		RequiresRelaunch: true,
 	},
+	{
+		Label:            "Debug",
+		Description:      "Export KRANG_DEBUG=1 for hook relay logging",
+		Get:              func(f db.TaskFlags) bool { return f.Debug },
+		Set:              func(f *db.TaskFlags, v bool) { f.Debug = v },
+		RequiresRelaunch: true,
+	},
 }
 
 func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {

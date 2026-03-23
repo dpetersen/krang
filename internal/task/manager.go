@@ -51,6 +51,10 @@ func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool,
 		cmd += " --name " + shellQuote(name)
 	}
 
+	if flags.Debug {
+		cmd = "export KRANG_DEBUG=1; " + cmd
+	}
+
 	if flags.DangerouslySkipPermissions {
 		cmd += " --dangerously-skip-permissions"
 	}
@@ -322,8 +326,17 @@ func (m *Manager) Wake(taskID string) error {
 
 	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand, m.stateFilePath)
 
+	// Use the session's original project directory rather than the
+	// live cwd, which may have drifted as Claude cd'd around. Claude
+	// resolves sessions relative to the project directory, so launching
+	// from the wrong cwd causes "session not found" errors.
+	launchCwd := task.Cwd
+	if sessionCwd, err := findSessionCwd(task.SessionID); err == nil {
+		launchCwd = sessionCwd
+	}
+
 	windowName := tmux.WindowName(task.Name)
-	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
+	windowID, err := tmux.CreateWindow(m.activeSession, windowName, launchCwd, claudeCmd)
 	if err != nil {
 		return fmt.Errorf("creating tmux window for wake: %w", err)
 	}
@@ -365,8 +378,14 @@ func (m *Manager) Relaunch(taskID string) error {
 	// Build new command with --resume and current flags.
 	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand, m.stateFilePath)
 
+	// Use the session's original project directory (see Thaw for rationale).
+	launchCwd := task.Cwd
+	if sessionCwd, err := findSessionCwd(task.SessionID); err == nil {
+		launchCwd = sessionCwd
+	}
+
 	windowName := tmux.WindowName(task.Name)
-	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
+	windowID, err := tmux.CreateWindow(m.activeSession, windowName, launchCwd, claudeCmd)
 	if err != nil {
 		return fmt.Errorf("creating tmux window for relaunch: %w", err)
 	}

@@ -10,10 +10,11 @@ import (
 type TaskFlags struct {
 	NoSandbox                  bool `json:"no_sandbox,omitempty"`
 	DangerouslySkipPermissions bool `json:"dangerously_skip_permissions,omitempty"`
+	Debug                      bool `json:"debug,omitempty"`
 }
 
 func (f TaskFlags) HasNonDefault() bool {
-	return f.NoSandbox || f.DangerouslySkipPermissions
+	return f.NoSandbox || f.DangerouslySkipPermissions || f.Debug
 }
 
 type TaskState string
