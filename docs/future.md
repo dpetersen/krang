@@ -10,53 +10,56 @@
 
 - **Task history view** — see completed/failed tasks with their final summaries, with the ability to revive them
 
-## ~~Companion Windows~~ (Done)
+## tmux Window Naming
 
-- ~~**Create companion shortcut** — `+` keybinding creates a `KF!<task>` companion window adjacent to the task's `K!` window.~~
+The `K!` and `KF!` prefixes are functional but ugly in the tmux status bar, especially when many tasks are open. The krang TUI window and session name (`krang-<instanceID>`) are also verbose. Goals:
 
-## ~~tmux Window Compaction~~ (Done)
+- **Clean task window names** — just the task name, no prefix
+- **Subtle krang TUI window** — an icon (🧠) instead of the full name
+- **Companion windows** — distinguish without a prefix if possible
 
-- ~~**Compact windows command** — `C` keybinding renumbers all windows sequentially.~~
+### Feasibility: dropping prefixes
+
+Krang already stores window IDs (`@N`) in the DB for every task. The `K!` prefix is only needed in two places:
+
+1. **Reconciliation** (`task/reconcile.go`) — enumerates windows by prefix to find krang-managed ones. Could instead check if a window ID appears in the tasks table, eliminating the need for name-based identification entirely.
+2. **Companion finding** (`tmux/window.go:FindCompanions`) — finds `KF!<name>` windows by name. Could instead use a tmux user option (`@krang-companion=<taskName>`) set at creation time, then query with `tmux list-windows -F '#{window_id} #{@krang-companion}'`. This is cleaner and survives manual window renames.
+
+Both are solvable. The main risk is that renaming a window manually (which tmux allows) could cause confusion if we rely purely on DB state, but reconciliation already handles missing windows gracefully.
+
+### Approach
+
+- Set `@krang-task=<taskName>` as a tmux window option on task windows at creation time. Use this for identification instead of name prefix.
+- Set `@krang-companion=<taskName>` on companion windows.
+- Name task windows as just `<taskName>`, companions as `<taskName>+` or similar minimal suffix.
+- Rename the krang TUI window to `🧠` (or a configurable icon).
+- The session name `krang-<instanceID>` could shorten to `k-<instanceID>` or just `🧠<instanceID>`.
+
+### Attention as window options
+
+Currently krang sets `window-status-style` directly on task windows to color them by attention state. This works but stomps on custom tmux themes. With the `@krang-*` options system, krang could also set `@krang-attn` (values: `ok`, `waiting`, `permission`, `error`, `done`) on every task window. This is cheap and non-destructive.
+
+Users with custom tmux themes could then style based on the option:
+
+```
+# .tmux.conf — user controls the styling
+set -g window-status-format '#{?#{==:#{@krang-attn},permission},#[fg=red],}#W'
+```
+
+Krang would always set `@krang-attn` (data layer), and optionally also apply direct `window-status-style` changes (presentation layer, current behavior). The existing `"window_colors_enabled": false` config option already disables the direct styling — users who set that can use `@krang-attn` in their own tmux format strings instead.
+
+### Migration
+
+Existing windows with `K!` prefixes would need a one-time rename on startup. Detect `K!` prefix, strip it, set the `@krang-task` option, rename.
 
 ## UI Polish
 
-- ~~**tmux window color coding** — set the tmux window/tab style to match attention state (red for permission requests, yellow for waiting, etc.) so the status bar itself signals which tasks need attention without switching to the krang TUI~~ (Done)
 - **Scrollable help with glossary** — replace the static help overlay with a scrollable viewport. Add a glossary section explaining concepts (companion windows, park/freeze, krang-parked session, attention states, etc.) so new users can understand the TUI without external docs. Use Bubble Tea's viewport for j/k scrolling with a scroll indicator.
 - **Activity sparklines** — display a small time-series graph next to each task showing recent activity, color-coded by phase (thinking, tool calls, writing code, waiting for user, permission blocked). Requires storing timestamped activity events in the DB with a rolling retention window, and rendering sparkline-style characters (▁▂▃▄▅▆▇█) in the task list. Could use hook events already being captured to classify activity phases.
-
-## UI Rework & Theming
-
-Full visual overhaul, best done after core features stabilize so the theme covers everything.
-
-### Theming Infrastructure
-
-- **Define a `Theme` struct** mapping semantic roles to colors: Title, Subtitle, Border, Selected, Muted, OK, Warning, Error, Done, Accent. All lipgloss styles derive from the active theme rather than hardcoded color numbers.
-- **Refactor `styles.go`** — replace the 9 package-level style vars with a `buildStyles(theme Theme) Styles` function. No style should reference a raw color number directly.
-- **Store theme selection** in `~/.config/krang/config.json` (already exists). Support `--theme` flag override.
-
-### Bundled Themes
-
-- **Catppuccin** (all 4 flavors: Latte, Frappe, Macchiato, Mocha) via the official [catppuccin/go](https://github.com/catppuccin/go) package, which provides 26 named colors per flavor in Hex/RGB/HSL.
-- **Classic terminal themes** via [brittonhayes/glitter](https://github.com/brittonhayes/glitter) (Monokai, Gruvbox, Nord, Dracula) or [willyv3/gogh-themes/lipgloss](https://github.com/willyv3/gogh-themes) (361+ schemes) or [go.withmatt.com/themes](https://go.withmatt.com/themes) (450+ from iTerm2-Color-Schemes).
-- Pick whichever library gives the best coverage-to-dependency ratio; avoid pulling in all 450 if only bundling a curated set.
-
-### Layout & Component Upgrades
-
-- **Replace custom table** with `bubbles/table` — handles column alignment, scrolling, and selection styling out of the box, eliminating manual `padRight` / ANSI-width workarounds.
-- **Borders** — wrap the task list in `lipgloss.RoundedBorder()` for visual structure.
-- **Status bar** — full-width colored strip at the bottom (like vim) instead of floating text.
-- **Dim secondary info** — use `Faint(true)` for cwd, debug log, and other low-priority text instead of slightly-different gray shades.
-- **Consistent spacing** — replace raw `\n\n` padding with lipgloss `Margin()` and `Padding()`.
-- **Consider `huh`** for input flows (task creation, flag editing) — provides styled prompts, selects, and confirms with built-in Catppuccin support.
 
 ## Integration
 
 - **Obsidian Kanban sync** — create tasks from Kanban cards, mark cards done when tasks complete
-- **Multi-instance support** — see below
-
-## Multi-Instance Support & Resilient Hooks
-
-See [docs/multi-krang.md](multi-krang.md) for the full design.
 
 ## Workspace Management (Big Feature)
 
@@ -106,13 +109,8 @@ Surface background child processes per task in the TUI and feed that context int
 - **Short-lived processes** — a process might start and finish between polls. That's fine; the count is a snapshot, not a history. The sparklines feature (if built) would capture the temporal view.
 - **Parked tasks** — still have tmux windows and running processes. Should collect process info for parked tasks too, since sit rep could cover them.
 
-## Bugs
-
-- ~~**PERM attention state sticks after permission is resolved** — fixed by subscribing to `ToolResult` hook event, which fires immediately after a permission is approved and a tool executes. Maps to `AttentionOK` to clear the PERM state.~~ (Fixed)
-
 ## Technical
 
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
 - **Better error surfacing** — some operations fail silently; consider a dedicated error log file
-- ~~**Configurable safehouse command** — done: `krang setup` prompts for sandbox command~~
 - **Configurable models** — allow changing the summary (haiku) and sit rep (sonnet) models
