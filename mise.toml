@@ -7,8 +7,9 @@ description = "Run all tests"
 run = "go test ./..."
 
 [tasks.setup]
-description = "Install Claude Code hooks"
+description = "Install Claude Code hooks and configure krang (dev config)"
 depends = ["build"]
+env = { KRANG_CONFIG = ".krang-dev-config.json" }
 run = "./krang setup"
 
 [tasks.run]

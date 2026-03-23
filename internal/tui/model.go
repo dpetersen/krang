@@ -26,6 +26,7 @@ type Model struct {
 	hookEvents      <-chan hooks.HookEvent
 	summaryPipeline *summary.Pipeline
 	activeSession   string
+	parkedSession   string
 	cfg             config.Config
 	tasks           []db.Task
 	cursor     int
@@ -80,7 +81,7 @@ var flagDefinitions = []flagDefinition{
 	},
 }
 
-func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession string, cfg config.Config) Model {
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config) Model {
 	nameInput := textinput.New()
 	nameInput.Placeholder = "task-name"
 	nameInput.CharLimit = 40
@@ -104,6 +105,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		hookEvents:       hookEvents,
 		summaryPipeline: summaryPipeline,
 		activeSession:   activeSession,
+		parkedSession:   parkedSession,
 		cfg:             cfg,
 		nameInput:      nameInput,
 		promptInput:    promptInput,

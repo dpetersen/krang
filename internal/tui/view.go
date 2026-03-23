@@ -214,7 +214,7 @@ func (m Model) countCompanions(tasks []db.Task) map[string]int {
 		}
 		session := m.activeSession
 		if t.State == db.StateParked {
-			session = tmux.ParkedSession
+			session = m.parkedSession
 		}
 		counts[t.Name] = len(tmux.FindCompanions(session, t.Name))
 	}

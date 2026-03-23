@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 )
 
-const hookURL = "http://127.0.0.1:19283/hooks/event"
+// legacyHookURL is the old hardcoded HTTP hook URL used before
+// multi-krang support. Install() removes hooks matching this URL.
+const legacyHookURL = "http://127.0.0.1:19283/hooks/event"
 
 var hookedEvents = []string{
 	"SessionStart",
@@ -20,10 +22,21 @@ var hookedEvents = []string{
 	"SessionEnd",
 }
 
+const relayScript = `#!/bin/bash
+[ -z "$KRANG_STATEFILE" ] && exit 0
+[ ! -f "$KRANG_STATEFILE" ] && exit 0
+PORT=$(jq -r .port "$KRANG_STATEFILE" 2>/dev/null)
+[ -z "$PORT" ] && exit 0
+cat | curl -s -X POST -H 'Content-Type: application/json' \
+  -d @- "http://127.0.0.1:$PORT/hooks/event" >/dev/null 2>&1
+exit 0
+`
+
 type hookEntry struct {
 	Type    string `json:"type"`
-	URL     string `json:"url"`
-	Timeout int    `json:"timeout"`
+	URL     string `json:"url,omitempty"`
+	Command string `json:"command,omitempty"`
+	Timeout int    `json:"timeout,omitempty"`
 }
 
 type hookMatcher struct {
@@ -31,7 +44,38 @@ type hookMatcher struct {
 	Hooks   []hookEntry `json:"hooks"`
 }
 
+func relayScriptPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("finding home dir: %w", err)
+	}
+	return filepath.Join(home, ".config", "krang", "hooks", "relay.sh"), nil
+}
+
+func installRelayScript() (string, error) {
+	scriptPath, err := relayScriptPath()
+	if err != nil {
+		return "", err
+	}
+
+	dir := filepath.Dir(scriptPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("creating hooks dir: %w", err)
+	}
+
+	if err := os.WriteFile(scriptPath, []byte(relayScript), 0o755); err != nil {
+		return "", fmt.Errorf("writing relay script: %w", err)
+	}
+
+	return scriptPath, nil
+}
+
 func Install() error {
+	scriptPath, err := installRelayScript()
+	if err != nil {
+		return err
+	}
+
 	settingsPath, err := claudeSettingsPath()
 	if err != nil {
 		return err
@@ -47,10 +91,12 @@ func Install() error {
 		hooksMap = make(map[string]any)
 	}
 
+	// Migrate: remove any legacy HTTP hooks before installing command hooks.
+	removeLegacyHTTPHooks(hooksMap)
+
 	krangHook := hookEntry{
-		Type:    "http",
-		URL:     hookURL,
-		Timeout: 5,
+		Type:    "command",
+		Command: scriptPath,
 	}
 
 	for _, event := range hookedEvents {
@@ -72,7 +118,7 @@ func Install() error {
 				if hooks, ok := entryMap["hooks"].([]any); ok {
 					for _, h := range hooks {
 						if hMap, ok := h.(map[string]any); ok {
-							if hMap["url"] == hookURL {
+							if hMap["command"] == scriptPath {
 								alreadyInstalled = true
 								break
 							}
@@ -93,6 +139,11 @@ func Install() error {
 }
 
 func Uninstall() error {
+	scriptPath, err := relayScriptPath()
+	if err != nil {
+		return err
+	}
+
 	settingsPath, err := claudeSettingsPath()
 	if err != nil {
 		return err
@@ -108,6 +159,7 @@ func Uninstall() error {
 		return nil
 	}
 
+	// Remove both command hooks (current) and HTTP hooks (legacy).
 	for _, event := range hookedEvents {
 		entries, ok := hooksMap[event].([]any)
 		if !ok {
@@ -116,22 +168,10 @@ func Uninstall() error {
 
 		var filtered []any
 		for _, entry := range entries {
-			isKrang := false
-			if entryMap, ok := entry.(map[string]any); ok {
-				if hooks, ok := entryMap["hooks"].([]any); ok {
-					for _, h := range hooks {
-						if hMap, ok := h.(map[string]any); ok {
-							if hMap["url"] == hookURL {
-								isKrang = true
-								break
-							}
-						}
-					}
-				}
+			if isKrangHookEntry(entry, scriptPath) {
+				continue
 			}
-			if !isKrang {
-				filtered = append(filtered, entry)
-			}
+			filtered = append(filtered, entry)
 		}
 
 		if len(filtered) == 0 {
@@ -148,6 +188,78 @@ func Uninstall() error {
 	}
 
 	return writeSettings(settingsPath, settings)
+}
+
+// isKrangHookEntry returns true if the entry is a krang hook — either
+// a command hook matching the relay script path, or a legacy HTTP hook.
+func isKrangHookEntry(entry any, scriptPath string) bool {
+	entryMap, ok := entry.(map[string]any)
+	if !ok {
+		return false
+	}
+	hooks, ok := entryMap["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range hooks {
+		hMap, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if hMap["command"] == scriptPath {
+			return true
+		}
+		if hMap["url"] == legacyHookURL {
+			return true
+		}
+	}
+	return false
+}
+
+// removeLegacyHTTPHooks strips any old HTTP-type krang hooks from the
+// hooks map so they don't linger after upgrading to command hooks.
+func removeLegacyHTTPHooks(hooksMap map[string]any) {
+	for _, event := range hookedEvents {
+		entries, ok := hooksMap[event].([]any)
+		if !ok {
+			continue
+		}
+
+		var filtered []any
+		for _, entry := range entries {
+			if isLegacyHTTPHook(entry) {
+				continue
+			}
+			filtered = append(filtered, entry)
+		}
+
+		if len(filtered) == 0 {
+			delete(hooksMap, event)
+		} else {
+			hooksMap[event] = filtered
+		}
+	}
+}
+
+func isLegacyHTTPHook(entry any) bool {
+	entryMap, ok := entry.(map[string]any)
+	if !ok {
+		return false
+	}
+	hooks, ok := entryMap["hooks"].([]any)
+	if !ok {
+		return false
+	}
+	for _, h := range hooks {
+		hMap, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		if hMap["url"] == legacyHookURL {
+			return true
+		}
+	}
+	return false
 }
 
 func claudeSettingsPath() (string, error) {

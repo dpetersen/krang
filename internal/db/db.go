@@ -6,19 +6,16 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/dpetersen/krang/internal/pathutil"
 	_ "modernc.org/sqlite"
 )
 
-func Open() (*sql.DB, error) {
+func Open(cwd string) (*sql.DB, error) {
 	dbPath := os.Getenv("KRANG_DB")
 	if dbPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("finding home dir: %w", err)
-		}
-		dbDir := filepath.Join(home, ".config", "krang")
+		dbDir := pathutil.InstanceDir(cwd)
 		if err := os.MkdirAll(dbDir, 0o755); err != nil {
-			return nil, fmt.Errorf("creating config dir: %w", err)
+			return nil, fmt.Errorf("creating instance dir: %w", err)
 		}
 		dbPath = filepath.Join(dbDir, "krang.db")
 	} else {

@@ -16,7 +16,7 @@ func (m *Manager) Reconcile() error {
 	// Collect live K! windows from both sessions.
 	liveWindowIDs := make(map[string]bool)
 
-	for _, session := range []string{m.activeSession, tmux.ParkedSession} {
+	for _, session := range []string{m.activeSession, m.parkedSession} {
 		windows, _ := tmux.ListWindows(session)
 		for _, w := range windows {
 			if strings.HasPrefix(w.Name, tmux.WindowPrefix) {

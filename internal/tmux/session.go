@@ -6,7 +6,15 @@ import (
 	"strings"
 )
 
-const ParkedSession = "krang-parked"
+// ActiveSessionName returns the active session name for a given instance ID.
+func ActiveSessionName(instanceID string) string {
+	return "krang-" + instanceID
+}
+
+// ParkedSessionName returns the parked session name for a given instance ID.
+func ParkedSessionName(instanceID string) string {
+	return "krang-" + instanceID + "-parked"
+}
 
 func SessionExists(name string) bool {
 	err := exec.Command("tmux", "has-session", "-t", name).Run()
@@ -21,9 +29,9 @@ func CreateSession(name string) error {
 	return nil
 }
 
-func EnsureParkedSession() error {
-	if !SessionExists(ParkedSession) {
-		return CreateSession(ParkedSession)
+func EnsureParkedSession(parkedSession string) error {
+	if !SessionExists(parkedSession) {
+		return CreateSession(parkedSession)
 	}
 	return nil
 }
@@ -40,6 +48,22 @@ func SelectWindow(windowID string) error {
 	cmd := exec.Command("tmux", "select-window", "-t", windowID)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("selecting window %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func RenameSession(oldName, newName string) error {
+	cmd := exec.Command("tmux", "rename-session", "-t", oldName, newName)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("renaming session %s to %s: %s: %w", oldName, newName, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func KillSession(name string) error {
+	cmd := exec.Command("tmux", "kill-session", "-t", name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("killing session %s: %s: %w", name, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

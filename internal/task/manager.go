@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/pathutil"
 	"github.com/dpetersen/krang/internal/tmux"
 	"github.com/google/uuid"
 	"github.com/oklog/ulid/v2"
@@ -22,19 +23,25 @@ type Manager struct {
 	tasks          *db.TaskStore
 	events         *db.EventStore
 	activeSession  string
+	parkedSession  string
 	sandboxCommand string
+	stateFilePath  string
 }
 
-func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession, sandboxCommand string) *Manager {
-	return &Manager{tasks: tasks, events: events, activeSession: activeSession, sandboxCommand: sandboxCommand}
+func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession, parkedSession, sandboxCommand, stateFilePath string) *Manager {
+	return &Manager{tasks: tasks, events: events, activeSession: activeSession, parkedSession: parkedSession, sandboxCommand: sandboxCommand, stateFilePath: stateFilePath}
 }
 
-func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool, sandboxCommand string) string {
+func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool, sandboxCommand, stateFilePath string) string {
 	var cmd string
+	if stateFilePath != "" {
+		cmd = "export KRANG_STATEFILE=" + shellQuote(stateFilePath) + "; "
+	}
+
 	if flags.NoSandbox || sandboxCommand == "" {
-		cmd = "claude"
+		cmd += "claude"
 	} else {
-		cmd = sandboxCommand + " claude"
+		cmd += sandboxCommand + " claude"
 	}
 
 	if resume {
@@ -67,7 +74,7 @@ func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags) (*db.
 		Flags:     flags,
 	}
 
-	claudeCmd := buildClaudeCommand(sessionID, name, flags, false, m.sandboxCommand)
+	claudeCmd := buildClaudeCommand(sessionID, name, flags, false, m.sandboxCommand, m.stateFilePath)
 
 	windowName := tmux.WindowName(name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, cwd, claudeCmd)
@@ -140,15 +147,7 @@ func findSessionCwd(sessionID string) (string, error) {
 // encodePath encodes a path the same way Claude does for project
 // directory names: replace all non-alphanumeric chars with '-'.
 func encodePath(path string) string {
-	var b strings.Builder
-	for _, r := range path {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('-')
-		}
-	}
-	return b.String()
+	return pathutil.EncodePath(path)
 }
 
 // decodeCwdFromDirName reconstructs the original filesystem path from
@@ -234,11 +233,11 @@ func (m *Manager) Park(taskID string) error {
 		return fmt.Errorf("task %s is not active (state: %s)", task.Name, task.State)
 	}
 
-	if err := tmux.MoveWindow(task.TmuxWindow, tmux.ParkedSession); err != nil {
+	if err := tmux.MoveWindow(task.TmuxWindow, m.parkedSession); err != nil {
 		return fmt.Errorf("moving window to parked: %w", err)
 	}
 	for _, cID := range tmux.FindCompanions(m.activeSession, task.Name) {
-		_ = tmux.MoveWindow(cID, tmux.ParkedSession)
+		_ = tmux.MoveWindow(cID, m.parkedSession)
 	}
 
 	return m.tasks.UpdateState(task.ID, db.StateParked)
@@ -261,7 +260,7 @@ func (m *Manager) Unpark(taskID string) error {
 	if err := tmux.MoveWindow(task.TmuxWindow, m.activeSession); err != nil {
 		return fmt.Errorf("moving window to active: %w", err)
 	}
-	for _, cID := range tmux.FindCompanions(tmux.ParkedSession, task.Name) {
+	for _, cID := range tmux.FindCompanions(m.parkedSession, task.Name) {
 		_ = tmux.MoveWindow(cID, m.activeSession)
 	}
 
@@ -287,7 +286,7 @@ func (m *Manager) Dormify(taskID string) error {
 		return fmt.Errorf("dormify state update: %w", err)
 	}
 
-	for _, session := range []string{m.activeSession, tmux.ParkedSession} {
+	for _, session := range []string{m.activeSession, m.parkedSession} {
 		for _, cID := range tmux.FindCompanions(session, task.Name) {
 			_ = tmux.KillWindow(cID)
 		}
@@ -321,7 +320,7 @@ func (m *Manager) Wake(taskID string) error {
 		return fmt.Errorf("task %s has no session ID to resume", task.Name)
 	}
 
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand)
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand, m.stateFilePath)
 
 	windowName := tmux.WindowName(task.Name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
@@ -364,7 +363,7 @@ func (m *Manager) Relaunch(taskID string) error {
 	}
 
 	// Build new command with --resume and current flags.
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand)
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand, m.stateFilePath)
 
 	windowName := tmux.WindowName(task.Name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, task.Cwd, claudeCmd)
