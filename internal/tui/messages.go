@@ -34,16 +34,25 @@ type InputMode int
 
 const (
 	ModeNormal InputMode = iota
-	ModeNewName
-	ModeNewPrompt
 	ModeConfirmKill
 	ModeHelp
 	ModeFilter
-	ModeImportName
-	ModeImportSessionID
 	ModeSitRep
 	ModeSitRepLoading
-	ModeFlagEdit
-	ModeNewFlags
 	ModeConfirmRelaunch
+	ModeForm
 )
+
+type formType int
+
+const (
+	formTypeNewTask formType = iota
+	formTypeImport
+	formTypeFlagEdit
+)
+
+type formCompletedMsg struct {
+	formType formType
+}
+
+type formCancelledMsg struct{}

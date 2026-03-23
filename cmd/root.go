@@ -110,7 +110,17 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	summaryPipeline := summary.NewPipeline(taskStore)
 
-	model := tui.NewModel(manager, taskStore, eventStore, hookEvents, summaryPipeline, krangSession, parkedSession, cfg)
+	themeName := cfg.Theme
+	if themeName == "" {
+		themeName = tui.DefaultThemeName
+	}
+	theme, err := tui.ResolveTheme(themeName)
+	if err != nil {
+		return err
+	}
+	styles := tui.BuildStyles(theme)
+
+	model := tui.NewModel(manager, taskStore, eventStore, hookEvents, summaryPipeline, krangSession, parkedSession, cfg, styles)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := program.Run(); err != nil {

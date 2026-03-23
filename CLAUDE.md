@@ -48,7 +48,15 @@ Multiple krang instances can run simultaneously for different working directorie
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
 - `internal/hooks/` — HTTP server for Claude Code hook events, relay script + settings.json installer
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
-- `internal/tui/` — Bubble Tea model, view, keybindings, messages
+- `internal/tui/` — Bubble Tea model, view, keybindings, messages, theming
+
+## Theming
+
+Styles are derived from a `Theme` struct with semantic color roles (Title, Error, Active, etc.). The `Styles` struct holds precomputed lipgloss styles built via `BuildStyles(theme)`. Available themes: `classic` (original ANSI 256 colors), `catppuccin-mocha` (default), `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`. Set via `"theme"` field in config.json.
+
+## Task Creation
+
+Task creation and import use `charmbracelet/huh` forms (multi-step wizard). The task table uses `bubbles/table`. Task names must match `[a-zA-Z0-9_-]+`.
 
 ## Building and Running
 

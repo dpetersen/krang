@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	SandboxCommand        string `json:"sandbox_command"`
+	Theme                 string `json:"theme,omitempty"`
 	WindowColorsEnabled   *bool  `json:"window_colors_enabled,omitempty"`
 	WindowColorPermission string `json:"window_color_permission,omitempty"`
 	WindowColorWaiting    string `json:"window_color_waiting,omitempty"`

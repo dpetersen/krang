@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/huh"
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
@@ -28,6 +29,7 @@ type Model struct {
 	activeSession   string
 	parkedSession   string
 	cfg             config.Config
+	styles          Styles
 	tasks           []db.Task
 	cursor     int
 	sortByPriority bool
@@ -35,21 +37,21 @@ type Model struct {
 	width      int
 	height     int
 
-	nameInput      textinput.Model
-	promptInput    textinput.Model
-	filterInput    textinput.Model
-	sessionIDInput textinput.Model
-
-	pendingNewName    string
-	pendingImportName string
-	filterText        string
+	filterInput textinput.Model
+	filterText  string
 
 	sitRepViewport viewport.Model
 	sitRepContent  string
 
-	flagEditCursor int
+	helpViewport viewport.Model
+
 	pendingFlags   db.TaskFlags
 	flagEditTaskID string
+
+	activeForm        *huh.Form
+	taskCreationResult *taskCreationResult
+	importFormResult   *importResult
+	flagEditFormResult *flagEditResult
 
 	debugLog []string
 
@@ -81,22 +83,10 @@ var flagDefinitions = []flagDefinition{
 	},
 }
 
-func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config) Model {
-	nameInput := textinput.New()
-	nameInput.Placeholder = "task-name"
-	nameInput.CharLimit = 40
-
-	promptInput := textinput.New()
-	promptInput.Placeholder = "prompt for Claude (optional, Enter to skip)"
-	promptInput.CharLimit = 500
-
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "filter tasks..."
 	filterInput.CharLimit = 40
-
-	sessionIDInput := textinput.New()
-	sessionIDInput.Placeholder = "Claude session ID (UUID)"
-	sessionIDInput.CharLimit = 80
 
 	return Model{
 		manager:         manager,
@@ -107,10 +97,8 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		activeSession:   activeSession,
 		parkedSession:   parkedSession,
 		cfg:             cfg,
-		nameInput:      nameInput,
-		promptInput:    promptInput,
-		filterInput:    filterInput,
-		sessionIDInput: sessionIDInput,
+		styles:          styles,
+		filterInput: filterInput,
 	}
 }
 
@@ -132,8 +120,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TasksRefreshedMsg:
 		m.tasks = msg.Tasks
-		if m.cursor >= len(m.tasks) && len(m.tasks) > 0 {
-			m.cursor = len(m.tasks) - 1
+		if m.cursor >= len(m.filteredTasks()) && len(m.filteredTasks()) > 0 {
+			m.cursor = len(m.filteredTasks()) - 1
 		}
 		if !m.windowStylesSynced {
 			m.windowStylesSynced = true
@@ -228,24 +216,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			time.Now().Format("15:04:05"), msg.Err))
 		return m, nil
 
+	case formCompletedMsg:
+		return m.handleFormCompleted(msg)
+	case formCancelledMsg:
+		m.mode = ModeNormal
+		m.activeForm = nil
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
 
-	if m.mode == ModeNewName || m.mode == ModeImportName {
-		var cmd tea.Cmd
-		m.nameInput, cmd = m.nameInput.Update(msg)
-		return m, cmd
-	}
-	if m.mode == ModeNewPrompt {
-		var cmd tea.Cmd
-		m.promptInput, cmd = m.promptInput.Update(msg)
-		return m, cmd
-	}
-	if m.mode == ModeImportSessionID {
-		var cmd tea.Cmd
-		m.sessionIDInput, cmd = m.sessionIDInput.Update(msg)
-		return m, cmd
+	if m.mode == ModeForm && m.activeForm != nil {
+		return m.handleFormUpdate(msg)
 	}
 
 	return m, nil
@@ -253,28 +236,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
-	case ModeNewName:
-		return m.handleNewNameKey(msg)
-	case ModeNewPrompt:
-		return m.handleNewPromptKey(msg)
 	case ModeConfirmKill:
 		return m.handleConfirmKillKey(msg)
 	case ModeHelp:
-		m.mode = ModeNormal
-		return m, nil
+		return m.handleHelpKey(msg)
 	case ModeSitRepLoading:
-		// No input while loading.
 		return m, nil
 	case ModeSitRep:
 		return m.handleSitRepKey(msg)
 	case ModeFilter:
 		return m.handleFilterKey(msg)
-	case ModeImportName:
-		return m.handleImportNameKey(msg)
-	case ModeImportSessionID:
-		return m.handleImportSessionIDKey(msg)
-	case ModeFlagEdit, ModeNewFlags:
-		return m.handleFlagEditKey(msg)
+	case ModeForm:
+		return m.handleFormUpdate(msg)
 	case ModeConfirmRelaunch:
 		return m.handleConfirmRelaunchKey(msg)
 	default:
@@ -307,10 +280,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
-		m.mode = ModeNewName
-		m.nameInput.Reset()
-		m.nameInput.Focus()
-		return m, m.nameInput.Cursor.BlinkCmd()
+		form, result := newTaskCreationForm(m.taskStore.NameInUse, m.huhTheme())
+		m.activeForm = form
+		m.taskCreationResult = result
+		m.mode = ModeForm
+		return m, m.activeForm.Init()
 
 	case "enter":
 		return m, m.focusSelected()
@@ -348,18 +322,21 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.generateSitRep
 
 	case "i":
-		m.mode = ModeImportName
-		m.nameInput.Reset()
-		m.nameInput.Focus()
-		return m, m.nameInput.Cursor.BlinkCmd()
+		form, result := newImportForm(m.taskStore.NameInUse, m.huhTheme())
+		m.activeForm = form
+		m.importFormResult = result
+		m.mode = ModeForm
+		return m, m.activeForm.Init()
 
 	case "F":
 		t := m.selectedTask()
 		if t != nil && t.State != db.StateCompleted && t.State != db.StateFailed {
 			m.flagEditTaskID = t.ID
-			m.pendingFlags = t.Flags
-			m.flagEditCursor = 0
-			m.mode = ModeFlagEdit
+			form, result := newFlagEditForm(t.Flags, t.Name, m.huhTheme())
+			m.activeForm = form
+			m.flagEditFormResult = result
+			m.mode = ModeForm
+			return m, m.activeForm.Init()
 		}
 		return m, nil
 
@@ -370,6 +347,8 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.compactWindows()
 
 	case "?":
+		m.helpViewport = viewport.New(m.width-2, m.height-4)
+		m.helpViewport.SetContent(buildHelpContent())
 		m.mode = ModeHelp
 		return m, nil
 
@@ -383,56 +362,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) handleNewNameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.mode = ModeNormal
-		return m, nil
-	case "enter":
-		name := strings.TrimSpace(m.nameInput.Value())
-		if name == "" {
-			m.mode = ModeNormal
-			return m, nil
-		}
-		if m.taskStore.NameInUse(name) {
-			m.appendDebugLog(fmt.Sprintf("[%s] ERROR: name %q already in use",
-				time.Now().Format("15:04:05"), name))
-			return m, nil
-		}
-		m.pendingNewName = name
-		m.mode = ModeNewPrompt
-		m.promptInput.Reset()
-		m.promptInput.Focus()
-		return m, m.promptInput.Cursor.BlinkCmd()
-	}
-
-	var cmd tea.Cmd
-	m.nameInput, cmd = m.nameInput.Update(msg)
-	return m, cmd
-}
-
-func (m Model) handleNewPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.mode = ModeNormal
-		return m, nil
-	case "enter":
-		prompt := strings.TrimSpace(m.promptInput.Value())
-		name := m.pendingNewName
-		m.mode = ModeNormal
-		m.pendingNewName = ""
-		return m, m.createTask(name, prompt, db.TaskFlags{})
-	case "ctrl+f":
-		m.pendingFlags = db.TaskFlags{}
-		m.flagEditCursor = 0
-		m.mode = ModeNewFlags
-		return m, nil
-	}
-
-	var cmd tea.Cmd
-	m.promptInput, cmd = m.promptInput.Update(msg)
-	return m, cmd
-}
 
 func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -453,53 +382,15 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m Model) handleImportNameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+
+func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "esc":
+	case "q", "esc", "?":
 		m.mode = ModeNormal
 		return m, nil
-	case "enter":
-		name := strings.TrimSpace(m.nameInput.Value())
-		if name == "" {
-			m.mode = ModeNormal
-			return m, nil
-		}
-		if m.taskStore.NameInUse(name) {
-			m.appendDebugLog(fmt.Sprintf("[%s] ERROR: name %q already in use",
-				time.Now().Format("15:04:05"), name))
-			return m, nil
-		}
-		m.pendingImportName = name
-		m.mode = ModeImportSessionID
-		m.sessionIDInput.Reset()
-		m.sessionIDInput.Focus()
-		return m, m.sessionIDInput.Cursor.BlinkCmd()
 	}
-
 	var cmd tea.Cmd
-	m.nameInput, cmd = m.nameInput.Update(msg)
-	return m, cmd
-}
-
-func (m Model) handleImportSessionIDKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.mode = ModeNormal
-		return m, nil
-	case "enter":
-		sessionID := strings.TrimSpace(m.sessionIDInput.Value())
-		if sessionID == "" {
-			m.mode = ModeNormal
-			return m, nil
-		}
-		name := m.pendingImportName
-		m.mode = ModeNormal
-		m.pendingImportName = ""
-		return m, m.importTask(name, sessionID)
-	}
-
-	var cmd tea.Cmd
-	m.sessionIDInput, cmd = m.sessionIDInput.Update(msg)
+	m.helpViewport, cmd = m.helpViewport.Update(msg)
 	return m, cmd
 }
 
@@ -532,86 +423,6 @@ func (m Model) generateSitRep() tea.Msg {
 	return SitRepResultMsg{Content: content}
 }
 
-func (m Model) handleFlagEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
-		m.mode = ModeNormal
-		return m, nil
-	case "j", "down":
-		if m.flagEditCursor < len(flagDefinitions)-1 {
-			m.flagEditCursor++
-		}
-		return m, nil
-	case "k", "up":
-		if m.flagEditCursor > 0 {
-			m.flagEditCursor--
-		}
-		return m, nil
-	case " ":
-		fd := flagDefinitions[m.flagEditCursor]
-		fd.Set(&m.pendingFlags, !fd.Get(m.pendingFlags))
-		return m, nil
-	case "enter":
-		if m.mode == ModeNewFlags {
-			prompt := strings.TrimSpace(m.promptInput.Value())
-			name := m.pendingNewName
-			flags := m.pendingFlags
-			m.mode = ModeNormal
-			m.pendingNewName = ""
-			return m, m.createTask(name, prompt, flags)
-		}
-		// ModeFlagEdit on an existing task.
-		taskID := m.flagEditTaskID
-		newFlags := m.pendingFlags
-
-		var originalTask *db.Task
-		for i := range m.tasks {
-			if m.tasks[i].ID == taskID {
-				originalTask = &m.tasks[i]
-				break
-			}
-		}
-		if originalTask == nil {
-			m.mode = ModeNormal
-			return m, nil
-		}
-
-		// For dormant tasks, just save flags directly.
-		if originalTask.State == db.StateDormant {
-			m.mode = ModeNormal
-			return m, func() tea.Msg {
-				if err := m.taskStore.UpdateFlags(taskID, newFlags); err != nil {
-					return ErrorMsg{Err: err}
-				}
-				return m.refreshTasks()
-			}
-		}
-
-		// Check if any relaunch-requiring flag changed.
-		relaunchNeeded := false
-		for _, fd := range flagDefinitions {
-			if fd.RequiresRelaunch && fd.Get(newFlags) != fd.Get(originalTask.Flags) {
-				relaunchNeeded = true
-				break
-			}
-		}
-
-		if !relaunchNeeded {
-			m.mode = ModeNormal
-			return m, func() tea.Msg {
-				if err := m.taskStore.UpdateFlags(taskID, newFlags); err != nil {
-					return ErrorMsg{Err: err}
-				}
-				return m.refreshTasks()
-			}
-		}
-
-		// Need confirmation for relaunch.
-		m.mode = ModeConfirmRelaunch
-		return m, nil
-	}
-	return m, nil
-}
 
 func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -632,6 +443,99 @@ func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeNormal
 		return m, nil
 	}
+}
+
+func (m Model) handleFormUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.activeForm == nil {
+		m.mode = ModeNormal
+		return m, nil
+	}
+	model, cmd := m.activeForm.Update(msg)
+	if f, ok := model.(*huh.Form); ok {
+		m.activeForm = f
+	}
+	return m, cmd
+}
+
+func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
+	m.mode = ModeNormal
+	m.activeForm = nil
+
+	switch msg.formType {
+	case formTypeNewTask:
+		if m.taskCreationResult == nil {
+			return m, nil
+		}
+		result := m.taskCreationResult
+		m.taskCreationResult = nil
+		return m, m.createTask(result.Name, "", result.Flags)
+
+	case formTypeImport:
+		if m.importFormResult == nil {
+			return m, nil
+		}
+		result := m.importFormResult
+		m.importFormResult = nil
+		return m, m.importTask(result.Name, result.SessionID)
+
+	case formTypeFlagEdit:
+		if m.flagEditFormResult == nil {
+			return m, nil
+		}
+		result := m.flagEditFormResult
+		taskID := m.flagEditTaskID
+		m.flagEditFormResult = nil
+
+		var originalTask *db.Task
+		for i := range m.tasks {
+			if m.tasks[i].ID == taskID {
+				originalTask = &m.tasks[i]
+				break
+			}
+		}
+		if originalTask == nil {
+			return m, nil
+		}
+
+		// For dormant tasks, just save flags directly.
+		if originalTask.State == db.StateDormant {
+			return m, func() tea.Msg {
+				if err := m.taskStore.UpdateFlags(taskID, result.Flags); err != nil {
+					return ErrorMsg{Err: err}
+				}
+				return m.refreshTasks()
+			}
+		}
+
+		// Check if any relaunch-requiring flag changed.
+		relaunchNeeded := false
+		for _, fd := range flagDefinitions {
+			if fd.RequiresRelaunch && fd.Get(result.Flags) != fd.Get(originalTask.Flags) {
+				relaunchNeeded = true
+				break
+			}
+		}
+
+		if !relaunchNeeded {
+			return m, func() tea.Msg {
+				if err := m.taskStore.UpdateFlags(taskID, result.Flags); err != nil {
+					return ErrorMsg{Err: err}
+				}
+				return m.refreshTasks()
+			}
+		}
+
+		// Need confirmation for relaunch.
+		m.pendingFlags = result.Flags
+		m.mode = ModeConfirmRelaunch
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) huhTheme() *huh.Theme {
+	return huh.ThemeCatppuccin()
 }
 
 func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
