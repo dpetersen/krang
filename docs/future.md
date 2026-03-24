@@ -109,6 +109,38 @@ Surface background child processes per task in the TUI and feed that context int
 - **Short-lived processes** — a process might start and finish between polls. That's fine; the count is a snapshot, not a history. The sparklines feature (if built) would capture the temporal view.
 - **Parked tasks** — still have tmux windows and running processes. Should collect process info for parked tasks too, since sit rep could cover them.
 
+## Sandbox Configuration
+
+Currently krang supports a single `sandbox_command` string in config. This should evolve to support multiple sandboxing technologies — particularly Docker-based sandboxing alongside the existing command-line approach.
+
+### Motivation
+
+Some users (and teams) use Docker sandboxing for Claude Code, which requires pointing at a Dockerfile and potentially passing different flags than a CLI sandbox wrapper. Supporting both technologies lets users pick what fits their environment, and opens the door to per-task sandbox selection.
+
+### Design Sketch
+
+- **Replace `sandbox_command` with a richer config object** — something like:
+  ```json
+  {
+    "sandboxes": {
+      "bwrap": {
+        "type": "command",
+        "command": "bwrap --ro-bind / / ..."
+      },
+      "docker": {
+        "type": "docker",
+        "dockerfile": "~/.config/krang/sandbox/Dockerfile",
+        "build_args": {},
+        "run_args": ["--network=host"]
+      }
+    },
+    "default_sandbox": "bwrap"
+  }
+  ```
+- **Named sandboxes** — each sandbox config gets a name. One is marked as the default. The task creation form could offer a sandbox picker when multiple are configured.
+- **Docker-specific concerns** — Dockerfile path, build caching, volume mounts for the working directory and krang state paths, env var passthrough (`KRANG_STATEFILE`, `KRANG_DEBUG`), and ensuring the relay script is accessible inside the container.
+- **Backward compatibility** — if the old `sandbox_command` string is present, treat it as a single `"command"` type sandbox named `"default"`.
+
 ## Technical
 
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
