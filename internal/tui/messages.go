@@ -41,6 +41,7 @@ const (
 	ModeSitRepLoading
 	ModeConfirmRelaunch
 	ModeForm
+	ModeWorkspaceProgress
 )
 
 type formType int
@@ -49,6 +50,7 @@ const (
 	formTypeNewTask formType = iota
 	formTypeImport
 	formTypeFlagEdit
+	formTypeWorkspaceTask
 )
 
 type formCompletedMsg struct {
@@ -56,3 +58,9 @@ type formCompletedMsg struct {
 }
 
 type formCancelledMsg struct{}
+
+type workspaceProgressMsg struct {
+	Lines []string
+	Done  bool
+	Err   error
+}

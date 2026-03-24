@@ -161,6 +161,90 @@ func newImportForm(nameInUse func(string) bool, huhTheme *huh.Theme) (*huh.Form,
 	return form, result
 }
 
+type workspaceTaskResult struct {
+	Name          string
+	Flags         db.TaskFlags
+	SelectedRepos []string
+}
+
+func newWorkspaceTaskForm(nameInUse func(string) bool, availableRepos []string, singleRepo bool, huhTheme *huh.Theme) (*huh.Form, *workspaceTaskResult) {
+	result := &workspaceTaskResult{}
+	var flagChoices []string
+	var selectedRepo string
+
+	repoOptions := make([]huh.Option[string], len(availableRepos))
+	for i, r := range availableRepos {
+		repoOptions[i] = huh.NewOption(r, r)
+	}
+
+	groups := []*huh.Group{
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Task name").
+				Placeholder("my-task").
+				CharLimit(40).
+				Validate(validateTaskName(nameInUse)).
+				Value(&result.Name),
+		),
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Flags (optional)").
+				Options(
+					huh.NewOption("No Sandbox — launch claude directly", "no_sandbox"),
+					huh.NewOption("Skip Permissions — --dangerously-skip-permissions", "skip_perms"),
+					huh.NewOption("Debug — export KRANG_DEBUG=1 for relay logging", "debug"),
+				).
+				Value(&flagChoices),
+		),
+	}
+
+	if singleRepo {
+		groups = append(groups, huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Select repo").
+				Options(repoOptions...).
+				Value(&selectedRepo),
+		))
+	} else {
+		groups = append(groups, huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Select repos").
+				Options(repoOptions...).
+				Validate(func(selected []string) error {
+					if len(selected) == 0 {
+						return fmt.Errorf("select at least one repo")
+					}
+					return nil
+				}).
+				Value(&result.SelectedRepos),
+		))
+	}
+
+	form := huh.NewForm(groups...).WithTheme(huhTheme)
+
+	form.SubmitCmd = func() tea.Msg {
+		for _, choice := range flagChoices {
+			switch choice {
+			case "no_sandbox":
+				result.Flags.NoSandbox = true
+			case "skip_perms":
+				result.Flags.DangerouslySkipPermissions = true
+			case "debug":
+				result.Flags.Debug = true
+			}
+		}
+		if singleRepo {
+			result.SelectedRepos = []string{selectedRepo}
+		}
+		return formCompletedMsg{formType: formTypeWorkspaceTask}
+	}
+	form.CancelCmd = func() tea.Msg {
+		return formCancelledMsg{}
+	}
+
+	return form, result
+}
+
 type flagEditResult struct {
 	Flags db.TaskFlags
 }

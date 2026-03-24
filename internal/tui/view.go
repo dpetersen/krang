@@ -47,6 +47,9 @@ func (m Model) View() string {
 			top.WriteString("\n")
 			top.WriteString(m.activeForm.View())
 		}
+	case ModeWorkspaceProgress:
+		top.WriteString("\n")
+		top.WriteString(m.renderWorkspaceProgress())
 	case ModeConfirmRelaunch:
 		top.WriteString("\n")
 		top.WriteString(m.styles.ErrorText.Render("Flags changed. Claude will be relaunched (session resumes). Proceed? [y/N]"))
@@ -426,6 +429,34 @@ Glossary
     urgency: PERM > ERR > wait > ok > done.`
 }
 
+
+func (m Model) renderWorkspaceProgress() string {
+	var content strings.Builder
+	for i, line := range m.workspaceProgressLines {
+		if i == 0 {
+			content.WriteString(m.styles.ModalTitle.Render(line))
+		} else {
+			content.WriteString(m.styles.ModalContent.Render(line))
+		}
+		content.WriteString("\n")
+	}
+
+	modalWidth := m.width / 2
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(content.String())
+}
 
 const maxVisibleLogLines = 10
 

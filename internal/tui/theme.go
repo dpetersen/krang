@@ -40,11 +40,14 @@ type Styles struct {
 	StateParked  lipgloss.Style
 	StateDormant lipgloss.Style
 
-	StatusBar  lipgloss.Style
-	InputLabel lipgloss.Style
-	ErrorText  lipgloss.Style
-	DebugLog   lipgloss.Style
-	FlagSkull  lipgloss.Style
+	StatusBar    lipgloss.Style
+	InputLabel   lipgloss.Style
+	ErrorText    lipgloss.Style
+	DebugLog     lipgloss.Style
+	FlagSkull    lipgloss.Style
+	ModalBorder  lipgloss.Color
+	ModalTitle   lipgloss.Style
+	ModalContent lipgloss.Style
 }
 
 func BuildStyles(theme Theme) Styles {
@@ -81,6 +84,12 @@ func BuildStyles(theme Theme) Styles {
 			Foreground(theme.Muted),
 		FlagSkull: lipgloss.NewStyle().
 			Foreground(theme.Danger),
+		ModalBorder: theme.Border,
+		ModalTitle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(theme.Title),
+		ModalContent: lipgloss.NewStyle().
+			Foreground(theme.Subtitle),
 	}
 }
 

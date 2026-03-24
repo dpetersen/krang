@@ -67,3 +67,7 @@ ALTER TABLE tasks ADD COLUMN transcript_path TEXT NOT NULL DEFAULT '';
 const schemaV4 = `
 ALTER TABLE tasks ADD COLUMN flags TEXT NOT NULL DEFAULT '{}';
 `
+
+const schemaV5 = `
+ALTER TABLE tasks ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+`

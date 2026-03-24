@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/dpetersen/krang/internal/summary"
 	"github.com/dpetersen/krang/internal/task"
 	"github.com/dpetersen/krang/internal/tmux"
+	"github.com/dpetersen/krang/internal/workspace"
 )
 
 type Model struct {
@@ -48,10 +50,15 @@ type Model struct {
 	pendingFlags   db.TaskFlags
 	flagEditTaskID string
 
-	activeForm        *huh.Form
-	taskCreationResult *taskCreationResult
-	importFormResult   *importResult
-	flagEditFormResult *flagEditResult
+	repoSets *workspace.RepoSets
+
+	activeForm              *huh.Form
+	taskCreationResult      *taskCreationResult
+	workspaceTaskResult     *workspaceTaskResult
+	importFormResult        *importResult
+	flagEditFormResult      *flagEditResult
+
+	workspaceProgressLines []string
 
 	debugLog []string
 
@@ -95,6 +102,10 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	filterInput.Placeholder = "filter tasks..."
 	filterInput.CharLimit = 40
 
+	// Try to load workspace config; nil means no workspace mode.
+	cwd, _ := os.Getwd()
+	rs, _ := workspace.Load(cwd)
+
 	return Model{
 		manager:         manager,
 		taskStore:        taskStore,
@@ -105,7 +116,8 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		parkedSession:   parkedSession,
 		cfg:             cfg,
 		styles:          styles,
-		filterInput: filterInput,
+		repoSets:        rs,
+		filterInput:     filterInput,
 	}
 }
 
@@ -230,6 +242,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeForm = nil
 		return m, nil
 
+	case workspaceProgressMsg:
+		m.workspaceProgressLines = msg.Lines
+		if msg.Done {
+			m.mode = ModeNormal
+			m.workspaceProgressLines = nil
+			if msg.Err != nil {
+				m.appendDebugLog(fmt.Sprintf("[%s] workspace error: %v",
+					time.Now().Format("15:04:05"), msg.Err))
+			}
+			return m, m.refreshTasks
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -247,7 +272,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmKillKey(msg)
 	case ModeHelp:
 		return m.handleHelpKey(msg)
-	case ModeSitRepLoading:
+	case ModeSitRepLoading, ModeWorkspaceProgress:
 		return m, nil
 	case ModeSitRep:
 		return m.handleSitRepKey(msg)
@@ -287,6 +312,17 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
+		if m.repoSets != nil && m.repoSets.WorkspaceStrategy != "" {
+			repos, _ := m.repoSets.ListRepos()
+			if len(repos) > 0 {
+				singleRepo := m.repoSets.WorkspaceStrategy == workspace.StrategySingleRepo
+				form, result := newWorkspaceTaskForm(m.taskStore.NameInUse, repos, singleRepo, m.huhTheme())
+				m.activeForm = form
+				m.workspaceTaskResult = result
+				m.mode = ModeForm
+				return m, m.activeForm.Init()
+			}
+		}
 		baseDir, err := os.Getwd()
 		if err != nil {
 			return m, func() tea.Msg { return ErrorMsg{Err: err} }
@@ -319,6 +355,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "c":
+		t := m.selectedTask()
+		if t != nil && t.WorkspaceDir != "" {
+			m.mode = ModeWorkspaceProgress
+			m.workspaceProgressLines = []string{fmt.Sprintf("Completing %q...", t.Name)}
+		}
 		return m, m.completeSelected()
 
 	case "s":
@@ -481,6 +522,17 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 		m.taskCreationResult = nil
 		return m, m.createTask(result.Name, "", result.Cwd, result.Flags)
 
+	case formTypeWorkspaceTask:
+		if m.workspaceTaskResult == nil {
+			return m, nil
+		}
+		result := m.workspaceTaskResult
+		rs := m.repoSets
+		m.workspaceTaskResult = nil
+		m.mode = ModeWorkspaceProgress
+		m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
+		return m, m.createWorkspaceTask(result.Name, result.Flags, result.SelectedRepos, rs)
+
 	case formTypeImport:
 		if m.importFormResult == nil {
 			return m, nil
@@ -552,7 +604,13 @@ func (m Model) huhTheme() *huh.Theme {
 func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
-		m.mode = ModeNormal
+		t := m.selectedTask()
+		if t != nil && t.WorkspaceDir != "" {
+			m.mode = ModeWorkspaceProgress
+			m.workspaceProgressLines = []string{fmt.Sprintf("Killing %q...", t.Name)}
+		} else {
+			m.mode = ModeNormal
+		}
 		return m, m.killSelected()
 	default:
 		m.mode = ModeNormal
@@ -721,6 +779,54 @@ func (m Model) createTask(name, prompt, cwd string, flags db.TaskFlags) tea.Cmd 
 	}
 }
 
+func (m Model) createWorkspaceTask(name string, flags db.TaskFlags, repos []string, rs *workspace.RepoSets) tea.Cmd {
+	return func() tea.Msg {
+		lines := []string{fmt.Sprintf("Creating workspace %q...", name)}
+
+		for _, repo := range repos {
+			vcs := rs.DetectVCS(repo)
+			lines = append(lines, fmt.Sprintf("  Cloning %s (%s)...", repo, vcs))
+		}
+
+		result, err := workspace.Create(rs, name, repos)
+		if err != nil {
+			return workspaceProgressMsg{
+				Lines: append(lines, fmt.Sprintf("  Error: %v", err)),
+				Done:  true,
+				Err:   err,
+			}
+		}
+
+		for repo, vcs := range result.Created {
+			lines = append(lines, fmt.Sprintf("  Done: %s (%s)", repo, vcs))
+		}
+		for _, e := range result.Errors {
+			lines = append(lines, fmt.Sprintf("  Failed: %s", e))
+		}
+
+		lines = append(lines, "Launching Claude...")
+
+		t, err := m.manager.CreateTask(name, "", result.WorkspaceDir, flags)
+		if err != nil {
+			return workspaceProgressMsg{
+				Lines: append(lines, fmt.Sprintf("  Error: %v", err)),
+				Done:  true,
+				Err:   err,
+			}
+		}
+
+		if err := m.taskStore.UpdateWorkspaceDir(t.ID, result.WorkspaceDir); err != nil {
+			return workspaceProgressMsg{
+				Lines: append(lines, fmt.Sprintf("  Error: %v", err)),
+				Done:  true,
+				Err:   err,
+			}
+		}
+
+		return workspaceProgressMsg{Lines: lines, Done: true}
+	}
+}
+
 func (m Model) importTask(name, sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.manager.ImportTask(name, sessionID); err != nil {
@@ -800,9 +906,15 @@ func (m Model) killSelected() tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	taskID := t.ID
+	workspaceDir := t.WorkspaceDir
+	rs := m.repoSets
 	return func() tea.Msg {
-		if err := m.manager.Kill(t.ID); err != nil {
+		if err := m.manager.Kill(taskID); err != nil {
 			return ErrorMsg{Err: err}
+		}
+		if workspaceDir != "" {
+			return destroyWorkspace(rs, workspaceDir)
 		}
 		return m.refreshTasks()
 	}
@@ -906,10 +1018,29 @@ func (m Model) completeSelected() tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	taskID := t.ID
+	workspaceDir := t.WorkspaceDir
+	rs := m.repoSets
 	return func() tea.Msg {
-		if err := m.manager.Complete(t.ID); err != nil {
+		if err := m.manager.Complete(taskID); err != nil {
 			return ErrorMsg{Err: err}
+		}
+		if workspaceDir != "" {
+			return destroyWorkspace(rs, workspaceDir)
 		}
 		return m.refreshTasks()
 	}
+}
+
+func destroyWorkspace(rs *workspace.RepoSets, workspaceDir string) tea.Msg {
+	lines := []string{fmt.Sprintf("Destroying workspace %s...", filepath.Base(workspaceDir))}
+
+	err := workspace.Destroy(rs, workspaceDir)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("  Warning: %v", err))
+	} else {
+		lines = append(lines, "  Done.")
+	}
+
+	return workspaceProgressMsg{Lines: lines, Done: true, Err: err}
 }
