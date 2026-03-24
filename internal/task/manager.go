@@ -118,6 +118,7 @@ func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags) (*db.
 	if err != nil {
 		return nil, fmt.Errorf("creating tmux window: %w", err)
 	}
+	_ = tmux.SetWindowOption(windowID, "krang-task", name)
 	task.TmuxWindow = windowID
 
 	if err := m.tasks.Create(task); err != nil {
@@ -373,6 +374,7 @@ func (m *Manager) Wake(taskID string) error {
 	if err != nil {
 		return fmt.Errorf("creating tmux window for wake: %w", err)
 	}
+	_ = tmux.SetWindowOption(windowID, "krang-task", task.Name)
 
 	if err := m.tasks.UpdateTmuxWindow(task.ID, windowID); err != nil {
 		return err
@@ -422,6 +424,7 @@ func (m *Manager) Relaunch(taskID string) error {
 	if err != nil {
 		return fmt.Errorf("creating tmux window for relaunch: %w", err)
 	}
+	_ = tmux.SetWindowOption(windowID, "krang-task", task.Name)
 
 	if err := m.tasks.UpdateTmuxWindow(task.ID, windowID); err != nil {
 		return err

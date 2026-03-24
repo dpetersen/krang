@@ -1,8 +1,6 @@
 package task
 
 import (
-	"strings"
-
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/tmux"
 )
@@ -13,15 +11,13 @@ func (m *Manager) Reconcile() error {
 		return err
 	}
 
-	// Collect live K! windows from both sessions.
+	// Collect live window IDs from both sessions.
 	liveWindowIDs := make(map[string]bool)
 
 	for _, session := range []string{m.activeSession, m.parkedSession} {
 		windows, _ := tmux.ListWindows(session)
 		for _, w := range windows {
-			if strings.HasPrefix(w.Name, tmux.WindowPrefix) {
-				liveWindowIDs[w.ID] = true
-			}
+			liveWindowIDs[w.ID] = true
 		}
 	}
 

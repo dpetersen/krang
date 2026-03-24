@@ -7,18 +7,15 @@ import (
 	"strings"
 )
 
-const (
-	WindowPrefix    = "K!"
-	CompanionPrefix = "KF!"
-)
-
 type WindowInfo struct {
-	ID   string // stable @N identifier
-	Name string
+	ID             string // stable @N identifier
+	Name           string
+	KrangTask      string // value of @krang-task option, empty if not set
+	KrangCompanion string // value of @krang-companion option, empty if not set
 }
 
 func WindowName(taskName string) string {
-	return WindowPrefix + taskName
+	return taskName
 }
 
 func CreateWindow(session, name, cwd, shellCommand string) (string, error) {
@@ -58,7 +55,7 @@ func ListWindows(session string) ([]WindowInfo, error) {
 	cmd := exec.Command(
 		"tmux", "list-windows",
 		"-t", session,
-		"-F", "#{window_id}\t#{window_name}",
+		"-F", "#{window_id}\t#{window_name}\t#{@krang-task}\t#{@krang-companion}",
 	)
 	out, err := cmd.Output()
 	if err != nil {
@@ -71,29 +68,36 @@ func ListWindows(session string) ([]WindowInfo, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 2 {
 			continue
 		}
-		windows = append(windows, WindowInfo{ID: parts[0], Name: parts[1]})
+		w := WindowInfo{ID: parts[0], Name: parts[1]}
+		if len(parts) > 2 {
+			w.KrangTask = parts[2]
+		}
+		if len(parts) > 3 {
+			w.KrangCompanion = parts[3]
+		}
+		windows = append(windows, w)
 	}
 	return windows, nil
 }
 
 func CompanionWindowName(taskName string) string {
-	return CompanionPrefix + taskName
+	return taskName + "+"
 }
 
-// FindCompanions returns window IDs for any KF!<taskName> windows in the given session.
+// FindCompanions returns window IDs for companion windows associated with
+// the given task, identified by the @krang-companion tmux user option.
 func FindCompanions(session, taskName string) []string {
 	windows, err := ListWindows(session)
 	if err != nil {
 		return nil
 	}
-	target := CompanionPrefix + taskName
 	var companions []string
 	for _, w := range windows {
-		if w.Name == target {
+		if w.KrangCompanion == taskName {
 			companions = append(companions, w.ID)
 		}
 	}
@@ -122,6 +126,14 @@ func CompactWindows(session string) error {
 	cmd := exec.Command("tmux", "move-window", "-r", "-t", session+":")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compacting windows in %s: %s: %w", session, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func SetWindowOption(windowID, option, value string) error {
+	cmd := exec.Command("tmux", "set-option", "-w", "-t", windowID, "@"+option, value)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("setting @%s on %s: %s: %w", option, windowID, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

@@ -1079,6 +1079,8 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 }
 
 func applyWindowStyle(windowID string, attention db.AttentionState, cfg config.Config) {
+	_ = tmux.SetWindowOption(windowID, "krang-attn", string(attention))
+
 	color := cfg.WindowColor(string(attention))
 	if color != "" {
 		_ = tmux.SetWindowStyle(windowID, color)
@@ -1110,9 +1112,11 @@ func (m Model) createCompanion() tea.Cmd {
 	cwd := t.Cwd
 	return func() tea.Msg {
 		companionName := tmux.CompanionWindowName(taskName)
-		if _, err := tmux.CreateWindowAfter(windowID, companionName, cwd); err != nil {
+		companionID, err := tmux.CreateWindowAfter(windowID, companionName, cwd)
+		if err != nil {
 			return ErrorMsg{Err: err}
 		}
+		_ = tmux.SetWindowOption(companionID, "krang-companion", taskName)
 		return m.refreshTasks()
 	}
 }

@@ -15,7 +15,7 @@ TUI task orchestrator for managing multiple Claude Code sessions via tmux.
 Multiple krang instances can run simultaneously for different working directories. Each instance gets:
 - Its own dynamic port (bound to `:0`) with state file at `~/.local/state/krang/instances/<encoded-cwd>/krang-state.json`
 - Its own SQLite database at `~/.local/share/krang/instances/<encoded-cwd>/krang.db`
-- Its own tmux sessions: `krang-<instanceID>` (active) and `krang-<instanceID>-parked`
+- Its own tmux sessions: `k-<instanceID>` (active) and `k-<instanceID>-parked`
 - Instance ID format: `<basename>-<4 hex SHA-256 of full path>` (e.g., `krang-496d`)
 
 ## File Locations
@@ -36,9 +36,10 @@ Multiple krang instances can run simultaneously for different working directorie
 
 ## Window Naming
 
-- `K!<name>` — krang-managed Claude Code task windows
-- `KF!<name>` — companion windows associated with a task (travel with the task on park/unpark, killed on freeze)
-- Windows without these prefixes are never touched by krang
+- `<name>` — task windows, identified by `@krang-task` tmux user option
+- `<name>+` — companion windows, identified by `@krang-companion` tmux user option
+- `@krang-attn` option set on task windows with attention state (ok/waiting/permission/error/done) for custom tmux theme integration
+- The krang TUI window is named `🧠`
 
 ## Key Packages
 

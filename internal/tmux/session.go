@@ -8,12 +8,12 @@ import (
 
 // ActiveSessionName returns the active session name for a given instance ID.
 func ActiveSessionName(instanceID string) string {
-	return "krang-" + instanceID
+	return "k-" + instanceID
 }
 
 // ParkedSessionName returns the parked session name for a given instance ID.
 func ParkedSessionName(instanceID string) string {
-	return "krang-" + instanceID + "-parked"
+	return "k-" + instanceID + "-parked"
 }
 
 func SessionExists(name string) bool {

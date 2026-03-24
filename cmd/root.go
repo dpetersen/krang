@@ -67,7 +67,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 
 	if krangWindowID, err := tmux.CurrentWindowID(); err == nil {
-		_ = tmux.RenameWindow(krangWindowID, "krang")
+		_ = tmux.RenameWindow(krangWindowID, "🧠")
 	}
 
 	if err := tmux.EnsureParkedSession(parkedSession); err != nil {

@@ -3,7 +3,7 @@
 ## Context
 
 Krang currently hardcodes a single HTTP hook endpoint (`127.0.0.1:19283`),
-a single parked session name (`krang-parked`), and defaults to a single
+a single parked session name, and defaults to a single
 shared DB (`~/.config/krang/krang.db`). This means only one krang instance
 can run at a time. Multi-krang support is a prerequisite for the workspace
 feature, where different metarepos (e.g. `~/code/launchdarkly`,
@@ -88,7 +88,7 @@ don't collide.
 **`internal/tmux/session.go`:**
 - Replace `const ParkedSession = "krang-parked"` with a function
   `ParkedSessionName(instanceID string) string` returning
-  `"krang-" + instanceID + "-parked"`
+  `"k-" + instanceID + "-parked"`
 - Instance ID = `<basename>-<short-hash>` where basename is the
   directory name and short hash is the first 4 hex chars of the
   SHA-256 of the full absolute path (e.g. `launchdarkly-a3f2`)
@@ -114,11 +114,11 @@ Use Claude-style path encoding for deterministic per-directory DBs.
   `internal/db` itself)
 - Keep `KRANG_DB` override working for dev (`mise.toml` sets it)
 
-### 6. Window Prefixes — No Change
+### 6. Window Identification — No Change
 
-`K!` and `KF!` prefixes stay global. Reconciliation only looks at
-windows in its own sessions, so there's no collision risk even if
-another krang uses the same prefixes in different sessions.
+Window identification uses `@krang-task` and `@krang-companion` tmux
+user options. Reconciliation only looks at windows in its own sessions,
+so there's no collision risk between instances.
 
 ## File Changes Summary
 

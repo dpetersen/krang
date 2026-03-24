@@ -10,47 +10,9 @@
 
 - **Task history view** — see completed/failed tasks with their final summaries, with the ability to revive them
 
-## tmux Window Naming
+## ~~tmux Window Naming~~ (done)
 
-The `K!` and `KF!` prefixes are functional but ugly in the tmux status bar, especially when many tasks are open. The krang TUI window and session name (`krang-<instanceID>`) are also verbose. Goals:
-
-- **Clean task window names** — just the task name, no prefix
-- **Subtle krang TUI window** — an icon (🧠) instead of the full name
-- **Companion windows** — distinguish without a prefix if possible
-
-### Feasibility: dropping prefixes
-
-Krang already stores window IDs (`@N`) in the DB for every task. The `K!` prefix is only needed in two places:
-
-1. **Reconciliation** (`task/reconcile.go`) — enumerates windows by prefix to find krang-managed ones. Could instead check if a window ID appears in the tasks table, eliminating the need for name-based identification entirely.
-2. **Companion finding** (`tmux/window.go:FindCompanions`) — finds `KF!<name>` windows by name. Could instead use a tmux user option (`@krang-companion=<taskName>`) set at creation time, then query with `tmux list-windows -F '#{window_id} #{@krang-companion}'`. This is cleaner and survives manual window renames.
-
-Both are solvable. The main risk is that renaming a window manually (which tmux allows) could cause confusion if we rely purely on DB state, but reconciliation already handles missing windows gracefully.
-
-### Approach
-
-- Set `@krang-task=<taskName>` as a tmux window option on task windows at creation time. Use this for identification instead of name prefix.
-- Set `@krang-companion=<taskName>` on companion windows.
-- Name task windows as just `<taskName>`, companions as `<taskName>+` or similar minimal suffix.
-- Rename the krang TUI window to `🧠` (or a configurable icon).
-- The session name `krang-<instanceID>` could shorten to `k-<instanceID>` or just `🧠<instanceID>`.
-
-### Attention as window options
-
-Currently krang sets `window-status-style` directly on task windows to color them by attention state. This works but stomps on custom tmux themes. With the `@krang-*` options system, krang could also set `@krang-attn` (values: `ok`, `waiting`, `permission`, `error`, `done`) on every task window. This is cheap and non-destructive.
-
-Users with custom tmux themes could then style based on the option:
-
-```
-# .tmux.conf — user controls the styling
-set -g window-status-format '#{?#{==:#{@krang-attn},permission},#[fg=red],}#W'
-```
-
-Krang would always set `@krang-attn` (data layer), and optionally also apply direct `window-status-style` changes (presentation layer, current behavior). The existing `"window_colors_enabled": false` config option already disables the direct styling — users who set that can use `@krang-attn` in their own tmux format strings instead.
-
-### Migration
-
-Existing windows with `K!` prefixes would need a one-time rename on startup. Detect `K!` prefix, strip it, set the `@krang-task` option, rename.
+Implemented. Task windows are just `<name>`, companions are `<name>+`, identified via `@krang-task` and `@krang-companion` tmux user options. `@krang-attn` set on task windows for custom theme integration. Sessions shortened to `k-<instanceID>`, TUI window is `🧠`.
 
 ## UI Polish
 

@@ -33,7 +33,7 @@ Multiple krang instances can run simultaneously for different working directorie
 Per-instance resources:
 - **Dynamic port** — hook server binds to `:0`; port written to a state file
 - **SQLite database** — persistent task/event storage
-- **tmux sessions** — `krang-<instanceID>` (active) and `krang-<instanceID>-parked`
+- **tmux sessions** — `k-<instanceID>` (active) and `k-<instanceID>-parked`
 
 ### File Locations
 
@@ -49,29 +49,29 @@ Krang follows XDG conventions for file placement:
 ### Instance Collision Detection
 
 On startup, krang checks for an existing instance:
-1. If a tmux session named `krang-<instanceID>` already exists, error with attach instructions
+1. If a tmux session named `k-<instanceID>` already exists, error with attach instructions
 2. If a state file exists with a responding `/health` endpoint, error with port info
 3. If a state file exists but the port doesn't respond, treat as stale and overwrite
 
 ## tmux Topology
 
-Krang renames its tmux session to `krang-<instanceID>` on startup for visibility in `tmux ls`.
+Krang renames its tmux session to `k-<instanceID>` on startup for visibility in `tmux ls`.
 
 ```
-krang-myproject-a3f2 (attached, active session)
-  ├── window 0: "krang" (TUI dashboard)
-  ├── window 1: "K!auth-refactor" (@14)     ← managed by krang
-  ├── window 2: "K!fix-test" (@15)          ← managed by krang
+k-myproject-a3f2 (attached, active session)
+  ├── window 0: "🧠" (TUI dashboard)
+  ├── window 1: "auth-refactor" (@14)       ← task window (@krang-task=auth-refactor)
+  ├── window 2: "fix-test" (@15)            ← task window (@krang-task=fix-test)
   ├── window 3: (user's own terminal)       ← NOT touched by krang
-  └── window 4: "KF!auth-refactor" (@20)    ← companion window
+  └── window 4: "auth-refactor+" (@20)      ← companion (@krang-companion=auth-refactor)
 
-krang-myproject-a3f2-parked (detached, holding area)
-  └── window 1: "K!update-deps" (@17)       ← parked task
+k-myproject-a3f2-parked (detached, holding area)
+  └── window 1: "update-deps" (@17)         ← parked task
 ```
 
-**Window ownership:** Krang only manages windows with the `K!` prefix. It never touches, renames, moves, or closes windows without that prefix. Users can freely open ad-hoc terminals.
+**Window ownership:** Krang identifies its windows via `@krang-task` and `@krang-companion` tmux user options set at creation time. It never touches windows without these options. Users can freely open ad-hoc terminals.
 
-**Companion windows:** Windows named `KF!<task-name>` are associated with a task. They travel with the task on park/unpark and are killed on freeze. The user creates these manually by naming a tmux window with the convention.
+**Companion windows:** Windows with the `@krang-companion` option are associated with a task. They travel with the task on park/unpark and are killed on freeze. Created via the `+` keybinding in the TUI.
 
 **Window identification:** Krang uses tmux's stable window IDs (`@N`) which survive moves between sessions. It never relies on window indexes, which change.
 

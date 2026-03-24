@@ -425,15 +425,14 @@ Attention States
 Glossary
 
   Companion window
-    A shell window (KF!<name>) associated with a task. Created
+    A shell window (<name>+) associated with a task. Created
     with +, it travels with the task on park/unpark and is
     killed on freeze. Useful for running tests, watching logs,
     or other activities alongside Claude.
 
   Window naming
-    K!<name>   Task window (managed by krang)
-    KF!<name>  Companion window (follows the task)
-    Windows without these prefixes are never touched.
+    <name>   Task window (identified by @krang-task option)
+    <name>+  Companion window (identified by @krang-companion)
 
   Sort modes
     Created (default) shows all tasks in creation order.

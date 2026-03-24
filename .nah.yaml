@@ -1,5 +1,6 @@
 classify:
   package_run:
   - tmux
+  - mise run
 actions:
   db_write: allow
