@@ -174,6 +174,52 @@ func TestCreateAllFail(t *testing.T) {
 	}
 }
 
+func TestAddReposToWorkspace(t *testing.T) {
+	dir := t.TempDir()
+
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	mkdirs(t, reposDir)
+
+	initGitRepo(t, filepath.Join(reposDir, "alpha"))
+	initGitRepo(t, filepath.Join(reposDir, "beta"))
+	initGitRepo(t, filepath.Join(reposDir, "gamma"))
+
+	rs := &RepoSets{
+		MetarepoDir:       dir,
+		WorkspaceStrategy: StrategyMultiRepo,
+		ReposDir:          reposDir,
+		WorkspacesDir:     workspacesDir,
+		Repos:             map[string]RepoConfig{},
+		Sets:              map[string][]string{},
+	}
+
+	// Create with 2 repos.
+	createResult, err := Create(rs, "add-test", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	present := PresentRepos(createResult.WorkspaceDir)
+	if len(present) != 2 {
+		t.Fatalf("expected 2 present repos, got %v", present)
+	}
+
+	// Add a third repo.
+	addResult, err := AddRepos(rs, createResult.WorkspaceDir, "add-test", []string{"gamma"})
+	if err != nil {
+		t.Fatalf("AddRepos: %v", err)
+	}
+	if len(addResult.Created) != 1 {
+		t.Errorf("expected 1 added, got %d", len(addResult.Created))
+	}
+
+	present = PresentRepos(createResult.WorkspaceDir)
+	if len(present) != 3 {
+		t.Fatalf("expected 3 present repos after add, got %v", present)
+	}
+}
+
 func TestDestroyGitWorkspace(t *testing.T) {
 	dir := t.TempDir()
 

@@ -58,6 +58,8 @@ type Model struct {
 	importFormResult        *importResult
 	flagEditFormResult      *flagEditResult
 	activeRepoPicker        *repoPicker
+	addReposTaskID          string
+	addReposWorkspaceDir    string
 
 	workspaceProgressLines []string
 
@@ -395,6 +397,37 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "W":
+		t := m.selectedTask()
+		if t == nil || t.WorkspaceDir == "" || m.repoSets == nil {
+			return m, nil
+		}
+		if m.repoSets.WorkspaceStrategy != workspace.StrategyMultiRepo {
+			return m, nil
+		}
+		allRepos, _ := m.repoSets.ListRepos()
+		present := workspace.PresentRepos(t.WorkspaceDir)
+		presentSet := make(map[string]bool)
+		for _, r := range present {
+			presentSet[r] = true
+		}
+		var available []string
+		for _, r := range allRepos {
+			if !presentSet[r] {
+				available = append(available, r)
+			}
+		}
+		if len(available) == 0 {
+			return m, nil
+		}
+		title := fmt.Sprintf("Add repos to %q:", t.Name)
+		picker := newRepoPicker(title, m.repoSets.Sets, available, m.styles)
+		m.activeRepoPicker = &picker
+		m.addReposTaskID = t.ID
+		m.addReposWorkspaceDir = t.WorkspaceDir
+		m.mode = ModeRepoSelect
+		return m, nil
+
 	case "+":
 		return m, m.createCompanion()
 
@@ -513,6 +546,21 @@ func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(selected) == 0 {
 			return m, nil
 		}
+
+		// Add-repos flow.
+		if m.addReposTaskID != "" {
+			rs := m.repoSets
+			workspaceDir := m.addReposWorkspaceDir
+			taskName := filepath.Base(workspaceDir)
+			m.activeRepoPicker = nil
+			m.addReposTaskID = ""
+			m.addReposWorkspaceDir = ""
+			m.mode = ModeWorkspaceProgress
+			m.workspaceProgressLines = []string{fmt.Sprintf("Adding repos to %q...", taskName)}
+			return m, m.addReposToWorkspace(workspaceDir, taskName, selected, rs)
+		}
+
+		// New workspace task flow.
 		result := m.workspaceTaskResult
 		rs := m.repoSets
 		m.workspaceTaskResult = nil
@@ -523,6 +571,8 @@ func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.workspaceTaskResult = nil
 		m.activeRepoPicker = nil
+		m.addReposTaskID = ""
+		m.addReposWorkspaceDir = ""
 		m.mode = ModeNormal
 	}
 	return m, nil
@@ -864,6 +914,27 @@ func (m Model) createWorkspaceTask(name string, flags db.TaskFlags, repos []stri
 				Done:  true,
 				Err:   err,
 			}
+		}
+
+		return workspaceProgressMsg{Lines: lines, Done: true}
+	}
+}
+
+func (m Model) addReposToWorkspace(workspaceDir, taskName string, repos []string, rs *workspace.RepoSets) tea.Cmd {
+	return func() tea.Msg {
+		lines := []string{fmt.Sprintf("Adding repos to %q...", taskName)}
+
+		result, err := workspace.AddRepos(rs, workspaceDir, taskName, repos)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("  Error: %v", err))
+			return workspaceProgressMsg{Lines: lines, Done: true, Err: err}
+		}
+
+		for repo, vcs := range result.Created {
+			lines = append(lines, fmt.Sprintf("  Added: %s (%s)", repo, vcs))
+		}
+		for _, e := range result.Errors {
+			lines = append(lines, fmt.Sprintf("  Failed: %s", e))
 		}
 
 		return workspaceProgressMsg{Lines: lines, Done: true}

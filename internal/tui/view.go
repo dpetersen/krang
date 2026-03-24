@@ -294,8 +294,14 @@ func (m Model) renderStatusBar() string {
 		switch t.State {
 		case db.StateActive:
 			hints = append(hints, "[enter]focus", "[+]companion", "[p]ark", "[f]reeze")
+			if t.WorkspaceDir != "" {
+				hints = append(hints, "[W]add-repos")
+			}
 		case db.StateParked:
 			hints = append(hints, "[u]npark", "[f]reeze")
+			if t.WorkspaceDir != "" {
+				hints = append(hints, "[W]add-repos")
+			}
 		case db.StateDormant:
 			hints = append(hints, "[t]haw")
 		}
@@ -383,6 +389,7 @@ func buildHelpContent() string {
   x         Kill task (with confirmation)
   c         Mark task completed
   +         Create companion window for task
+  W         Add repos to workspace task
   F         Edit task flags (sandbox, permissions)
   s         Toggle sort (created / priority)
   S         Sit rep (briefing on all active tasks)

@@ -95,6 +95,53 @@ func createMultiRepo(rs *RepoSets, taskName, workspaceDir string, repos []string
 	return result, nil
 }
 
+// AddRepos adds new repos to an existing multi_repo workspace.
+func AddRepos(rs *RepoSets, workspaceDir, taskName string, repos []string) (*CreateResult, error) {
+	result := &CreateResult{
+		WorkspaceDir: workspaceDir,
+		Created:      make(map[string]string),
+	}
+
+	for _, repo := range repos {
+		vcs := rs.DetectVCS(repo)
+		repoSrc := filepath.Join(rs.ReposDir, repo)
+		repoDst := filepath.Join(workspaceDir, repo)
+
+		var err error
+		switch vcs {
+		case "jj":
+			err = createJJWorkspace(repoSrc, repoDst, taskName)
+		default:
+			err = createGitClone(repoSrc, repoDst)
+		}
+
+		if err != nil {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("%s (%s): %v", repo, vcs, err))
+			continue
+		}
+		result.Created[repo] = vcs
+	}
+
+	return result, nil
+}
+
+// PresentRepos returns the names of repo subdirectories already
+// present in a multi_repo workspace.
+func PresentRepos(workspaceDir string) []string {
+	entries, err := os.ReadDir(workspaceDir)
+	if err != nil {
+		return nil
+	}
+	var repos []string
+	for _, e := range entries {
+		if e.IsDir() {
+			repos = append(repos, e.Name())
+		}
+	}
+	return repos
+}
+
 // Destroy removes a workspace directory. For jj repos, it forgets
 // the workspace first. The RepoSets parameter is needed to find the
 // source repos for jj workspace forget; pass nil to skip jj cleanup.
