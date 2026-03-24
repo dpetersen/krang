@@ -287,7 +287,11 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
-		form, result := newTaskCreationForm(m.taskStore.NameInUse, m.huhTheme())
+		baseDir, err := os.Getwd()
+		if err != nil {
+			return m, func() tea.Msg { return ErrorMsg{Err: err} }
+		}
+		form, result := newTaskCreationForm(m.taskStore.NameInUse, baseDir, m.huhTheme())
 		m.activeForm = form
 		m.taskCreationResult = result
 		m.mode = ModeForm
@@ -475,7 +479,7 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 		}
 		result := m.taskCreationResult
 		m.taskCreationResult = nil
-		return m, m.createTask(result.Name, "", result.Flags)
+		return m, m.createTask(result.Name, "", result.Cwd, result.Flags)
 
 	case formTypeImport:
 		if m.importFormResult == nil {
@@ -708,12 +712,8 @@ func (m Model) doSummarize() tea.Msg {
 	return SummariesUpdatedMsg{DebugLines: debugLines}
 }
 
-func (m Model) createTask(name, prompt string, flags db.TaskFlags) tea.Cmd {
+func (m Model) createTask(name, prompt, cwd string, flags db.TaskFlags) tea.Cmd {
 	return func() tea.Msg {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return ErrorMsg{Err: fmt.Errorf("getting cwd: %w", err)}
-		}
 		if _, err := m.manager.CreateTask(name, prompt, cwd, flags); err != nil {
 			return ErrorMsg{Err: err}
 		}

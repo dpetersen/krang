@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,14 +30,39 @@ func validateTaskName(nameInUse func(string) bool) func(string) error {
 
 type taskCreationResult struct {
 	Name  string
+	Cwd   string
 	Flags db.TaskFlags
 }
 
-func newTaskCreationForm(nameInUse func(string) bool, huhTheme *huh.Theme) (*huh.Form, *taskCreationResult) {
-	result := &taskCreationResult{}
+func cwdOptions(baseDir string) []huh.Option[string] {
+	opts := []huh.Option[string]{
+		huh.NewOption(".  (current directory)", "."),
+	}
+
+	entries, err := os.ReadDir(baseDir)
+	if err != nil {
+		return opts
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == "." || name == ".." {
+			continue
+		}
+		opts = append(opts, huh.NewOption(name, name))
+	}
+	return opts
+}
+
+func newTaskCreationForm(nameInUse func(string) bool, baseDir string, huhTheme *huh.Theme) (*huh.Form, *taskCreationResult) {
+	result := &taskCreationResult{Cwd: "."}
 	var flagChoices []string
 
-	form := huh.NewForm(
+	dirOptions := cwdOptions(baseDir)
+
+	groups := []*huh.Group{
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Task name").
@@ -54,7 +81,19 @@ func newTaskCreationForm(nameInUse func(string) bool, huhTheme *huh.Theme) (*huh
 				).
 				Value(&flagChoices),
 		),
-	).WithTheme(huhTheme)
+	}
+
+	// Only show the CWD picker if there are subdirectories to pick from.
+	if len(dirOptions) > 1 {
+		groups = append(groups, huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Working directory").
+				Options(dirOptions...).
+				Value(&result.Cwd),
+		))
+	}
+
+	form := huh.NewForm(groups...).WithTheme(huhTheme)
 
 	form.SubmitCmd = func() tea.Msg {
 		for _, choice := range flagChoices {
@@ -66,6 +105,12 @@ func newTaskCreationForm(nameInUse func(string) bool, huhTheme *huh.Theme) (*huh
 			case "debug":
 				result.Flags.Debug = true
 			}
+		}
+		// Resolve the selected cwd to an absolute path.
+		if result.Cwd == "." {
+			result.Cwd = baseDir
+		} else {
+			result.Cwd = filepath.Join(baseDir, result.Cwd)
 		}
 		return formCompletedMsg{formType: formTypeNewTask}
 	}
