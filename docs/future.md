@@ -37,6 +37,11 @@ Currently `complete` and `kill` are separate operations with only a semantic dif
 - **Scrollable help with glossary** — replace the static help overlay with a scrollable viewport. Add a glossary section explaining concepts (companion windows, park/freeze, krang-parked session, attention states, etc.) so new users can understand the TUI without external docs. Use Bubble Tea's viewport for j/k scrolling with a scroll indicator.
 - **Activity sparklines** — display a small time-series graph next to each task showing recent activity, color-coded by phase (thinking, tool calls, writing code, waiting for user, permission blocked). Requires storing timestamped activity events in the DB with a rolling retention window, and rendering sparkline-style characters (▁▂▃▄▅▆▇█) in the task list. Could use hook events already being captured to classify activity phases.
 - **Fuzzy filter in repo picker** — Ctrl-F (or `/`) to enter a fuzzy search mode that narrows the repo picker list as you type. Useful when the repos directory has dozens of repos and scrolling through j/k is painful. Could reuse the existing `textinput` component from the task filter and apply fuzzy matching to both set names and repo names.
+- **Tmux window number in # column** — Replace the current sequential row index with the actual tmux window number. This lets users mentally map table rows to `Ctrl-B <n>` for quick switching. Parked and frozen tasks would show a blank since they have no active window. Requires reading the window index from tmux (already available in the window name/target).
+
+## Hotkey Hint Placement
+
+The slim footer solved the "wall of keybindings" problem but introduced hidden hotkeys (sort, import, sitrep, compact, refresh). The principle should be: **no hidden hotkeys** — if it works, it's visible somewhere. The solution likely involves rethinking *where* hints are placed, not just which ones are shown. Ideas: header region, context-sensitive hint areas, or a second hint row. Figure this out after the core workflow is solid.
 
 ## Discoverability & Feedback
 
@@ -63,6 +68,8 @@ The app should make it obvious what's happening and what's about to happen. Seve
 ## Workspace Enhancements
 
 Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented. Remaining ideas:
+
+- **Blank slate workspace** — The task creation wizard should support creating a task in a brand new empty directory that krang provisions. Useful for experiments and greenfield projects where you don't need an existing repo. Krang would create a temp directory (e.g. `~/.local/share/krang/workspaces/<task-name>/`), set it as the task's cwd, and clean it up on complete like any other workspace. The wizard could offer this as a "New directory" option alongside the existing repo/cwd pickers.
 
 - **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI. All mutations go through the HTTP server for serialization. See `docs/workspaces.md` for the original design sketch.
 
