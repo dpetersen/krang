@@ -262,12 +262,17 @@ func (m Model) renderTable() string {
 			cursor = ">"
 		}
 
+		attn := m.attentionWithProcs(t)
+		if op, ok := m.pendingOps[t.ID]; ok {
+			attn = m.spinner.View() + " " + op
+		}
+
 		rows[i] = []string{
 			cursor,
 			fmt.Sprintf("%d", i+1),
 			name,
 			stateLabel(t.State),
-			m.attentionWithProcs(t),
+			attn,
 			relativeCwd(t.Cwd),
 			t.Summary,
 		}

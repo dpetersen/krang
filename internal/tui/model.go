@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/huh"
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
@@ -68,6 +70,9 @@ type Model struct {
 
 	taskProcesses map[string]*proctree.TaskProcesses
 
+	pendingOps map[string]string // taskID → operation label (e.g. "freezing...")
+	spinner    spinner.Model
+
 	windowStylesSynced bool
 }
 
@@ -112,6 +117,9 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	cwd, _ := os.Getwd()
 	rs, _ := workspace.Load(cwd)
 
+	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	s.Style = lipgloss.NewStyle().Foreground(styles.theme.Warning)
+
 	return Model{
 		manager:         manager,
 		taskStore:        taskStore,
@@ -124,6 +132,8 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		styles:          styles,
 		repoSets:        rs,
 		filterInput:     filterInput,
+		pendingOps:      make(map[string]string),
+		spinner:         s,
 	}
 }
 
@@ -275,6 +285,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					time.Now().Format("15:04:05"), msg.Err))
 			}
 			return m, m.refreshTasks
+		}
+		return m, nil
+
+	case pendingOpDoneMsg:
+		delete(m.pendingOps, msg.TaskID)
+		return m, m.refreshTasks
+
+	case spinner.TickMsg:
+		if len(m.pendingOps) > 0 {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 
@@ -664,6 +686,10 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t != nil && t.WorkspaceDir != "" {
 			m.mode = ModeWorkspaceProgress
 			m.workspaceProgressLines = []string{fmt.Sprintf("Completing %q...", t.Name)}
+		} else if t != nil {
+			m.mode = ModeNormal
+			tick := m.startPendingOp(t.ID, "completing...")
+			return m, tea.Batch(m.completeSelected(), tick)
 		} else {
 			m.mode = ModeNormal
 		}
@@ -672,6 +698,14 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeNormal
 		return m, nil
 	}
+}
+
+// startPendingOp sets a pending operation label on a task and starts the
+// spinner animation. Returns the spinner tick command that must be batched
+// with the action command.
+func (m *Model) startPendingOp(taskID, label string) tea.Cmd {
+	m.pendingOps[taskID] = label
+	return m.spinner.Tick
 }
 
 func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -694,10 +728,12 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch t.State {
 		case db.StateActive:
 			m.mode = ModeNormal
-			return m, m.parkSelected()
+			tick := m.startPendingOp(t.ID, "parking...")
+			return m, tea.Batch(m.parkSelected(), tick)
 		case db.StateParked:
 			m.mode = ModeNormal
-			return m, m.unparkSelected()
+			tick := m.startPendingOp(t.ID, "unparking...")
+			return m, tea.Batch(m.unparkSelected(), tick)
 		}
 		return m, nil
 
@@ -705,10 +741,12 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch t.State {
 		case db.StateActive, db.StateParked:
 			m.mode = ModeNormal
-			return m, m.dormifySelected()
+			tick := m.startPendingOp(t.ID, "freezing...")
+			return m, tea.Batch(m.dormifySelected(), tick)
 		case db.StateDormant:
 			m.mode = ModeNormal
-			return m, m.wakeSelected()
+			tick := m.startPendingOp(t.ID, "unfreezing...")
+			return m, tea.Batch(m.wakeSelected(), tick)
 		}
 		return m, nil
 
@@ -1053,11 +1091,12 @@ func (m Model) parkSelected() tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	taskID := t.ID
 	return func() tea.Msg {
-		if err := m.manager.Park(t.ID); err != nil {
+		if err := m.manager.Park(taskID); err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return m.refreshTasks()
+		return pendingOpDoneMsg{TaskID: taskID}
 	}
 }
 
@@ -1066,11 +1105,12 @@ func (m Model) unparkSelected() tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	taskID := t.ID
 	return func() tea.Msg {
-		if err := m.manager.Unpark(t.ID); err != nil {
+		if err := m.manager.Unpark(taskID); err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return m.refreshTasks()
+		return pendingOpDoneMsg{TaskID: taskID}
 	}
 }
 
@@ -1079,11 +1119,12 @@ func (m Model) dormifySelected() tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	taskID := t.ID
 	return func() tea.Msg {
-		if err := m.manager.Dormify(t.ID); err != nil {
+		if err := m.manager.Dormify(taskID); err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return m.refreshTasks()
+		return pendingOpDoneMsg{TaskID: taskID}
 	}
 }
 
@@ -1092,11 +1133,12 @@ func (m Model) wakeSelected() tea.Cmd {
 	if t == nil {
 		return nil
 	}
+	taskID := t.ID
 	return func() tea.Msg {
-		if err := m.manager.Wake(t.ID); err != nil {
+		if err := m.manager.Wake(taskID); err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return m.refreshTasks()
+		return pendingOpDoneMsg{TaskID: taskID}
 	}
 }
 
@@ -1212,7 +1254,7 @@ func (m Model) completeSelected() tea.Cmd {
 		if workspaceDir != "" {
 			return destroyWorkspace(rs, workspaceDir)
 		}
-		return m.refreshTasks()
+		return pendingOpDoneMsg{TaskID: taskID}
 	}
 }
 

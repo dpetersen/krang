@@ -73,3 +73,7 @@ type workspaceProgressMsg struct {
 	Done  bool
 	Err   error
 }
+
+type pendingOpDoneMsg struct {
+	TaskID string
+}
