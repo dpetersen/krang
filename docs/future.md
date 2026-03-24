@@ -14,6 +14,21 @@
 
 Implemented. Task windows are just `<name>`, companions are `<name>+`, identified via `@krang-task` and `@krang-companion` tmux user options. `@krang-attn` set on task windows for custom theme integration. Sessions shortened to `k-<instanceID>`, TUI window is `🧠`.
 
+## Hotkey Rework
+
+The current hotkey system shows all keybindings at once in the footer. As the number of actions grows this doesn't scale well, and many keys are only relevant when a specific task is selected.
+
+### Design
+
+- **Global hotkeys only in the footer** — only show always-applicable keys like `n` (new), `I` (import), `?` (help), `q` (quit).
+- **Enter** keeps current behavior: focus the selected task's tmux pane.
+- **Task action modal** — a new key (e.g. `Space` or `Tab`) on a selected task opens a modal/overlay showing:
+  - All context-sensitive actions for that task (park/unpark, freeze/wake, relaunch, kill, complete, companion, add repos, etc.), each with its keybinding
+  - Task stats: attention state, cwd, session ID, creation time, companion count, last hook event, summary if available
+- Actions are invoked from within the modal via their existing keybindings. The modal closes after the action completes (or on `Esc`).
+
+This reduces cognitive load on the main screen and gives a natural place to surface per-task information that currently has no home.
+
 ## UI Polish
 
 - **Scrollable help with glossary** — replace the static help overlay with a scrollable viewport. Add a glossary section explaining concepts (companion windows, park/freeze, krang-parked session, attention states, etc.) so new users can understand the TUI without external docs. Use Bubble Tea's viewport for j/k scrolling with a scroll indicator.
