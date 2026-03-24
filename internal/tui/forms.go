@@ -172,11 +172,6 @@ func newWorkspaceTaskForm(nameInUse func(string) bool, availableRepos []string, 
 	var flagChoices []string
 	var selectedRepo string
 
-	repoOptions := make([]huh.Option[string], len(availableRepos))
-	for i, r := range availableRepos {
-		repoOptions[i] = huh.NewOption(r, r)
-	}
-
 	groups := []*huh.Group{
 		huh.NewGroup(
 			huh.NewInput().
@@ -198,25 +193,18 @@ func newWorkspaceTaskForm(nameInUse func(string) bool, availableRepos []string, 
 		),
 	}
 
+	// single_repo includes the repo picker inline; multi_repo uses
+	// the custom repo picker component after the form completes.
 	if singleRepo {
+		repoOptions := make([]huh.Option[string], len(availableRepos))
+		for i, r := range availableRepos {
+			repoOptions[i] = huh.NewOption(r, r)
+		}
 		groups = append(groups, huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Select repo").
 				Options(repoOptions...).
 				Value(&selectedRepo),
-		))
-	} else {
-		groups = append(groups, huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Select repos").
-				Options(repoOptions...).
-				Validate(func(selected []string) error {
-					if len(selected) == 0 {
-						return fmt.Errorf("select at least one repo")
-					}
-					return nil
-				}).
-				Value(&result.SelectedRepos),
 		))
 	}
 

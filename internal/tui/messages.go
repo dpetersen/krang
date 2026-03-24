@@ -41,6 +41,7 @@ const (
 	ModeSitRepLoading
 	ModeConfirmRelaunch
 	ModeForm
+	ModeRepoSelect
 	ModeWorkspaceProgress
 )
 

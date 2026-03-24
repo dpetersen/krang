@@ -47,6 +47,11 @@ func (m Model) View() string {
 			top.WriteString("\n")
 			top.WriteString(m.activeForm.View())
 		}
+	case ModeRepoSelect:
+		if m.activeRepoPicker != nil {
+			top.WriteString("\n")
+			top.WriteString(m.activeRepoPicker.view())
+		}
 	case ModeWorkspaceProgress:
 		top.WriteString("\n")
 		top.WriteString(m.renderWorkspaceProgress())

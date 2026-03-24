@@ -57,6 +57,7 @@ type Model struct {
 	workspaceTaskResult     *workspaceTaskResult
 	importFormResult        *importResult
 	flagEditFormResult      *flagEditResult
+	activeRepoPicker        *repoPicker
 
 	workspaceProgressLines []string
 
@@ -280,6 +281,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFilterKey(msg)
 	case ModeForm:
 		return m.handleFormUpdate(msg)
+	case ModeRepoSelect:
+		return m.handleRepoSelectKey(msg)
 	case ModeConfirmRelaunch:
 		return m.handleConfirmRelaunchKey(msg)
 	default:
@@ -497,6 +500,34 @@ func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		m.activeRepoPicker.moveDown()
+	case "k", "up":
+		m.activeRepoPicker.moveUp()
+	case " ":
+		m.activeRepoPicker.toggle()
+	case "enter":
+		selected := m.activeRepoPicker.selectedRepos()
+		if len(selected) == 0 {
+			return m, nil
+		}
+		result := m.workspaceTaskResult
+		rs := m.repoSets
+		m.workspaceTaskResult = nil
+		m.activeRepoPicker = nil
+		m.mode = ModeWorkspaceProgress
+		m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
+		return m, m.createWorkspaceTask(result.Name, result.Flags, selected, rs)
+	case "esc":
+		m.workspaceTaskResult = nil
+		m.activeRepoPicker = nil
+		m.mode = ModeNormal
+	}
+	return m, nil
+}
+
 func (m Model) handleFormUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.activeForm == nil {
 		m.mode = ModeNormal
@@ -528,10 +559,22 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 		}
 		result := m.workspaceTaskResult
 		rs := m.repoSets
-		m.workspaceTaskResult = nil
-		m.mode = ModeWorkspaceProgress
-		m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
-		return m, m.createWorkspaceTask(result.Name, result.Flags, result.SelectedRepos, rs)
+
+		// single_repo: repos already selected in the form.
+		if rs.WorkspaceStrategy == workspace.StrategySingleRepo {
+			m.workspaceTaskResult = nil
+			m.mode = ModeWorkspaceProgress
+			m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
+			return m, m.createWorkspaceTask(result.Name, result.Flags, result.SelectedRepos, rs)
+		}
+
+		// multi_repo: show the repo picker.
+		repos, _ := rs.ListRepos()
+		title := fmt.Sprintf("Select repos for %q:", result.Name)
+		picker := newRepoPicker(title, rs.Sets, repos, m.styles)
+		m.activeRepoPicker = &picker
+		m.mode = ModeRepoSelect
+		return m, nil
 
 	case formTypeImport:
 		if m.importFormResult == nil {
