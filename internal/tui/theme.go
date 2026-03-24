@@ -26,6 +26,8 @@ type Theme struct {
 }
 
 type Styles struct {
+	theme Theme
+
 	Title       lipgloss.Style
 	Header      lipgloss.Style
 	SelectedRow lipgloss.Style
@@ -52,6 +54,7 @@ type Styles struct {
 
 func BuildStyles(theme Theme) Styles {
 	return Styles{
+		theme: theme,
 		Title: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(theme.Title),

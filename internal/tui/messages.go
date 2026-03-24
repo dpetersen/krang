@@ -41,7 +41,8 @@ type InputMode int
 
 const (
 	ModeNormal InputMode = iota
-	ModeConfirmKill
+	ModeConfirmComplete
+	ModeDetail
 	ModeHelp
 	ModeFilter
 	ModeSitRep

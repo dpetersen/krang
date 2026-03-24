@@ -433,31 +433,6 @@ func (m *Manager) Relaunch(taskID string) error {
 	return m.tasks.UpdateState(task.ID, db.StateActive)
 }
 
-func (m *Manager) Kill(taskID string) error {
-	tasks, err := m.tasks.ListAll()
-	if err != nil {
-		return err
-	}
-
-	task := findTask(tasks, taskID)
-	if task == nil {
-		return fmt.Errorf("task not found: %s", taskID)
-	}
-
-	if err := m.tasks.UpdateState(task.ID, db.StateFailed); err != nil {
-		return err
-	}
-	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
-		return err
-	}
-
-	if task.TmuxWindow != "" {
-		m.gracefulCloseWindow(task)
-	}
-
-	return nil
-}
-
 func (m *Manager) Complete(taskID string) error {
 	tasks, err := m.tasks.ListAll()
 	if err != nil {

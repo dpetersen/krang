@@ -291,8 +291,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
-	case ModeConfirmKill:
-		return m.handleConfirmKillKey(msg)
+	case ModeConfirmComplete:
+		return m.handleConfirmCompleteKey(msg)
+	case ModeDetail:
+		return m.handleDetailKey(msg)
 	case ModeHelp:
 		return m.handleHelpKey(msg)
 	case ModeSitRepLoading, ModeWorkspaceProgress:
@@ -361,31 +363,17 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m, m.focusSelected()
 
-	case "p":
-		return m, m.parkSelected()
-
-	case "u":
-		return m, m.unparkSelected()
-
-	case "f":
-		return m, m.dormifySelected()
-
-	case "t":
-		return m, m.wakeSelected()
-
-	case "x":
+	case "tab":
 		if m.selectedTask() != nil {
-			m.mode = ModeConfirmKill
+			m.mode = ModeDetail
 		}
 		return m, nil
 
-	case "c":
-		t := m.selectedTask()
-		if t != nil && t.WorkspaceDir != "" {
-			m.mode = ModeWorkspaceProgress
-			m.workspaceProgressLines = []string{fmt.Sprintf("Completing %q...", t.Name)}
+	case "d":
+		if m.selectedTask() != nil {
+			m.mode = ModeConfirmComplete
 		}
-		return m, m.completeSelected()
+		return m, nil
 
 	case "s":
 		m.sortByPriority = !m.sortByPriority
@@ -404,52 +392,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.importFormResult = result
 		m.mode = ModeForm
 		return m, m.activeForm.Init()
-
-	case "F":
-		t := m.selectedTask()
-		if t != nil && t.State != db.StateCompleted && t.State != db.StateFailed {
-			m.flagEditTaskID = t.ID
-			form, result := newFlagEditForm(t.Flags, t.Name, m.huhTheme())
-			m.activeForm = form
-			m.flagEditFormResult = result
-			m.mode = ModeForm
-			return m, m.activeForm.Init()
-		}
-		return m, nil
-
-	case "W":
-		t := m.selectedTask()
-		if t == nil || t.WorkspaceDir == "" || m.repoSets == nil {
-			return m, nil
-		}
-		if m.repoSets.WorkspaceStrategy != workspace.StrategyMultiRepo {
-			return m, nil
-		}
-		allRepos, _ := m.repoSets.ListRepos()
-		present := workspace.PresentRepos(t.WorkspaceDir)
-		presentSet := make(map[string]bool)
-		for _, r := range present {
-			presentSet[r] = true
-		}
-		var available []string
-		for _, r := range allRepos {
-			if !presentSet[r] {
-				available = append(available, r)
-			}
-		}
-		if len(available) == 0 {
-			return m, nil
-		}
-		title := fmt.Sprintf("Add repos to %q:", t.Name)
-		picker := newRepoPicker(title, m.repoSets.Sets, available, m.styles)
-		m.activeRepoPicker = &picker
-		m.addReposTaskID = t.ID
-		m.addReposWorkspaceDir = t.WorkspaceDir
-		m.mode = ModeRepoSelect
-		return m, nil
-
-	case "+":
-		return m, m.createCompanion()
 
 	case "C":
 		return m, m.compactWindows()
@@ -715,21 +657,115 @@ func (m Model) huhTheme() *huh.Theme {
 	return huh.ThemeCatppuccin()
 }
 
-func (m Model) handleConfirmKillKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		t := m.selectedTask()
 		if t != nil && t.WorkspaceDir != "" {
 			m.mode = ModeWorkspaceProgress
-			m.workspaceProgressLines = []string{fmt.Sprintf("Killing %q...", t.Name)}
+			m.workspaceProgressLines = []string{fmt.Sprintf("Completing %q...", t.Name)}
 		} else {
 			m.mode = ModeNormal
 		}
-		return m, m.killSelected()
+		return m, m.completeSelected()
 	default:
 		m.mode = ModeNormal
 		return m, nil
 	}
+}
+
+func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	t := m.selectedTask()
+	if t == nil {
+		m.mode = ModeNormal
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc", "tab":
+		m.mode = ModeNormal
+		return m, nil
+
+	case "enter":
+		m.mode = ModeNormal
+		return m, m.focusSelected()
+
+	case "p":
+		switch t.State {
+		case db.StateActive:
+			m.mode = ModeNormal
+			return m, m.parkSelected()
+		case db.StateParked:
+			m.mode = ModeNormal
+			return m, m.unparkSelected()
+		}
+		return m, nil
+
+	case "f":
+		switch t.State {
+		case db.StateActive, db.StateParked:
+			m.mode = ModeNormal
+			return m, m.dormifySelected()
+		case db.StateDormant:
+			m.mode = ModeNormal
+			return m, m.wakeSelected()
+		}
+		return m, nil
+
+	case "d":
+		m.mode = ModeConfirmComplete
+		return m, nil
+
+	case "+":
+		if t.State == db.StateActive {
+			m.mode = ModeNormal
+			return m, m.createCompanion()
+		}
+		return m, nil
+
+	case "F":
+		if t.State != db.StateCompleted && t.State != db.StateFailed {
+			m.flagEditTaskID = t.ID
+			form, result := newFlagEditForm(t.Flags, t.Name, m.huhTheme())
+			m.activeForm = form
+			m.flagEditFormResult = result
+			m.mode = ModeForm
+			return m, m.activeForm.Init()
+		}
+		return m, nil
+
+	case "W":
+		if t.WorkspaceDir == "" || m.repoSets == nil {
+			return m, nil
+		}
+		if m.repoSets.WorkspaceStrategy != workspace.StrategyMultiRepo {
+			return m, nil
+		}
+		allRepos, _ := m.repoSets.ListRepos()
+		present := workspace.PresentRepos(t.WorkspaceDir)
+		presentSet := make(map[string]bool)
+		for _, r := range present {
+			presentSet[r] = true
+		}
+		var available []string
+		for _, r := range allRepos {
+			if !presentSet[r] {
+				available = append(available, r)
+			}
+		}
+		if len(available) == 0 {
+			return m, nil
+		}
+		title := fmt.Sprintf("Add repos to %q:", t.Name)
+		picker := newRepoPicker(title, m.repoSets.Sets, available, m.styles)
+		m.activeRepoPicker = &picker
+		m.addReposTaskID = t.ID
+		m.addReposWorkspaceDir = t.WorkspaceDir
+		m.mode = ModeRepoSelect
+		return m, nil
+	}
+
+	return m, nil
 }
 
 const maxDebugLines = 20
@@ -1059,25 +1095,6 @@ func (m Model) wakeSelected() tea.Cmd {
 	return func() tea.Msg {
 		if err := m.manager.Wake(t.ID); err != nil {
 			return ErrorMsg{Err: err}
-		}
-		return m.refreshTasks()
-	}
-}
-
-func (m Model) killSelected() tea.Cmd {
-	t := m.selectedTask()
-	if t == nil {
-		return nil
-	}
-	taskID := t.ID
-	workspaceDir := t.WorkspaceDir
-	rs := m.repoSets
-	return func() tea.Msg {
-		if err := m.manager.Kill(taskID); err != nil {
-			return ErrorMsg{Err: err}
-		}
-		if workspaceDir != "" {
-			return destroyWorkspace(rs, workspaceDir)
 		}
 		return m.refreshTasks()
 	}

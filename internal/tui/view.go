@@ -10,6 +10,7 @@ import (
 	ltable "github.com/charmbracelet/lipgloss/table"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/tmux"
+	"github.com/dpetersen/krang/internal/workspace"
 )
 
 func (m Model) View() string {
@@ -31,12 +32,16 @@ func (m Model) View() string {
 	top.WriteString(m.renderTable())
 	top.WriteString("\n")
 
+	var modalContent string
+
 	switch m.mode {
-	case ModeConfirmKill:
-		t := m.selectedTask()
-		if t != nil {
-			top.WriteString("\n")
-			top.WriteString(m.styles.ErrorText.Render(fmt.Sprintf("Kill task %q? [y/N]", t.Name)))
+	case ModeConfirmComplete:
+		if t := m.selectedTask(); t != nil {
+			modalContent = m.renderConfirmComplete(t)
+		}
+	case ModeDetail:
+		if t := m.selectedTask(); t != nil {
+			modalContent = m.renderDetailModal(t)
 		}
 	case ModeFilter:
 		top.WriteString("\n")
@@ -58,7 +63,11 @@ func (m Model) View() string {
 	case ModeConfirmRelaunch:
 		top.WriteString("\n")
 		top.WriteString(m.styles.ErrorText.Render("Flags changed. Claude will be relaunched (session resumes). Proceed? [y/N]"))
-	default:
+	}
+
+	// Status bar shown in normal mode and modal overlay modes (where it's
+	// visible behind the overlay).
+	if m.mode == ModeNormal || m.mode == ModeDetail || m.mode == ModeConfirmComplete {
 		if m.filterText != "" {
 			top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
 		}
@@ -78,7 +87,80 @@ func (m Model) View() string {
 		gap = 0
 	}
 
-	return topStr + strings.Repeat("\n", gap) + bottom
+	background := topStr + strings.Repeat("\n", gap) + bottom
+
+	if modalContent != "" {
+		return overlayCenter(background, modalContent, m.width, m.height)
+	}
+	return background
+}
+
+// overlayCenter composites a foreground modal on top of a background view,
+// centered both horizontally and vertically. Background lines behind the
+// modal are dimmed with ANSI dim attribute.
+func overlayCenter(bg, fg string, width, height int) string {
+	bgLines := strings.Split(bg, "\n")
+	fgLines := strings.Split(fg, "\n")
+
+	// Pad background to full terminal height.
+	for len(bgLines) < height {
+		bgLines = append(bgLines, "")
+	}
+
+	fgHeight := len(fgLines)
+	fgWidth := 0
+	for _, line := range fgLines {
+		if w := lipgloss.Width(line); w > fgWidth {
+			fgWidth = w
+		}
+	}
+
+	startRow := (height - fgHeight) / 2
+	startCol := (width - fgWidth) / 2
+	if startRow < 0 {
+		startRow = 0
+	}
+	if startCol < 0 {
+		startCol = 0
+	}
+
+	dim := lipgloss.NewStyle().Faint(true)
+	pad := strings.Repeat(" ", startCol)
+
+	result := make([]string, len(bgLines))
+	for i, bgLine := range bgLines {
+		fgIdx := i - startRow
+		if fgIdx >= 0 && fgIdx < fgHeight {
+			// This row has modal content — dimmed padding + foreground.
+			result[i] = dim.Render(pad) + fgLines[fgIdx]
+		} else {
+			// Row outside modal — dim the entire line.
+			result[i] = dim.Render(stripAnsi(bgLine))
+		}
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// stripAnsi removes ANSI escape sequences from a string so it can be
+// re-styled (e.g. dimmed) without stacking escape codes.
+func stripAnsi(s string) string {
+	var result strings.Builder
+	inEscape := false
+	for _, r := range s {
+		if inEscape {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEscape = false
+			}
+			continue
+		}
+		if r == '\x1b' {
+			inEscape = true
+			continue
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
 }
 
 func wordWrap(text string, width int) string {
@@ -298,37 +380,13 @@ func (m Model) attentionWithProcs(t db.Task) string {
 }
 
 func (m Model) renderStatusBar() string {
-	t := m.selectedTask()
 	var hints []string
 
 	hints = append(hints, "[n]ew")
-
-	if t != nil {
-		switch t.State {
-		case db.StateActive:
-			hints = append(hints, "[enter]focus", "[+]companion", "[p]ark", "[f]reeze")
-			if t.WorkspaceDir != "" {
-				hints = append(hints, "[W]add-repos")
-			}
-		case db.StateParked:
-			hints = append(hints, "[u]npark", "[f]reeze")
-			if t.WorkspaceDir != "" {
-				hints = append(hints, "[W]add-repos")
-			}
-		case db.StateDormant:
-			hints = append(hints, "[t]haw")
-		}
-		if t.State != db.StateCompleted && t.State != db.StateFailed {
-			hints = append(hints, "[F]lags")
-		}
-		hints = append(hints, "[x]kill", "[c]omplete")
+	if m.selectedTask() != nil {
+		hints = append(hints, "[enter]focus", "[tab]detail")
 	}
-
-	hints = append(hints, "[i]mport")
-	if len(m.tasks) > 0 {
-		hints = append(hints, "[S]itrep", "re[s]ort", "[/]filter")
-	}
-	hints = append(hints, "[C]ompact", "[?]help", "[q]uit")
+	hints = append(hints, "[/]filter", "[?]help", "[q]uit")
 
 	left := strings.Join(hints, "  ")
 
@@ -390,28 +448,32 @@ func (m Model) renderHelp() string {
 }
 
 func buildHelpContent() string {
-	return `Keybindings
+	return `Global Keys
 
   n         Create new task
   i         Import existing Claude session
-  Enter     Focus active task window
-  p         Park task (move to background)
-  u         Unpark task (bring back)
-  f         Freeze task (save & close)
-  t         Thaw frozen task (resume)
-  x         Kill task (with confirmation)
-  c         Mark task completed
-  +         Create companion window for task
-  W         Add repos to workspace task
-  F         Edit task flags (sandbox, permissions)
+  Enter     Focus selected task window
+  Tab       Open task detail modal
+  d         Complete task (with confirmation)
+  j/k       Navigate up/down
   s         Toggle sort (created / priority)
   S         Sit rep (briefing on all active tasks)
   r         Refresh AI summaries
   C         Compact windows (renumber sequentially)
   /         Filter tasks (esc to clear)
   ?         Toggle this help
-  j/k       Navigate up/down
   q         Quit krang (tasks keep running)
+
+Detail Modal Keys (press Tab on a task)
+
+  p         Park / unpark (toggles based on state)
+  f         Freeze / unfreeze (toggles based on state)
+  d         Complete task
+  +         Create companion window
+  F         Edit task flags (sandbox, permissions)
+  W         Add repos to workspace task
+  Enter     Focus task window
+  Esc/Tab   Close modal
 
 Task States
 
@@ -422,7 +484,7 @@ Task States
             reduce clutter.
   frozen    No tmux window. Session ID saved so Claude can
             resume with --resume. Use this for tasks you want
-            to pause without killing.
+            to pause without using resources.
 
 Attention States
 
@@ -439,9 +501,8 @@ Glossary
 
   Companion window
     A shell window (<name>+) associated with a task. Created
-    with +, it travels with the task on park/unpark and is
-    killed on freeze. Useful for running tests, watching logs,
-    or other activities alongside Claude.
+    with + in the detail modal. Travels with the task on
+    park/unpark and is destroyed on freeze.
 
   Window naming
     <name>   Task window (identified by @krang-task option)
@@ -451,6 +512,150 @@ Glossary
     Created (default) shows all tasks in creation order.
     Priority shows only active tasks sorted by attention
     urgency: PERM > ERR > wait > ok > done.`
+}
+
+func (m Model) renderConfirmComplete(t *db.Task) string {
+	var content strings.Builder
+
+	content.WriteString(m.styles.ModalTitle.Render(fmt.Sprintf("Complete %q?", t.Name)))
+	content.WriteString("\n\n")
+	content.WriteString(m.styles.ModalContent.Render("  • Claude process will be stopped"))
+	if t.WorkspaceDir != "" {
+		content.WriteString("\n")
+		wsPath := tildeify(t.WorkspaceDir)
+		content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  • Workspace at %s will be deleted", wsPath)))
+	}
+	content.WriteString("\n\n")
+	content.WriteString(m.styles.ModalContent.Render("          [y] Confirm  [n] Cancel"))
+
+	modalWidth := m.width / 2
+	if modalWidth < 44 {
+		modalWidth = 44
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.theme.Error).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(content.String())
+}
+
+func (m Model) renderDetailModal(t *db.Task) string {
+	var content strings.Builder
+
+	// Header: name + state + attention
+	stateStr := stateLabel(t.State)
+	attnStr := m.attentionWithProcs(*t)
+	header := fmt.Sprintf("%s  [%s]  %s", t.Name, stateStr, attnStr)
+	content.WriteString(m.styles.ModalTitle.Render(header))
+	content.WriteString("\n")
+
+	// Info section
+	if t.Cwd != "" {
+		content.WriteString(m.styles.ModalContent.Render("  cwd: " + relativeCwd(t.Cwd)))
+		content.WriteString("\n")
+	}
+	if !t.CreatedAt.IsZero() {
+		age := time.Since(t.CreatedAt).Truncate(time.Second)
+		content.WriteString(m.styles.ModalContent.Render("  age: " + age.String()))
+		content.WriteString("\n")
+	}
+	if t.Flags.HasNonDefault() {
+		var flags []string
+		if t.Flags.NoSandbox {
+			flags = append(flags, "no-sandbox")
+		}
+		if t.Flags.DangerouslySkipPermissions {
+			flags = append(flags, "skip-perms")
+		}
+		if t.Flags.Debug {
+			flags = append(flags, "debug")
+		}
+		content.WriteString(m.styles.ModalContent.Render("  flags: " + strings.Join(flags, ", ")))
+		content.WriteString("\n")
+	}
+
+	// Process section
+	if tp, ok := m.taskProcesses[t.ID]; ok && len(tp.Children) > 0 {
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  Background processes (%d):", len(tp.Children))))
+		content.WriteString("\n")
+		for _, child := range tp.Children {
+			content.WriteString(m.styles.ModalContent.Render("    " + child.Command))
+			content.WriteString("\n")
+		}
+	}
+
+	// Actions section
+	content.WriteString("\n")
+	content.WriteString(m.styles.ModalTitle.Render("Actions"))
+	content.WriteString("\n")
+
+	type action struct {
+		key  string
+		desc string
+	}
+	var actions []action
+
+	switch t.State {
+	case db.StateActive:
+		actions = append(actions,
+			action{"enter", "Focus task window"},
+			action{"p", "Park"},
+			action{"f", "Freeze"},
+			action{"d", "Complete"},
+			action{"+", "Create companion"},
+		)
+	case db.StateParked:
+		actions = append(actions,
+			action{"p", "Unpark"},
+			action{"f", "Freeze"},
+			action{"d", "Complete"},
+		)
+	case db.StateDormant:
+		actions = append(actions,
+			action{"f", "Unfreeze"},
+			action{"d", "Complete"},
+		)
+	}
+
+	if t.State != db.StateCompleted && t.State != db.StateFailed {
+		actions = append(actions, action{"F", "Edit flags"})
+	}
+	if t.WorkspaceDir != "" && m.repoSets != nil &&
+		m.repoSets.WorkspaceStrategy == workspace.StrategyMultiRepo {
+		actions = append(actions, action{"W", "Add repos"})
+	}
+
+	for _, a := range actions {
+		line := fmt.Sprintf("  %-6s %s", a.key, a.desc)
+		content.WriteString(m.styles.ModalContent.Render(line))
+		content.WriteString("\n")
+	}
+
+	content.WriteString("\n")
+	content.WriteString(m.styles.ModalContent.Render("  esc/tab  Close"))
+
+	modalWidth := m.width / 2
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(content.String())
 }
 
 
