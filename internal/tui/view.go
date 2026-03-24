@@ -185,7 +185,7 @@ func (m Model) renderTable() string {
 			fmt.Sprintf("%d", i+1),
 			name,
 			stateLabel(t.State),
-			attentionLabel(t.Attention),
+			m.attentionWithProcs(t),
 			relativeCwd(t.Cwd),
 			t.Summary,
 		}
@@ -282,6 +282,19 @@ func attentionLabel(attention db.AttentionState) string {
 	default:
 		return string(attention)
 	}
+}
+
+// attentionWithProcs returns the attention label, appending ⚙N when
+// Claude is stopped but background child processes are still running.
+func (m Model) attentionWithProcs(t db.Task) string {
+	label := attentionLabel(t.Attention)
+	if t.Attention == db.AttentionOK {
+		return label
+	}
+	if tp, ok := m.taskProcesses[t.ID]; ok && len(tp.Children) > 0 {
+		label += fmt.Sprintf("⚙%d", len(tp.Children))
+	}
+	return label
 }
 
 func (m Model) renderStatusBar() string {

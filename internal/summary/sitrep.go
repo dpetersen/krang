@@ -6,11 +6,13 @@ import (
 	"strings"
 
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/proctree"
 	"github.com/dpetersen/krang/internal/tmux"
 )
 
 type SitRepInput struct {
 	Tasks      []db.Task
+	Processes  map[string]*proctree.TaskProcesses
 	ScreenRows int
 	ScreenCols int
 }
@@ -38,6 +40,10 @@ func GenerateSitRep(input SitRepInput) (string, error) {
 					desc += fmt.Sprintf("\n- Current terminal (last 30 lines):\n```\n%s\n```", stripped)
 				}
 			}
+		}
+
+		if procCtx := proctree.FormatForPrompt(input.Processes[t.ID]); procCtx != "" {
+			desc += "\n- " + procCtx
 		}
 
 		taskDescriptions = append(taskDescriptions, desc)

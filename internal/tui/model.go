@@ -16,6 +16,7 @@ import (
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
+	"github.com/dpetersen/krang/internal/proctree"
 	"github.com/dpetersen/krang/internal/summary"
 	"github.com/dpetersen/krang/internal/task"
 	"github.com/dpetersen/krang/internal/tmux"
@@ -64,6 +65,8 @@ type Model struct {
 	workspaceProgressLines []string
 
 	debugLog []string
+
+	taskProcesses map[string]*proctree.TaskProcesses
 
 	windowStylesSynced bool
 }
@@ -130,6 +133,7 @@ func (m Model) Init() tea.Cmd {
 		m.reconcileTick(),
 		m.waitForHookEvent(),
 		m.summaryTick(),
+		m.processTick(),
 	)
 }
 
@@ -176,10 +180,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			logLine += " tool=" + msg.Event.ToolName
 		}
 		m.appendDebugLog(logLine)
-		return m, tea.Batch(
+		cmds := []tea.Cmd{
 			m.handleHookEvent(msg.Event),
 			m.waitForHookEvent(),
-		)
+		}
+		// Collect processes immediately when Claude stops — this is
+		// when background children matter most for the UI.
+		if msg.Event.HookEventName == "Stop" {
+			cmds = append(cmds, m.collectProcesses)
+		}
+		return m, tea.Batch(cmds...)
 
 	case SummaryTickMsg:
 		return m, tea.Batch(
@@ -232,6 +242,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.doReconcile,
 			m.reconcileTick(),
 		)
+
+	case ProcessTickMsg:
+		return m, tea.Batch(
+			m.collectProcesses,
+			m.processTick(),
+		)
+
+	case ProcessesUpdatedMsg:
+		m.taskProcesses = msg.Processes
+		return m, nil
 
 	case ErrorMsg:
 		m.appendDebugLog(fmt.Sprintf("[%s] ERROR: %v",
@@ -501,6 +521,7 @@ func (m Model) generateSitRep() tea.Msg {
 
 	content, err := summary.GenerateSitRep(summary.SitRepInput{
 		Tasks:      tasks,
+		Processes:  m.taskProcesses,
 		ScreenRows: m.height,
 		ScreenCols: m.width,
 	})
@@ -832,6 +853,34 @@ func (m Model) summaryTick() tea.Cmd {
 	})
 }
 
+func (m Model) processTick() tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+		return ProcessTickMsg{}
+	})
+}
+
+func (m Model) collectProcesses() tea.Msg {
+	shellPIDs := make(map[string]int)
+	for _, t := range m.tasks {
+		if t.TmuxWindow == "" {
+			continue
+		}
+		if t.State != db.StateActive && t.State != db.StateParked {
+			continue
+		}
+		pid, err := tmux.PanePID(t.TmuxWindow)
+		if err != nil {
+			continue
+		}
+		shellPIDs[t.ID] = pid
+	}
+
+	if len(shellPIDs) == 0 {
+		return ProcessesUpdatedMsg{Processes: nil}
+	}
+	return ProcessesUpdatedMsg{Processes: proctree.CollectAll(shellPIDs)}
+}
+
 func (m Model) doSummarize() tea.Msg {
 	now := time.Now().Format("15:04:05")
 	var debugLines []string
@@ -855,7 +904,7 @@ func (m Model) doSummarize() tea.Msg {
 	}
 	debugLines = append(debugLines, fmt.Sprintf("[%s] summary: running for %d eligible tasks", now, eligible))
 
-	results := m.summaryPipeline.SummarizeAll(tasks)
+	results := m.summaryPipeline.SummarizeAll(tasks, m.taskProcesses)
 	for _, r := range results {
 		debugLines = append(debugLines, fmt.Sprintf("[%s] summary: %s", now, r))
 	}

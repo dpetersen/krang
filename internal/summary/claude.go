@@ -14,13 +14,17 @@ type SummaryResult struct {
 
 const jsonSchema = `{"type":"object","properties":{"one_liner":{"type":"string","description":"Under 60 chars summarizing the TOPIC or WORK being done, not the UI state"},"phase":{"type":"string","enum":["planning","coding","testing","debugging","waiting","error","done"]}},"required":["one_liner","phase"]}`
 
-func Summarize(taskName, paneContent string) (*SummaryResult, error) {
-	prompt := fmt.Sprintf(`This is terminal output from a Claude Code session named %q running in tmux. Summarize what TOPIC or WORK this session is about in under 60 characters. Focus on the subject matter being discussed or the code being written, NOT the UI state (don't say "waiting for input" or "idle" — I already know that from other signals).
+func Summarize(taskName, paneContent, processContext string) (*SummaryResult, error) {
+	promptText := fmt.Sprintf(`This is terminal output from a Claude Code session named %q running in tmux. Summarize what TOPIC or WORK this session is about in under 60 characters. Focus on the subject matter being discussed or the code being written, NOT the UI state (don't say "waiting for input" or "idle" — I already know that from other signals).
 
 Terminal output:
 ---
 %s
 ---`, taskName, paneContent)
+
+	if processContext != "" {
+		promptText += "\n\n" + processContext
+	}
 
 	cmd := exec.Command(
 		"claude",
@@ -29,7 +33,7 @@ Terminal output:
 		"--output-format", "json",
 		"--json-schema", jsonSchema,
 		"--no-session-persistence",
-		prompt,
+		promptText,
 	)
 	cmd.Stdin = nil
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
+	"github.com/dpetersen/krang/internal/proctree"
 )
 
 type TasksRefreshedMsg struct {
@@ -25,6 +26,12 @@ type SitRepResultMsg struct {
 }
 
 type SummaryTickMsg struct{}
+
+type ProcessTickMsg struct{}
+
+type ProcessesUpdatedMsg struct {
+	Processes map[string]*proctree.TaskProcesses
+}
 
 type SummariesUpdatedMsg struct {
 	DebugLines []string

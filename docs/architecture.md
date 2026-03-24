@@ -167,6 +167,24 @@ Full briefing on all active tasks via `claude -p --model sonnet`:
 
 **Budget:** Capped at $1.00 per sit rep via `--max-budget-usd`.
 
+## Process Tree Awareness
+
+Background child processes (CI watchers, long builds, test runners) are surfaced per task via the `internal/proctree` package. A single `ps -eo pid,ppid,etime,command -ww` call captures the full system process table, then the tree is resolved per task:
+
+1. **Find Claude** — BFS from the tmux shell PID through sandbox wrappers until a process with basename `claude` is found
+2. **Collect descendants** — recursive walk of Claude's children
+3. **Filter noise** — remove MCP servers (`mcp` substring), `caffeinate`, `pgrep`/`ps`, and `nah`
+4. **Filter young** — processes must be alive for 30+ seconds (eliminates ephemeral tool invocations)
+5. **Filter ancestors** — remove wrapper processes whose children are also in the result, leaving only leaf processes
+
+**Collection triggers:** 5-second tick + immediate collection on `Stop` hook events (when Claude transitions to idle).
+
+**TUI display:** The attention column shows `wait⚙N` when Claude is stopped but N background children are still running. The indicator is hidden during active work (`ok` attention) to avoid flicker from ephemeral tool use.
+
+**Summary/sit rep integration:** Process lists are passed to both Haiku (per-task summaries) and Sonnet (sit rep) prompts for richer context.
+
+Process data is transient — stored on the TUI model, never persisted to the database.
+
 ## Data Model
 
 SQLite per-instance at `~/.local/share/krang/instances/<encoded-cwd>/krang.db` (override with `KRANG_DB` env var). WAL mode for concurrent access.

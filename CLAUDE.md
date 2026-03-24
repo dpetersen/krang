@@ -49,6 +49,7 @@ Multiple krang instances can run simultaneously for different working directorie
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
 - `internal/hooks/` — HTTP server for Claude Code hook events, relay script + settings.json installer
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
+- `internal/proctree/` — process tree walking, noise/age filtering, leaf-only display for background child process awareness
 - `internal/workspace/` — `krang.yaml` parsing, workspace creation/destruction, VCS operations (jj workspace add, local git clone)
 - `internal/tui/` — Bubble Tea model, view, keybindings, messages, theming
 

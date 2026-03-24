@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/proctree"
 	"github.com/dpetersen/krang/internal/tmux"
 )
 
@@ -34,7 +35,7 @@ func NewPipeline(taskStore *db.TaskStore) *Pipeline {
 
 // summarizeTask captures the pane, checks if content changed, and
 // calls Haiku if needed. Returns a status string for debug logging.
-func (p *Pipeline) summarizeTask(task db.Task) string {
+func (p *Pipeline) summarizeTask(task db.Task, processContext string) string {
 	if task.TmuxWindow == "" {
 		return fmt.Sprintf("%s: no window", task.Name)
 	}
@@ -66,7 +67,7 @@ func (p *Pipeline) summarizeTask(task db.Task) string {
 	p.aiSemaphore <- struct{}{}
 	defer func() { <-p.aiSemaphore }()
 
-	result, err := Summarize(task.Name, stripped)
+	result, err := Summarize(task.Name, stripped, processContext)
 	if err != nil {
 		return fmt.Sprintf("%s: AI error: %v", task.Name, err)
 	}
@@ -82,7 +83,7 @@ func (p *Pipeline) summarizeTask(task db.Task) string {
 
 // SummarizeAll runs summaries for all eligible tasks. Returns a
 // status string per task for debug logging.
-func (p *Pipeline) SummarizeAll(tasks []db.Task) []string {
+func (p *Pipeline) SummarizeAll(tasks []db.Task, processes map[string]*proctree.TaskProcesses) []string {
 	type result struct {
 		index int
 		msg   string
@@ -111,7 +112,8 @@ func (p *Pipeline) SummarizeAll(tasks []db.Task) []string {
 		wg.Add(1)
 		go func(idx int, task db.Task) {
 			defer wg.Done()
-			results[idx] = result{index: idx, msg: p.summarizeTask(task)}
+			procCtx := proctree.FormatForPrompt(processes[task.ID])
+			results[idx] = result{index: idx, msg: p.summarizeTask(task, procCtx)}
 		}(i, e.task)
 	}
 	wg.Wait()
