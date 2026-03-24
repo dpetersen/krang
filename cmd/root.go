@@ -15,6 +15,7 @@ import (
 	"github.com/dpetersen/krang/internal/task"
 	"github.com/dpetersen/krang/internal/tmux"
 	"github.com/dpetersen/krang/internal/tui"
+	"github.com/dpetersen/krang/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -93,7 +94,12 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	taskStore := db.NewTaskStore(database)
 	eventStore := db.NewEventStore(database)
-	manager := task.NewManager(taskStore, eventStore, krangSession, parkedSession, cfg.SandboxCommand, stateFilePath)
+
+	var reposDir string
+	if rs, err := workspace.Load(cwd); err == nil {
+		reposDir = rs.ReposDir
+	}
+	manager := task.NewManager(taskStore, eventStore, krangSession, parkedSession, cfg.SandboxCommand, stateFilePath, cwd, reposDir)
 
 	if err := manager.Reconcile(); err != nil {
 		return fmt.Errorf("initial reconciliation: %w", err)

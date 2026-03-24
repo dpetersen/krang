@@ -10,7 +10,7 @@ const testStateFile = "/tmp/krang-state.json"
 const statePrefix = "export KRANG_STATEFILE='/tmp/krang-state.json'; "
 
 func TestBuildClaudeCommandDefaults(t *testing.T) {
-	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "safehouse", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "safehouse", testStateFile, sandboxTemplateData{})
 	expected := statePrefix + "safehouse claude --session-id sess-123 --name 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
@@ -18,7 +18,7 @@ func TestBuildClaudeCommandDefaults(t *testing.T) {
 }
 
 func TestBuildClaudeCommandResume(t *testing.T) {
-	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, true, "safehouse", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, true, "safehouse", testStateFile, sandboxTemplateData{})
 	expected := statePrefix + "safehouse claude --resume 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
@@ -27,7 +27,7 @@ func TestBuildClaudeCommandResume(t *testing.T) {
 
 func TestBuildClaudeCommandNoSandbox(t *testing.T) {
 	flags := db.TaskFlags{NoSandbox: true}
-	cmd := buildClaudeCommand("sess-123", "my-task", flags, false, "safehouse", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", flags, false, "safehouse", testStateFile, sandboxTemplateData{})
 	expected := statePrefix + "claude --session-id sess-123 --name 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
@@ -36,7 +36,7 @@ func TestBuildClaudeCommandNoSandbox(t *testing.T) {
 
 func TestBuildClaudeCommandSkipPermissions(t *testing.T) {
 	flags := db.TaskFlags{DangerouslySkipPermissions: true}
-	cmd := buildClaudeCommand("sess-123", "my-task", flags, false, "safehouse", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", flags, false, "safehouse", testStateFile, sandboxTemplateData{})
 	expected := statePrefix + "safehouse claude --session-id sess-123 --name 'my-task' --dangerously-skip-permissions; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
@@ -45,7 +45,7 @@ func TestBuildClaudeCommandSkipPermissions(t *testing.T) {
 
 func TestBuildClaudeCommandAllFlags(t *testing.T) {
 	flags := db.TaskFlags{NoSandbox: true, DangerouslySkipPermissions: true}
-	cmd := buildClaudeCommand("sess-123", "my-task", flags, true, "safehouse", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", flags, true, "safehouse", testStateFile, sandboxTemplateData{})
 	expected := statePrefix + "claude --resume 'my-task' --dangerously-skip-permissions; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
@@ -53,7 +53,7 @@ func TestBuildClaudeCommandAllFlags(t *testing.T) {
 }
 
 func TestBuildClaudeCommandResumeNoName(t *testing.T) {
-	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, true, "safehouse", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, true, "safehouse", testStateFile, sandboxTemplateData{})
 	if expected := "safehouse claude --resume 'my-task'"; !contains(cmd, expected) {
 		t.Errorf("resume command should use name, not session ID:\n  %s", cmd)
 	}
@@ -63,7 +63,7 @@ func TestBuildClaudeCommandResumeNoName(t *testing.T) {
 }
 
 func TestBuildClaudeCommandCustomSandbox(t *testing.T) {
-	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "safehouse --append-profile ~/.config/safehouse/allow-nah.sb", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "safehouse --append-profile ~/.config/safehouse/allow-nah.sb", testStateFile, sandboxTemplateData{})
 	expected := statePrefix + "safehouse --append-profile ~/.config/safehouse/allow-nah.sb claude --session-id sess-123 --name 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
@@ -71,7 +71,7 @@ func TestBuildClaudeCommandCustomSandbox(t *testing.T) {
 }
 
 func TestBuildClaudeCommandEmptySandbox(t *testing.T) {
-	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "", testStateFile)
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "", testStateFile, sandboxTemplateData{})
 	expected := statePrefix + "claude --session-id sess-123 --name 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
@@ -79,10 +79,46 @@ func TestBuildClaudeCommandEmptySandbox(t *testing.T) {
 }
 
 func TestBuildClaudeCommandNoStateFile(t *testing.T) {
-	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "safehouse", "")
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "safehouse", "", sandboxTemplateData{})
 	expected := "safehouse claude --session-id sess-123 --name 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
+	}
+}
+
+func TestBuildClaudeCommandTemplateExpansion(t *testing.T) {
+	tmplData := sandboxTemplateData{
+		KrangDir: "/home/user/code/project",
+		TaskCwd:  "/home/user/code/project/workspaces/fix-auth",
+		TaskName: "fix-auth",
+		ReposDir: "/home/user/code/project/repos",
+	}
+	sandbox := "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude"
+	cmd := buildClaudeCommand("sess-123", "fix-auth", db.TaskFlags{}, false, sandbox, testStateFile, tmplData)
+	expectedSandbox := "safehouse --add-dirs-ro=/home/user/code/project/.mcp.json:/home/user/code/project/CLAUDE.md:/home/user/code/project/.claude"
+	if !contains(cmd, expectedSandbox) {
+		t.Errorf("template not expanded:\n  %s", cmd)
+	}
+}
+
+func TestExpandSandboxCommandNoTemplate(t *testing.T) {
+	result := expandSandboxCommand("safehouse", sandboxTemplateData{KrangDir: "/foo"})
+	if result != "safehouse" {
+		t.Errorf("plain string should pass through unchanged, got: %s", result)
+	}
+}
+
+func TestExpandSandboxCommandAllVars(t *testing.T) {
+	tmplData := sandboxTemplateData{
+		KrangDir: "/code",
+		TaskCwd:  "/code/workspaces/task1",
+		TaskName: "task1",
+		ReposDir: "/code/repos",
+	}
+	result := expandSandboxCommand("safehouse --ro={{.KrangDir}} --cwd={{.TaskCwd}} --name={{.TaskName}} --repos={{.ReposDir}}", tmplData)
+	expected := "safehouse --ro=/code --cwd=/code/workspaces/task1 --name=task1 --repos=/code/repos"
+	if result != expected {
+		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, result)
 	}
 }
 
