@@ -267,9 +267,14 @@ func (m Model) renderTable() string {
 			attn = m.spinner.View() + " " + op
 		}
 
+		windowIdx := ""
+		if t.State == db.StateActive && t.TmuxWindow != "" {
+			windowIdx = m.windowIndexes[t.TmuxWindow]
+		}
+
 		rows[i] = []string{
 			cursor,
-			fmt.Sprintf("%d", i+1),
+			windowIdx,
 			name,
 			stateLabel(t.State),
 			attn,

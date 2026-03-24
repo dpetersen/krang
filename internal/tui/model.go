@@ -70,8 +70,9 @@ type Model struct {
 
 	taskProcesses map[string]*proctree.TaskProcesses
 
-	pendingOps map[string]string // taskID → operation label (e.g. "freezing...")
-	spinner    spinner.Model
+	pendingOps   map[string]string // taskID → operation label (e.g. "freezing...")
+	spinner      spinner.Model
+	windowIndexes map[string]string // tmux window ID → display index
 
 	windowStylesSynced bool
 }
@@ -156,6 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TasksRefreshedMsg:
 		m.tasks = msg.Tasks
+		m.windowIndexes = msg.WindowIndexes
 		if m.cursor >= len(m.filteredTasks()) && len(m.filteredTasks()) > 0 {
 			m.cursor = len(m.filteredTasks()) - 1
 		}
@@ -905,7 +907,8 @@ func (m Model) refreshTasks() tea.Msg {
 	if err != nil {
 		return ErrorMsg{Err: err}
 	}
-	return TasksRefreshedMsg{Tasks: tasks}
+	indexes := tmux.WindowIndexes(m.activeSession)
+	return TasksRefreshedMsg{Tasks: tasks, WindowIndexes: indexes}
 }
 
 func (m Model) reconcileTick() tea.Cmd {
@@ -1235,7 +1238,7 @@ func (m Model) compactWindows() tea.Cmd {
 		if err := tmux.CompactWindows(session); err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return nil
+		return m.refreshTasks()
 	}
 }
 

@@ -7,7 +7,8 @@ import (
 )
 
 type TasksRefreshedMsg struct {
-	Tasks []db.Task
+	Tasks         []db.Task
+	WindowIndexes map[string]string // tmux window ID → display index
 }
 
 type ErrorMsg struct {

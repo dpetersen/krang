@@ -9,6 +9,7 @@ import (
 
 type WindowInfo struct {
 	ID             string // stable @N identifier
+	Index          string // display index (e.g. "0", "1", "2")
 	Name           string
 	KrangTask      string // value of @krang-task option, empty if not set
 	KrangCompanion string // value of @krang-companion option, empty if not set
@@ -55,7 +56,7 @@ func ListWindows(session string) ([]WindowInfo, error) {
 	cmd := exec.Command(
 		"tmux", "list-windows",
 		"-t", session,
-		"-F", "#{window_id}\t#{window_name}\t#{@krang-task}\t#{@krang-companion}",
+		"-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{@krang-task}\t#{@krang-companion}",
 	)
 	out, err := cmd.Output()
 	if err != nil {
@@ -68,20 +69,33 @@ func ListWindows(session string) ([]WindowInfo, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 4)
-		if len(parts) < 2 {
+		parts := strings.SplitN(line, "\t", 5)
+		if len(parts) < 3 {
 			continue
 		}
-		w := WindowInfo{ID: parts[0], Name: parts[1]}
-		if len(parts) > 2 {
-			w.KrangTask = parts[2]
-		}
+		w := WindowInfo{ID: parts[0], Index: parts[1], Name: parts[2]}
 		if len(parts) > 3 {
-			w.KrangCompanion = parts[3]
+			w.KrangTask = parts[3]
+		}
+		if len(parts) > 4 {
+			w.KrangCompanion = parts[4]
 		}
 		windows = append(windows, w)
 	}
 	return windows, nil
+}
+
+// WindowIndexes returns a map of window ID to display index for the session.
+func WindowIndexes(session string) map[string]string {
+	windows, err := ListWindows(session)
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]string, len(windows))
+	for _, w := range windows {
+		m[w.ID] = w.Index
+	}
+	return m
 }
 
 func CompanionWindowName(taskName string) string {
