@@ -3,43 +3,62 @@
 ## Context
 
 Krang manages Claude Code sessions that often span multiple repos.
-Today all tasks share krang's working directory. The workspace feature
-creates isolated per-task directories populated with VCS-linked copies
-of repos from a roots directory, giving each Claude session its own
+The workspace feature creates isolated per-task directories populated
+with VCS-linked copies of repos, giving each Claude session its own
 working tree.
 
-The feature is designed for gradual adoption:
+The feature has three tiers of adoption:
 
-1. **No config** — task creation prompts for a cwd (immediate children
-   of krang's directory). Hit enter for krang's own cwd (today's
-   behavior) or pick a subdirectory.
-2. **`krang.yaml` present** — full workspace mode with repo sets,
-   workspace creation from a roots directory, and automated cleanup.
+1. **No `krang.yaml`** — task creation prompts for a cwd (immediate
+   subdirectories of krang's directory). Select `.` for krang's own
+   cwd (original behavior) or pick a subdirectory.
+2. **`krang.yaml` with `workspace_strategy: single_repo`** — pick one
+   repo, workspace dir is a direct clone.
+3. **`krang.yaml` with `workspace_strategy: multi_repo`** — pick
+   multiple repos (with optional set grouping), workspace dir
+   contains clones.
 
-## Directory Layout (Workspace Mode)
+## Directory Layout
+
+### multi_repo
 
 ```
 ~/code/launchdarkly/               # metarepo root, krang runs here
-├── roots/                         # all repo clones (source of truth)
+├── repos/                         # source repos (configurable name)
 │   ├── gonfalon/
 │   ├── gonfalon-priv/
-│   ├── terraform-config/
 │   └── catfood/
-├── auth-refactor/                 # workspace (created by krang)
-│   ├── gonfalon/                  # jj workspace or git clone
-│   └── gonfalon-priv/
-├── krang.yaml                     # version-controlled workspace config
-├── CLAUDE.md
-└── .gitignore
+├── workspaces/                    # workspaces (configurable name)
+│   └── auth-refactor/             # named after task
+│       ├── gonfalon/              # jj workspace or git clone
+│       └── gonfalon-priv/
+└── krang.yaml
 ```
 
-## krang.yaml Format
+### single_repo
 
-Lives in the metarepo root, version-controlled. Its presence opts a
-krang instance into workspace mode.
+```
+~/code/launchdarkly/
+├── repos/
+│   └── gonfalon/
+├── workspaces/
+│   └── fix-auth/                  # IS the clone directly
+│       ├── .git/
+│       └── src/
+└── krang.yaml
+```
+
+## krang.yaml
+
+Lives in the metarepo root, version-controlled. The
+`workspace_strategy` field is required to enable workspace mode —
+without it, krang falls back to the CWD picker even if the file
+exists.
 
 ```yaml
-roots_dir: roots  # relative to metarepo root, default "roots"
+workspace_strategy: multi_repo  # or single_repo
+repos_dir: repos                # default "repos"
+workspaces_dir: workspaces      # default "workspaces"
 
 repos:
   terraform-config:
@@ -53,286 +72,164 @@ sets:
   terraform:
     - terraform-config
     - terraform-modules
-    - terraform-shared
   frontend:
     - gonfalon
     - catfood
 ```
 
-**VCS auto-detection:** Check for `.jj/` in the root repo directory.
-Present = jj, absent = git. The `repos` section is only needed to
-override this when auto-detection gives the wrong answer.
+**VCS auto-detection:** Checks for `.jj/` in the repo directory.
+Present = jj, absent = git. The `repos` map is only needed to
+override auto-detection.
 
-**Repo deduplication:** When multiple sets are selected and share repos,
-the resolved repo list is deduplicated.
+**Repo sets** (multi_repo only): Named groups of repos shown in
+the repo picker as toggle-able headers. Toggling a set toggles all
+its members. Individual repos always appear in the picker regardless
+of set membership.
+
+**Repo deduplication:** When sets overlap, the resolved repo list
+is deduplicated.
 
 ## VCS Operations
 
 ### jj (workspace add)
 
 ```
-cd ~/code/launchdarkly/roots/gonfalon
-jj workspace add ../../auth-refactor/gonfalon --name auth-refactor
+cd ~/code/launchdarkly/repos/gonfalon
+jj workspace add ../../workspaces/auth-refactor/gonfalon --name auth-refactor
 ```
 
 Creates a linked working copy. Shared object store, space-efficient.
 
-### git (clone)
+### git (local clone)
 
 ```
-git clone ~/code/launchdarkly/roots/gonfalon ~/code/launchdarkly/auth-refactor/gonfalon
+git clone ~/code/launchdarkly/repos/gonfalon ~/code/launchdarkly/workspaces/auth-refactor/gonfalon
 ```
 
-Full independent clone. Simple, no shared branch constraints.
+Local clone uses hardlinks for the object store — nearly instant
+and space-efficient. The working tree and branches are fully
+independent.
 
 ## TUI Flow
 
-Task creation adapts based on whether `krang.yaml` exists:
+### Without workspace_strategy — CWD Picker
 
-### Without krang.yaml — CWD Picker (ModeSelectCwd)
+Task creation form gains a third step (after name and flags) with
+`huh.Select[string]` listing immediate subdirectories plus `.`
+(current directory). Only shown when subdirectories exist.
 
-```
-ModeNewName → ModeNewPrompt → ModeSelectCwd → create task
-```
+### single_repo — Inline Select
 
-Lists immediate child directories of krang's cwd, plus `.` (krang's
-own cwd) as the default selection:
+Task creation form gains a third step with `huh.Select[string]`
+listing repos from the repos directory. One repo, one clone.
 
-```
-Working directory for "fix-auth-bug":
+### multi_repo — Custom Repo Picker
 
-> .  (current directory)
-  project-a
-  project-b
-  project-c
-
-j/k: navigate  enter: select
-```
-
-Enter selects the cwd and creates the task. Hitting enter on `.`
-gives tier 1 behavior (today's default).
-
-### With krang.yaml — Repo Selection (ModeRepoSelect)
-
-```
-ModeNewName → ModeNewPrompt → ModeRepoSelect → create task
-```
-
-Reuses the toggle-list pattern from ModeFlagEdit. Shows sets and
-individual repos in a flat list:
+After the name+flags form completes, a custom toggle-list component
+(`ModeRepoSelect`) shows sets and individual repos:
 
 ```
 Select repos for "auth-refactor":
 
-> [x] backend (set)
-  [x]   gonfalon
-  [x]   gonfalon-priv
-  [ ] terraform (set)
-  [ ]   terraform-config
-  [ ]   terraform-modules
-  [ ]   terraform-shared
-  [x]   catfood
+> [x] backend (gonfalon, gonfalon-priv)
+  [x] gonfalon
+  [x] gonfalon-priv
+  [ ] terraform (terraform-config, terraform-modules)
+  [ ] terraform-config
+  [ ] terraform-modules
+  [x] catfood
 
 j/k: navigate  space: toggle  enter: create  esc: cancel
 ```
 
 - Toggling a set toggles all its members
 - Individual repos can be toggled independently
-- **Enter** with at least one selection: create workspace, then task
-- **Enter** with nothing selected: does nothing (need at least one repo)
-- **Esc**: cancels task creation entirely
+- Set checked state auto-syncs when individual repos change
+- Enter with at least one selection creates the workspace
+- Esc cancels task creation
+
+### Adding Repos (W keybinding)
+
+Press `W` on an active/parked multi_repo workspace task to add
+repos. The repo picker shows only repos not already present in the
+workspace. Uses the same VCS operations as initial creation.
+
+### Progress Modal
+
+Workspace creation and destruction show a bordered modal overlay
+that blocks TUI input while operations run. Displays per-repo
+status lines.
 
 ## Task Lifecycle Integration
 
 | Action   | Workspace behavior |
 |----------|-------------------|
-| Create   | Create workspace (if krang.yaml) or pick cwd |
+| Create   | Create workspace or pick cwd |
 | Park     | No change |
 | Unpark   | No change |
 | Freeze   | No change (preserve uncommitted work) |
 | Wake     | No change (workspace dir still exists) |
-| Complete | Destroy workspace |
-| Kill     | Destroy workspace |
+| Complete | Destroy workspace (jj forget + rm -rf) |
+| Kill     | Destroy workspace (jj forget + rm -rf) |
 | Relaunch | No change |
 
 ### Workspace Destruction
 
-1. For each repo dir in the workspace:
-   - If jj: run `jj workspace forget <workspace-name>` from the
-     corresponding root repo
-   - If git: no VCS cleanup needed
-2. `rm -rf` the workspace directory
+1. For multi_repo: enumerate subdirectories; for each jj repo, run
+   `jj workspace forget <workspace-name>` from the source repo.
+   For single_repo: try `jj workspace forget` against all known
+   jj repos.
+2. `rm -rf` the workspace directory.
+3. Errors are logged but don't block the state transition.
 
-## DB Changes
+## Sandbox Integration
 
-### Migration V5
+Workspace tasks launch Claude in a subdirectory of the metarepo.
+Sandboxes (like safehouse) block reads above the workdir by default,
+which breaks Claude's config file walking (.mcp.json, CLAUDE.md).
 
-```sql
-ALTER TABLE tasks ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+The `sandbox_command` config supports Go template variables:
+
+| Variable | Value |
+|----------|-------|
+| `{{.KrangDir}}` | Krang's working directory (metarepo root) |
+| `{{.TaskCwd}}` | Task's original launch cwd (stable, not live) |
+| `{{.TaskName}}` | Task name |
+| `{{.ReposDir}}` | Absolute path to repos directory (empty if no krang.yaml) |
+
+Example:
+
+```json
+{
+  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude"
+}
 ```
 
-Empty string = no workspace (backward compatible). Stores the absolute
-path to the workspace directory.
+Falls back to the raw string on template parse errors.
 
-### Task Struct
+## DB Schema
 
-Add `WorkspaceDir string` to the `Task` struct. Add
-`UpdateWorkspaceDir(id, dir string) error` to `TaskStore`.
+Migration V5 adds `workspace_dir TEXT NOT NULL DEFAULT ''` to the
+tasks table. Empty string = no workspace (backward compatible).
 
-## New Package: internal/workspace/
+## Packages
 
-### reposets.go
-
-```go
-type RepoConfig struct {
-    VCS string // "jj", "git", or "" (auto-detect)
-}
-
-type RepoSets struct {
-    RootsDir string
-    Repos    map[string]RepoConfig
-    Sets     map[string][]string
-}
-
-func Load(metarepoDir string) (*RepoSets, error)
-func (rs *RepoSets) ResolveRepos(sets, extras []string) []string
-func (rs *RepoSets) DetectVCS(metarepoDir, repoName string) string
-```
-
-### workspace.go
-
-```go
-type CreateResult struct {
-    WorkspaceDir string
-    Repos        map[string]string // repo name → VCS used
-    Errors       []string          // partial failure messages
-}
-
-func Create(metarepoDir, taskName string, rs *RepoSets, repos []string) (*CreateResult, error)
-func Destroy(workspaceDir string) error
-```
-
-## Manager Changes
-
-`Manager` gains a `metarepoDir` field (set from `os.Getwd()` at
-startup). `Complete` and `Kill` call `workspace.Destroy` when
-`task.WorkspaceDir` is non-empty.
-
-The TUI handles workspace creation before calling `CreateTask`,
-passing the workspace dir as the cwd. The manager doesn't need to
-know about workspace creation, only cleanup.
-
-## Adding Repos to an Existing Workspace
-
-A keybinding on active/parked tasks (e.g., `W`) opens the repo
-picker with already-included repos checked and disabled. The user
-selects additional repos; on confirm, krang runs VCS operations for
-just the new repos into the existing workspace directory. No schema
-changes — `workspace_dir` is the same, the directory just gains new
-subdirectories.
-
-## Workspace Management API (Phase 2)
-
-Extend krang so Claude sessions can request workspace changes
-without the user switching to the krang TUI.
-
-### Architecture
-
-Three layers, each building on the previous:
-
-1. **HTTP API on krang's server** — management endpoints alongside
-   the existing hook routes (e.g., `POST /api/workspace/add-repo`).
-   This is the single coordination point that prevents races when
-   multiple Claude sessions try to modify workspaces concurrently.
-   All mutations go through here.
-
-2. **CLI subcommand** — `krang workspace add-repo --task foo --repo bar`
-   reads `KRANG_STATEFILE` to find the port and curls the API. Works
-   for humans, scripts, and Claude sessions.
-
-3. **Skill** — a markdown file for `.claude/commands/` that tells
-   Claude how to use the CLI. No MCP needed — Claude just runs the
-   command. The skill lives in the krang repo and `krang setup` (or
-   `krang install-skill`) copies it into the project's
-   `.claude/commands/`, keeping skill and CLI versioned together.
-
-### Why not MCP?
-
-A skill calling a CLI calling an API achieves the same thing with
-far less machinery. MCP requires a server process, protocol
-handshake, and tool registration. The skill is a markdown file.
-The CLI is a single subcommand. The API endpoint already exists.
-
-### Concurrency
-
-All workspace mutations go through krang's HTTP server, which
-processes them sequentially. The CLI and skill are thin clients that
-post to the API. Two Claude sessions asking for the same repo get
-deduplicated naturally — the second add-repo call sees the repo
-already exists in the workspace and returns success.
-
-## Task Name Validation
-
-Workspace directories use the task name, so names must be
-filesystem-safe. Add validation that task names match
-`[a-zA-Z0-9_-]+` (alphanumeric, hyphens, underscores).
+| Package | Key types/functions |
+|---------|-------------------|
+| `internal/workspace/reposets.go` | `RepoSets`, `Load()`, `ListRepos()`, `DetectVCS()`, `ResolveRepos()` |
+| `internal/workspace/workspace.go` | `Create()`, `AddRepos()`, `Destroy()`, `PresentRepos()` |
+| `internal/tui/repopicker.go` | `repoPicker` — custom toggle-list component |
+| `internal/tui/forms.go` | `newWorkspaceTaskForm()` |
 
 ## Edge Cases
 
-- **Workspace dir already exists:** Error out. This means something
-  unexpected is there — don't silently overwrite.
-- **Partial creation failure:** Some repos succeed, others fail. Create
-  the task with whatever succeeded, log the failures.
-- **jj workspace name collision:** If a workspace named `<taskName>`
-  already exists in a root repo (stale from a crash), forget it first,
-  then recreate.
+- **Workspace dir already exists:** Error. Don't silently overwrite.
+- **Partial creation failure:** Create the task with whatever
+  succeeded, log the failures.
+- **All repos fail:** Clean up workspace dir, return error, no task
+  created.
 - **Cleanup failure:** Log but still transition the task to
   completed/failed. Stale workspace dirs are harmless.
-- **Root repo missing:** If a root repo doesn't exist at create time,
-  skip it and log the error.
-
-## File Changes Summary
-
-| File | Change |
-|------|--------|
-| `internal/workspace/reposets.go` | New: YAML parsing, repo resolution, VCS detection |
-| `internal/workspace/workspace.go` | New: Create and Destroy functions |
-| `internal/db/migrations.go` | Add schemaV5 for workspace_dir column |
-| `internal/db/tasks.go` | Add WorkspaceDir field, UpdateWorkspaceDir method |
-| `internal/task/manager.go` | Add metarepoDir field, cleanup in Complete/Kill |
-| `internal/tui/model.go` | Add ModeSelectCwd and ModeRepoSelect, wire flows |
-| `internal/tui/messages.go` | Add new mode constants |
-| `internal/tui/view.go` | Add renderSelectCwd and renderRepoSelect methods |
-
-## Implementation Order
-
-### Phase 1: Core Workspaces
-
-1. `internal/workspace/reposets.go` + tests
-2. `internal/workspace/workspace.go` + tests
-3. DB migration V5, Task struct update
-4. Manager changes (metarepoDir, cleanup in Complete/Kill)
-5. TUI: ModeSelectCwd (works without krang.yaml)
-6. TUI: ModeRepoSelect (krang.yaml path)
-7. Wire everything in cmd/root.go
-8. Manual integration testing with real repos
-
-### Phase 2: Add Repos to Existing Workspace
-
-9. TUI: `W` keybinding, reuse ModeRepoSelect with pre-checked repos
-10. `workspace.AddRepos()` function (subset of Create logic)
-
-### Phase 3: Workspace Management API
-
-11. HTTP API endpoints on krang's hook server
-12. `krang workspace` CLI subcommand
-13. Skill file + `krang install-skill` command
-14. Integration testing with a live Claude session
-
-## Deferred
-
-- Repo selection memory (remember last picks)
-- Workspace repair/status view
-- Freeze-time workspace cleanup (risky with uncommitted work)
-- Git branch cleanup on destroy
-- CRUD UI for krang.yaml
+- **No repos in repos dir:** Fall back to CWD picker.
+- **Template parse error in sandbox command:** Fall back to raw
+  string.

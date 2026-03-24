@@ -118,6 +118,143 @@ And in your krang config, pass the env vars through:
 If hook events aren't showing up, the sandbox is the most likely cause.
 See the Debugging section below.
 
+## Workspaces
+
+Workspaces give each task its own isolated directory with VCS-linked
+copies of repos. There are three levels of adoption:
+
+### Level 1: CWD Picker (no config needed)
+
+Without a `krang.yaml`, task creation shows a directory picker
+listing immediate subdirectories of krang's working directory.
+Select `.` for the current directory (original behavior) or pick a
+subdirectory. The picker is skipped when no subdirectories exist.
+
+### Level 2: Single Repo Workspaces
+
+Create a `krang.yaml` in your working directory:
+
+```yaml
+workspace_strategy: single_repo
+```
+
+Now task creation shows a repo picker. Each task gets its own clone
+under the workspaces directory:
+
+```
+~/code/project/
+├── repos/              # your source repos
+│   └── my-service/
+├── workspaces/         # krang creates these
+│   └── fix-auth/       # direct clone of my-service
+└── krang.yaml
+```
+
+### Level 3: Multi-Repo Workspaces
+
+```yaml
+workspace_strategy: multi_repo
+```
+
+Task creation shows a multi-select repo picker. Each task gets a
+directory containing clones of the selected repos:
+
+```
+~/code/project/
+├── repos/
+│   ├── gonfalon/
+│   └── gonfalon-priv/
+├── workspaces/
+│   └── auth-refactor/
+│       ├── gonfalon/
+│       └── gonfalon-priv/
+└── krang.yaml
+```
+
+Press `W` on an active or parked workspace task to add more repos.
+
+### Repo Sets (optional, multi_repo only)
+
+Group repos into named sets for quick selection:
+
+```yaml
+workspace_strategy: multi_repo
+
+sets:
+  backend:
+    - gonfalon
+    - gonfalon-priv
+  terraform:
+    - terraform-config
+    - terraform-modules
+```
+
+The repo picker shows sets as toggle-able headers — toggling a set
+selects all its members. Individual repos can still be toggled
+independently.
+
+### krang.yaml Reference
+
+```yaml
+# Required to enable workspaces. Without this, krang uses the CWD
+# picker regardless of other settings.
+workspace_strategy: single_repo  # or multi_repo
+
+# Directory containing source repos (relative to krang.yaml).
+# Default: "repos"
+repos_dir: repos
+
+# Directory where workspaces are created (relative to krang.yaml).
+# Default: "workspaces"
+workspaces_dir: workspaces
+
+# VCS override per repo. Only needed when auto-detection (looks for
+# .jj/ directory) gives the wrong answer.
+repos:
+  some-repo:
+    vcs: git  # or jj
+
+# Named groups of repos (multi_repo only). Optional.
+sets:
+  backend:
+    - gonfalon
+    - gonfalon-priv
+```
+
+### VCS Operations
+
+- **jj repos**: `jj workspace add` — linked working copy, shared
+  object store, space-efficient
+- **git repos**: local `git clone` — uses hardlinks for the object
+  store, nearly instant and space-efficient
+
+### Workspace Lifecycle
+
+Workspaces are created when a task is created and destroyed when a
+task is completed or killed. For jj repos, `jj workspace forget` is
+called before removal. Frozen tasks keep their workspace intact.
+
+### Sandbox Template Variables
+
+When using a sandbox, the `sandbox_command` supports Go template
+variables for granting workspace tasks access to metarepo-level
+config files:
+
+| Variable | Description |
+|----------|-------------|
+| `{{.KrangDir}}` | Krang's working directory (metarepo root) |
+| `{{.TaskCwd}}` | Task's original launch cwd (does not drift) |
+| `{{.TaskName}}` | Task name |
+| `{{.ReposDir}}` | Absolute path to repos directory (empty if no krang.yaml) |
+
+Example — grant read access to shared config files:
+
+```json
+{
+  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
+}
+```
+
 ## File Locations
 
 | Path | Purpose |
@@ -132,14 +269,23 @@ See the Debugging section below.
 | Key | Action |
 |-----|--------|
 | `n` | New task |
+| `i` | Import existing Claude session |
 | `Enter` | Focus task (switch to its tmux window) |
-| `p` | Park / unpark task |
-| `d` | Freeze task |
-| `w` | Wake (thaw) frozen task |
-| `f` | Edit task flags |
+| `p` | Park task |
+| `u` | Unpark task |
+| `f` | Freeze task |
+| `t` | Thaw (wake) frozen task |
+| `c` | Mark task completed |
+| `x` | Kill task (with confirmation) |
+| `+` | Create companion window |
+| `F` | Edit task flags |
+| `W` | Add repos to workspace task |
+| `S` | Generate sit rep |
+| `r` | Refresh AI summaries |
 | `s` | Toggle sort mode (created / priority) |
+| `C` | Compact windows (renumber) |
 | `/` | Filter tasks |
-| `?` | Help / debug log |
+| `?` | Help |
 | `q` | Quit |
 
 ## Debugging

@@ -48,6 +48,7 @@ Multiple krang instances can run simultaneously for different working directorie
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
 - `internal/hooks/` — HTTP server for Claude Code hook events, relay script + settings.json installer
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
+- `internal/workspace/` — `krang.yaml` parsing, workspace creation/destruction, VCS operations (jj workspace add, local git clone)
 - `internal/tui/` — Bubble Tea model, view, keybindings, messages, theming
 
 ## Theming
@@ -57,6 +58,18 @@ Styles are derived from a `Theme` struct with semantic color roles (Title, Error
 ## Task Creation
 
 Task creation and import use `charmbracelet/huh` forms (multi-step wizard). The task table uses `bubbles/table`. Task names must match `[a-zA-Z0-9_-]+`.
+
+## Workspaces
+
+Optional per-task isolated directories configured via `krang.yaml` at the metarepo root. See `docs/workspaces.md` for full details.
+
+- **`workspace_strategy: single_repo`** — pick one repo, workspace dir is a direct clone
+- **`workspace_strategy: multi_repo`** — pick multiple repos (with optional set grouping via a custom toggle-list component), workspace dir contains clones
+- **No strategy** — CWD picker (original behavior)
+- Git clones use local hardlinks for speed; jj repos use `jj workspace add`
+- Workspaces destroyed on task complete/kill (jj workspace forget + rm -rf)
+- `W` keybinding adds repos to existing multi_repo workspaces
+- Sandbox command supports Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files
 
 ## Building and Running
 
