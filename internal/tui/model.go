@@ -421,8 +421,37 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.compactWindows()
 
 	case "?":
-		m.helpViewport = viewport.New(m.width-2, m.height-4)
-		m.helpViewport.SetContent(buildHelpContent())
+		modalWidth := m.width * 2 / 3
+		if modalWidth < 50 {
+			modalWidth = 50
+		}
+		if modalWidth > m.width-4 {
+			modalWidth = m.width - 4
+		}
+		// Inner width accounts for border (2) + padding (4).
+		innerWidth := modalWidth - 6
+		// Viewport height: terminal height minus border (2), padding (0),
+		// and footer line (2), with some margin.
+		vpHeight := m.height - 8
+		if vpHeight < 6 {
+			vpHeight = 6
+		}
+
+		content := buildHelpMarkdown()
+		renderer, err := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(innerWidth),
+		)
+		var rendered string
+		if err == nil {
+			rendered, err = renderer.Render(content)
+		}
+		if err != nil {
+			rendered = content
+		}
+
+		m.helpViewport = viewport.New(innerWidth, vpHeight)
+		m.helpViewport.SetContent(rendered)
 		m.mode = ModeHelp
 		return m, nil
 

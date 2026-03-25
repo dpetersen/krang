@@ -75,24 +75,41 @@ func (m Model) View() string {
 		top.WriteString(m.renderStatusBar())
 	}
 
-	// Build bottom section: debug log (fixed height).
-	bottom := m.renderDebugLog()
-
-	// Pad between top and bottom to pin the log to the screen bottom.
-	topStr := top.String()
-	topLines := strings.Count(topStr, "\n") + 1
-	bottomLines := maxVisibleLogLines + 3 // log lines + manual top border + left/right/bottom border (2 lines)
-	gap := m.height - topLines - bottomLines
-	if gap < 0 {
-		gap = 0
-	}
-
-	background := topStr + strings.Repeat("\n", gap) + bottom
+	background := m.pinToBottom(top.String())
 
 	if modalContent != "" {
 		return overlayCenter(background, modalContent, m.width, m.height)
 	}
 	return background
+}
+
+// renderNormalView renders the standard view (header, table, status bar,
+// debug log) used as the background behind modal overlays.
+func (m Model) renderNormalView() string {
+	var top strings.Builder
+	top.WriteString(m.renderHeader())
+	top.WriteString("\n\n")
+	top.WriteString(m.renderTable())
+	top.WriteString("\n")
+	if m.filterText != "" {
+		top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
+	}
+	top.WriteString("\n")
+	top.WriteString(m.renderStatusBar())
+	return m.pinToBottom(top.String())
+}
+
+// pinToBottom pads between the top content and the debug log to pin the
+// log to the bottom of the terminal.
+func (m Model) pinToBottom(topStr string) string {
+	bottom := m.renderDebugLog()
+	topLines := strings.Count(topStr, "\n") + 1
+	bottomLines := maxVisibleLogLines + 3
+	gap := m.height - topLines - bottomLines
+	if gap < 0 {
+		gap = 0
+	}
+	return topStr + strings.Repeat("\n", gap) + bottom
 }
 
 // overlayCenter composites a foreground modal on top of a background view,
@@ -213,10 +230,15 @@ func (m Model) renderHeader() string {
 	if m.sortByPriority {
 		sortIndicator = " | Priority"
 	}
-	stats := m.styles.Header.Render(fmt.Sprintf(
-		"Active: %d | Parked: %d | Frozen: %d%s",
-		activeCt, parkedCt, dormantCt, sortIndicator,
-	))
+	sep := m.styles.Header.Render(" | ")
+	stats := fmt.Sprintf("Active: %d", activeCt) +
+		sep +
+		m.styles.StateParked.Render(fmt.Sprintf("Parked: %d", parkedCt)) +
+		sep +
+		m.styles.StateDormant.Render(fmt.Sprintf("Frozen: %d", dormantCt))
+	if sortIndicator != "" {
+		stats += m.styles.Header.Render(sortIndicator)
+	}
 
 	krangCwd := tildeify(krangWorkingDir())
 	cwdStr := m.styles.Header.Render(krangCwd)
@@ -389,16 +411,34 @@ func (m Model) attentionWithProcs(t db.Task) string {
 	return label
 }
 
-func (m Model) renderStatusBar() string {
-	var hints []string
-
-	hints = append(hints, "[n]ew")
-	if m.selectedTask() != nil {
-		hints = append(hints, "[enter]focus", "[tab]detail")
+// styledHint renders a "[key]label" hint with the bracketed key in accent color.
+func (m Model) styledHint(hint string) string {
+	open := strings.Index(hint, "[")
+	close := strings.Index(hint, "]")
+	if open < 0 || close < 0 || close <= open {
+		return m.styles.StatusBar.Render(hint)
 	}
-	hints = append(hints, "[/]filter", "[?]help", "[q]uit")
+	accentStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
+	before := hint[:open]
+	key := hint[open : close+1]
+	after := hint[close+1:]
+	return before + accentStyle.Render(key) + after
+}
 
-	left := strings.Join(hints, "  ")
+func (m Model) renderStatusBar() string {
+	var rawHints []string
+
+	rawHints = append(rawHints, "[n]ew")
+	if m.selectedTask() != nil {
+		rawHints = append(rawHints, "[enter]focus", "[tab]detail")
+	}
+	rawHints = append(rawHints, "[/]filter", "[?]help", "[q]uit")
+
+	var styledHints []string
+	for _, h := range rawHints {
+		styledHints = append(styledHints, m.styledHint(h))
+	}
+	left := strings.Join(styledHints, "  ")
 
 	taskCount := len(m.filteredTasks())
 	totalCount := len(m.tasks)
@@ -453,75 +493,84 @@ func relativeCwd(taskCwd string) string {
 }
 
 func (m Model) renderHelp() string {
-	header := m.styles.Title.Render(" HELP") + "  " + m.styles.Header.Render("(q/esc/? to close, j/k to scroll)")
-	return header + "\n\n" + m.helpViewport.View() + "\n"
+	modalWidth := m.width * 2 / 3
+	if modalWidth < 50 {
+		modalWidth = 50
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
+	// Inner width accounts for border (2) + padding (4).
+	innerWidth := modalWidth - 6
+
+	footer := m.styles.ModalContent.Render(
+		fmt.Sprintf("%-*s", innerWidth, "  q/esc/?  Close    j/k  Scroll"),
+	)
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(0, 2).
+		Width(modalWidth)
+
+	content := box.Render(m.helpViewport.View() + "\n" + footer)
+
+	// Render the normal background and overlay the help modal.
+	bg := m.renderNormalView()
+	return overlayCenter(bg, content, m.width, m.height)
 }
 
-func buildHelpContent() string {
-	return `Global Keys
+func buildHelpMarkdown() string {
+	return `# Global Keys
 
-  n         Create new task
-  i         Import existing Claude session
-  Enter     Focus selected task window
-  Tab       Open task detail modal
-  d         Complete task (with confirmation)
-  j/k       Navigate up/down
-  s         Toggle sort (created / priority)
-  S         Sit rep (briefing on all active tasks)
-  r         Refresh AI summaries
-  C         Compact windows (renumber sequentially)
-  /         Filter tasks (esc to clear)
-  ?         Toggle this help
-  q         Quit krang (tasks keep running)
+- **n** — Create new task
+- **i** — Import existing Claude session
+- **Enter** — Focus selected task window
+- **Tab** — Open task detail modal
+- **d** — Complete task (with confirmation)
+- **j/k** — Navigate up/down
+- **s** — Toggle sort (created / priority)
+- **S** — Sit rep (briefing on all active tasks)
+- **r** — Refresh AI summaries
+- **C** — Compact windows (renumber sequentially)
+- **/** — Filter tasks (esc to clear)
+- **?** — Toggle this help
+- **q** — Quit krang (tasks keep running)
 
-Detail Modal Keys (press Tab on a task)
+# Detail Modal Keys
 
-  p         Park / unpark (toggles based on state)
-  f         Freeze / unfreeze (toggles based on state)
-  d         Complete task
-  +         Create companion window
-  F         Edit task flags (sandbox, permissions)
-  W         Add repos to workspace task
-  Enter     Focus task window
-  Esc/Tab   Close modal
+*Press Tab on a task to open*
 
-Task States
+- **p** — Park / unpark (toggles based on state)
+- **f** — Freeze / unfreeze (toggles based on state)
+- **d** — Complete task
+- **+** — Create companion window
+- **F** — Edit task flags (sandbox, permissions)
+- **W** — Add repos to workspace task
+- **Enter** — Focus task window
+- **Esc/Tab** — Close modal
 
-  active    Running in krang's tmux session. Claude Code is
-            actively working or waiting for input.
-  parked    Moved to a background tmux session. Claude is
-            still running but not visible. Park tasks to
-            reduce clutter.
-  frozen    No tmux window. Session ID saved so Claude can
-            resume with --resume. Use this for tasks you want
-            to pause without using resources.
+# Task States
 
-Attention States
+- **active** — Running in krang's tmux session. Claude Code is actively working or waiting for input.
+- **parked** — Moved to a background tmux session. Claude is still running but not visible. Park tasks to reduce clutter.
+- **frozen** — No tmux window. Session ID saved so Claude can resume with ` + "`--resume`" + `. Use this for tasks you want to pause without using resources.
 
-  ok        Claude is working normally.
-  wait      Claude stopped and is waiting for your input.
-            Switch to the task window to continue.
-  PERM      A permission prompt is blocking Claude. Approve
-            or deny it in the task window.
-  ERR       Something went wrong (e.g. stop failure).
-  done      Claude self-reported the task as complete via
-            the TaskCompleted hook.
+# Attention States
 
-Glossary
+- **ok** — Claude is working normally.
+- **wait** — Claude stopped and is waiting for your input. Switch to the task window to continue.
+- **PERM** — A permission prompt is blocking Claude. Approve or deny it in the task window.
+- **ERR** — Something went wrong (e.g. stop failure).
+- **done** — Claude self-reported the task as complete via the TaskCompleted hook.
 
-  Companion window
-    A shell window (<name>+) associated with a task. Created
-    with + in the detail modal. Travels with the task on
-    park/unpark and is destroyed on freeze.
+# Glossary
 
-  Window naming
-    <name>   Task window (identified by @krang-task option)
-    <name>+  Companion window (identified by @krang-companion)
-
-  Sort modes
-    Created (default) shows all tasks in creation order.
-    Priority shows only active tasks sorted by attention
-    urgency: PERM > ERR > wait > ok > done.`
+- **Companion window** — A shell window (` + "`<name>+`" + `) associated with a task. Created with ` + "`+`" + ` in the detail modal. Travels with the task on park/unpark and is destroyed on freeze.
+- **Window naming** — ` + "`<name>`" + ` for task windows, ` + "`<name>+`" + ` for companion windows.
+- **Sort modes** — *Created* (default) shows all tasks in creation order. *Priority* shows only active tasks sorted by attention urgency: PERM > ERR > wait > ok > done.
+`
 }
 
 func (m Model) renderConfirmComplete(t *db.Task) string {
@@ -705,10 +754,23 @@ func (m Model) renderDebugLog() string {
 		lines = lines[len(lines)-maxVisibleLogLines:]
 	}
 
+	timestampStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent).Faint(true)
+
 	var content strings.Builder
 	for i := 0; i < maxVisibleLogLines; i++ {
 		if i < len(lines) {
-			content.WriteString(m.styles.DebugLog.Render(lines[i]))
+			line := lines[i]
+			// Color the [HH:MM:SS] timestamp differently from the message.
+			if len(line) > 10 && line[0] == '[' {
+				if end := strings.Index(line, "]"); end > 0 {
+					content.WriteString(timestampStyle.Render(line[:end+1]))
+					content.WriteString(m.styles.DebugLog.Render(line[end+1:]))
+				} else {
+					content.WriteString(m.styles.DebugLog.Render(line))
+				}
+			} else {
+				content.WriteString(m.styles.DebugLog.Render(line))
+			}
 		}
 		if i < maxVisibleLogLines-1 {
 			content.WriteString("\n")
@@ -717,6 +779,7 @@ func (m Model) renderDebugLog() string {
 
 	borderColor := m.styles.Header.GetForeground()
 	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+	labelStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
 	innerWidth := m.width - 4 // account for left/right border + padding
 
 	// Build top border with embedded label.
@@ -725,7 +788,7 @@ func (m Model) renderDebugLog() string {
 	if lineLen < 0 {
 		lineLen = 0
 	}
-	topBorder := borderStyle.Render("╭─"+label) + borderStyle.Render(strings.Repeat("─", lineLen)+"╮")
+	topBorder := borderStyle.Render("╭─") + labelStyle.Render(label) + borderStyle.Render(strings.Repeat("─", lineLen)+"╮")
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
