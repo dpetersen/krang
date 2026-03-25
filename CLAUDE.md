@@ -34,6 +34,24 @@ Multiple krang instances can run simultaneously for different working directorie
 - **Frozen** (DB: `dormant`) — no tmux window, session ID saved for `--resume`
 - **Completed/Failed** — terminal states; names freed for reuse
 
+## Keybinding Model
+
+The TUI uses a two-tier keybinding system: a minimal set of global keys on the main screen, and per-task actions in a detail modal.
+
+**Global keys** (shown in footer): `n` new, `Enter` focus, `Tab` detail modal, `/` filter, `?` help, `q` quit. Additional global keys discoverable via help: `d` complete, `i` import, `s` sort, `S` sitrep, `r` refresh, `C` compact, `j/k` navigate.
+
+**Detail modal** (`Tab` on a selected task): centered overlay showing task info (cwd, age, flags, background processes) and context-sensitive actions. Toggle keys: `f` freeze/unfreeze, `p` park/unpark. Also: `d` complete, `+` companion, `F` flags, `W` add repos, `Enter` focus. Closes with `Esc`/`Tab`.
+
+**Complete** (`d`): unified action replacing the former separate kill/complete. Shows consequence-aware confirmation modal stating what will happen (process stop, workspace deletion). Sets `StateCompleted` + `AttentionDone`. `StateFailed` is only set by the reconciler when windows vanish unexpectedly.
+
+## Modal Overlays
+
+Modals (detail, confirm, help) render as centered boxes over a dimmed background using `overlayCenter()` in view.go. The background is the full normal view (header, table, status bar, debug log) with ANSI faint applied. The `renderNormalView()` helper provides the background for modes that need it.
+
+## Table # Column
+
+The `#` column shows the actual tmux window index for active tasks (so users can `Ctrl-B <n>` to jump). Parked and frozen tasks show blank. Indexes are fetched from tmux alongside task refreshes via `tmux.WindowIndexes()`.
+
 ## Window Naming
 
 - `<name>` — task windows, identified by `@krang-task` tmux user option
@@ -55,11 +73,21 @@ Multiple krang instances can run simultaneously for different working directorie
 
 ## Theming
 
-Styles are derived from a `Theme` struct with semantic color roles (Title, Error, Active, etc.). The `Styles` struct holds precomputed lipgloss styles built via `BuildStyles(theme)`. Available themes: `classic` (original ANSI 256 colors), `catppuccin-mocha` (default), `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`. Set via `"theme"` field in config.json.
+Styles are derived from a `Theme` struct with semantic color roles (Title, Error, Active, etc.). The `Styles` struct holds precomputed lipgloss styles built via `BuildStyles(theme)` and retains a `theme` field for direct color access. Available themes: `classic` (original ANSI 256 colors), `catppuccin-mocha` (default), `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`. Set via `"theme"` field in config.json.
+
+Color is used throughout: accent-colored key hints in the footer, state-colored counts in the header (parked blue, frozen gray, active default white), accent-colored "Events" label in the debug log, and differentiated timestamps (faint accent) vs message text (muted) in log entries.
+
+## Async Feedback
+
+Lifecycle operations (park, unpark, freeze, unfreeze, complete) show an animated spinner with operation label (e.g. "freezing...") in the Attn column via `bubbles/spinner`. A `pendingOps` map tracks in-flight operations, cleared by `pendingOpDoneMsg` when the action completes.
+
+## Help System
+
+Help (`?`) renders as a centered modal overlay with glamour-rendered markdown content, scrollable with j/k. Content is defined in `buildHelpMarkdown()` in view.go.
 
 ## Task Creation
 
-Task creation and import use `charmbracelet/huh` forms (multi-step wizard). The task table uses `bubbles/table`. Task names must match `[a-zA-Z0-9_-]+`.
+Task creation and import use `charmbracelet/huh` forms (multi-step wizard). The task table uses `lipgloss/table`. Task names must match `[a-zA-Z0-9_-]+`.
 
 ## Workspaces
 
@@ -69,8 +97,8 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - **`workspace_strategy: multi_repo`** — pick multiple repos (with optional set grouping via a custom toggle-list component), workspace dir contains clones
 - **No strategy** — CWD picker (original behavior)
 - Git clones use local hardlinks for speed; jj repos use `jj workspace add`
-- Workspaces destroyed on task complete/kill (jj workspace forget + rm -rf)
-- `W` keybinding adds repos to existing multi_repo workspaces
+- Workspaces destroyed on task complete (jj workspace forget + rm -rf)
+- `W` in the detail modal adds repos to existing multi_repo workspaces
 - Sandbox command supports Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files
 
 ## Building and Running
