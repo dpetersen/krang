@@ -594,15 +594,37 @@ func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	p := m.activeRepoPicker
+
+	// Filter input mode: forward keys to the textinput.
+	if p.filtering {
+		switch msg.String() {
+		case "esc":
+			p.filtering = false
+			p.filter.Blur()
+			return m, nil
+		case "enter":
+			p.filtering = false
+			p.filter.Blur()
+			return m, nil
+		}
+		cmd := p.updateFilter(msg)
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "j", "down":
-		m.activeRepoPicker.moveDown()
+		p.moveDown()
 	case "k", "up":
-		m.activeRepoPicker.moveUp()
+		p.moveUp()
 	case " ":
-		m.activeRepoPicker.toggle()
+		p.toggle()
+	case "/":
+		p.filtering = true
+		p.filter.Focus()
+		return m, p.filter.Cursor.BlinkCmd()
 	case "enter":
-		selected := m.activeRepoPicker.selectedRepos()
+		selected := p.selectedRepos()
 		if len(selected) == 0 {
 			return m, nil
 		}
@@ -629,6 +651,12 @@ func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
 		return m, m.createWorkspaceTask(result.Name, result.Flags, selected, rs)
 	case "esc":
+		// If there's filter text, clear it first.
+		if strings.TrimSpace(p.filter.Value()) != "" {
+			p.filter.Reset()
+			p.refilter()
+			return m, nil
+		}
 		m.workspaceTaskResult = nil
 		m.activeRepoPicker = nil
 		m.addReposTaskID = ""

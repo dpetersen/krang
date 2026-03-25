@@ -5,7 +5,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/sahilm/fuzzy"
 )
 
 type pickerItemKind int
@@ -23,10 +26,14 @@ type pickerItem struct {
 }
 
 type repoPicker struct {
-	title  string
-	items  []pickerItem
-	cursor int
-	styles Styles
+	title   string
+	items   []pickerItem
+	cursor  int // index into visibleIndices
+	styles  Styles
+	theme   Theme
+	filter  textinput.Model
+	filtering bool
+	visibleIndices []int // maps visible position → items index
 }
 
 // newRepoPicker builds a picker from sets and the full repo list.
@@ -60,19 +67,76 @@ func newRepoPicker(title string, sets map[string][]string, allRepos []string, st
 		})
 	}
 
-	return repoPicker{
+	fi := textinput.New()
+	fi.Placeholder = "search repos..."
+	fi.CharLimit = 60
+
+	p := repoPicker{
 		title:  title,
 		items:  items,
 		styles: styles,
+		theme:  styles.theme,
+		filter: fi,
 	}
+	p.refilter()
+	return p
 }
 
-func (p *repoPicker) toggle() {
-	if p.cursor < 0 || p.cursor >= len(p.items) {
+// refilter rebuilds visibleIndices based on the current filter text.
+func (p *repoPicker) refilter() {
+	query := strings.TrimSpace(p.filter.Value())
+	if query == "" {
+		p.visibleIndices = make([]int, len(p.items))
+		for i := range p.items {
+			p.visibleIndices[i] = i
+		}
 		return
 	}
 
-	item := &p.items[p.cursor]
+	// Build searchable strings: for repos just the name, for sets
+	// the set name plus all member names so "terraform" matches a
+	// set whose member is called "terraform".
+	var searchTargets []string
+	for _, item := range p.items {
+		if item.Kind == pickerItemSet {
+			searchTargets = append(searchTargets,
+				item.Name+" "+strings.Join(item.Members, " "))
+		} else {
+			searchTargets = append(searchTargets, item.Name)
+		}
+	}
+
+	matches := fuzzy.Find(query, searchTargets)
+	p.visibleIndices = make([]int, len(matches))
+	for i, m := range matches {
+		p.visibleIndices[i] = m.Index
+	}
+
+	// Clamp cursor.
+	if p.cursor >= len(p.visibleIndices) {
+		p.cursor = len(p.visibleIndices) - 1
+	}
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
+}
+
+// sourceIndex returns the items index for the current cursor position,
+// or -1 if nothing is visible.
+func (p *repoPicker) sourceIndex() int {
+	if p.cursor < 0 || p.cursor >= len(p.visibleIndices) {
+		return -1
+	}
+	return p.visibleIndices[p.cursor]
+}
+
+func (p *repoPicker) toggle() {
+	idx := p.sourceIndex()
+	if idx < 0 {
+		return
+	}
+
+	item := &p.items[idx]
 	item.Checked = !item.Checked
 
 	// Toggling a set toggles all its members in other items too.
@@ -86,7 +150,7 @@ func (p *repoPicker) toggle() {
 				p.items[i].Checked = item.Checked
 			}
 			// Also sync other sets that share members.
-			if p.items[i].Kind == pickerItemSet && i != p.cursor {
+			if p.items[i].Kind == pickerItemSet && i != idx {
 				p.syncSetState(&p.items[i])
 			}
 		}
@@ -118,8 +182,6 @@ func (p *repoPicker) syncSetState(setItem *pickerItem) {
 			}
 		}
 		if !found {
-			// Member not in the standalone list (only in set).
-			// Check if it's selected via the set itself.
 			allChecked = false
 		}
 	}
@@ -133,7 +195,7 @@ func (p *repoPicker) moveUp() {
 }
 
 func (p *repoPicker) moveDown() {
-	if p.cursor < len(p.items)-1 {
+	if p.cursor < len(p.visibleIndices)-1 {
 		p.cursor++
 	}
 }
@@ -167,6 +229,21 @@ func (p *repoPicker) selectedRepos() []string {
 	return result
 }
 
+// updateFilter processes a key message while the filter input is
+// focused. Returns a Cmd if the textinput needs one (e.g. blink).
+func (p *repoPicker) updateFilter(msg tea.KeyMsg) tea.Cmd {
+	var cmd tea.Cmd
+	p.filter, cmd = p.filter.Update(msg)
+	p.refilter()
+	return cmd
+}
+
+func renderPickerHint(theme Theme, key, label string) string {
+	keyStyle := lipgloss.NewStyle().Foreground(theme.Accent)
+	labelStyle := lipgloss.NewStyle().Foreground(theme.Muted)
+	return keyStyle.Render(key) + " " + labelStyle.Render(label)
+}
+
 func (p *repoPicker) view() string {
 	var b strings.Builder
 
@@ -174,9 +251,28 @@ func (p *repoPicker) view() string {
 	b.WriteString(titleStyle.Render(p.title))
 	b.WriteString("\n\n")
 
-	for i, item := range p.items {
+	if p.filtering {
+		inputLabel := lipgloss.NewStyle().Bold(true).Foreground(p.theme.Title)
+		b.WriteString(inputLabel.Render("Filter: "))
+		b.WriteString(p.filter.View())
+		b.WriteString("\n\n")
+	} else if strings.TrimSpace(p.filter.Value()) != "" {
+		filterStyle := lipgloss.NewStyle().Foreground(p.theme.Muted)
+		b.WriteString(filterStyle.Render(
+			fmt.Sprintf("filter: %s (/ to change, esc to clear)", p.filter.Value())))
+		b.WriteString("\n\n")
+	}
+
+	if len(p.visibleIndices) == 0 {
+		b.WriteString(p.styles.ModalContent.Render("  No matching repos."))
+		b.WriteString("\n")
+	}
+
+	for vi, srcIdx := range p.visibleIndices {
+		item := p.items[srcIdx]
+
 		cursor := "  "
-		if i == p.cursor {
+		if vi == p.cursor {
 			cursor = "> "
 		}
 
@@ -195,7 +291,7 @@ func (p *repoPicker) view() string {
 
 		line := fmt.Sprintf("%s%s %s", cursor, checkbox, label)
 
-		if i == p.cursor {
+		if vi == p.cursor {
 			style := lipgloss.NewStyle().
 				Bold(true).
 				Background(p.styles.SelectedRow.GetBackground())
@@ -209,7 +305,14 @@ func (p *repoPicker) view() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(p.styles.Header.Render("j/k: navigate  space: toggle  enter: create  esc: cancel"))
+	hints := []string{
+		renderPickerHint(p.theme, "j/k", "navigate"),
+		renderPickerHint(p.theme, "space", "toggle"),
+		renderPickerHint(p.theme, "/", "filter"),
+		renderPickerHint(p.theme, "enter", "create"),
+		renderPickerHint(p.theme, "esc", "cancel"),
+	}
+	b.WriteString(strings.Join(hints, "  "))
 
 	return b.String()
 }
