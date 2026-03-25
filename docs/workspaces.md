@@ -186,7 +186,20 @@ status lines.
 
 Workspace tasks launch Claude in a subdirectory of the metarepo.
 Sandboxes (like safehouse) block reads above the workdir by default,
-which breaks Claude's config file walking (.mcp.json, CLAUDE.md).
+which breaks two things:
+
+1. **Config file walking** — Claude walks upward looking for
+   `.mcp.json`, `CLAUDE.md`, `.claude/` etc. Grant read access to
+   these paths in the metarepo root via `{{.KrangDir}}`.
+
+2. **VCS back-references** — jj workspaces and git worktrees are
+   lightweight: they store a pointer back to the source repo's
+   object store (`.jj/repo` or `.git/worktrees/`). Without access
+   to the source repos directory, all VCS operations fail with
+   "Operation not permitted". Grant read+write access to
+   `{{.ReposDir}}` so tasks can read history and create commits.
+   Plain `git clone` workspaces are self-contained and don't need
+   this.
 
 The `sandbox_command` config supports Go template variables:
 
@@ -197,13 +210,16 @@ The `sandbox_command` config supports Go template variables:
 | `{{.TaskName}}` | Task name |
 | `{{.ReposDir}}` | Absolute path to repos directory (empty if no krang.yaml) |
 
-Example:
+Example granting config reads and full VCS access:
 
 ```json
 {
-  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude"
+  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
 }
 ```
+
+If your repos are all plain git clones (not jj workspaces or git
+worktrees), you can omit `--add-dirs={{.ReposDir}}`.
 
 Falls back to the raw string on template parse errors.
 

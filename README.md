@@ -247,13 +247,19 @@ config files:
 | `{{.TaskName}}` | Task name |
 | `{{.ReposDir}}` | Absolute path to repos directory (empty if no krang.yaml) |
 
-Example — grant read access to shared config files:
+Example — grant config reads and VCS write access for jj/worktree repos:
 
 ```json
 {
-  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
+  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
 }
 ```
+
+The `{{.ReposDir}}` write access is needed because jj workspaces and
+git worktrees reference the source repo's object store. Plain git
+clones are self-contained and don't need it. See
+[docs/workspaces.md](docs/workspaces.md#sandbox-integration) for
+details.
 
 ## File Locations
 
