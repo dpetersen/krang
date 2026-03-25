@@ -405,6 +405,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "s":
 		m.sortByPriority = !m.sortByPriority
+		m.cursor = 0
 		return m, nil
 
 	case ":":
