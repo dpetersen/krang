@@ -43,6 +43,8 @@ func (m Model) View() string {
 		if t := m.selectedTask(); t != nil {
 			modalContent = m.renderDetailModal(t)
 		}
+	case ModeCommandPalette:
+		modalContent = m.renderCommandPalette()
 	case ModeFilter:
 		top.WriteString("\n")
 		top.WriteString(m.styles.InputLabel.Render("Filter: "))
@@ -65,14 +67,16 @@ func (m Model) View() string {
 		top.WriteString(m.styles.ErrorText.Render("Flags changed. Claude will be relaunched (session resumes). Proceed? [y/N]"))
 	}
 
-	// Status bar shown in normal mode and modal overlay modes (where it's
-	// visible behind the overlay).
-	if m.mode == ModeNormal || m.mode == ModeDetail || m.mode == ModeConfirmComplete {
+	// Action bar shown in normal mode and modal overlay modes (where
+	// it's visible behind the overlay).
+	showHints := m.mode == ModeNormal || m.mode == ModeDetail ||
+		m.mode == ModeConfirmComplete || m.mode == ModeCommandPalette
+	if showHints {
 		if m.filterText != "" {
 			top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
 		}
 		top.WriteString("\n")
-		top.WriteString(m.renderStatusBar())
+		top.WriteString(m.renderActionBar())
 	}
 
 	background := m.pinToBottom(top.String())
@@ -95,21 +99,22 @@ func (m Model) renderNormalView() string {
 		top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
 	}
 	top.WriteString("\n")
-	top.WriteString(m.renderStatusBar())
+	top.WriteString(m.renderActionBar())
 	return m.pinToBottom(top.String())
 }
 
-// pinToBottom pads between the top content and the debug log to pin the
-// log to the bottom of the terminal.
+// pinToBottom pads between the top content and the debug log + footer
+// to pin them to the bottom of the terminal.
 func (m Model) pinToBottom(topStr string) string {
 	bottom := m.renderDebugLog()
+	footer := m.renderFooter()
 	topLines := strings.Count(topStr, "\n") + 1
-	bottomLines := maxVisibleLogLines + 3
+	bottomLines := maxVisibleLogLines + 3 + 1 // +1 for footer
 	gap := m.height - topLines - bottomLines
 	if gap < 0 {
 		gap = 0
 	}
-	return topStr + strings.Repeat("\n", gap) + bottom
+	return topStr + strings.Repeat("\n", gap) + bottom + "\n" + footer
 }
 
 // overlayCenter composites a foreground modal on top of a background view,
@@ -328,7 +333,57 @@ func (m Model) renderTable() string {
 			return style
 		})
 
-	return t.Render()
+	tableContent := t.Render()
+
+	// Wrap table in a box with custom bottom border containing hints.
+	borderColor := m.styles.theme.Border
+	borderStyle := lipgloss.NewStyle().Foreground(borderColor)
+	innerWidth := m.width - 4 // border (2) + padding (2)
+
+	// Top border.
+	topBorder := borderStyle.Render("╭" + strings.Repeat("─", innerWidth+2) + "╮")
+
+	// Table body with side borders.
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		BorderTop(false).
+		BorderBottom(false).
+		Padding(0, 1).
+		Width(m.width - 2)
+	middle := boxStyle.Render(tableContent)
+
+	// Bottom border with right-justified hints.
+	hints := []string{
+		m.renderHint("/", "filter"),
+		m.renderHint("s", "sort"),
+		m.renderHint("j/k", "nav"),
+	}
+
+	taskCount := len(tasks)
+	totalCount := len(m.tasks)
+	countStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+	var countStr string
+	if m.filterText != "" {
+		countStr = countStyle.Render(fmt.Sprintf("%d/%d", taskCount, totalCount))
+	} else {
+		countStr = countStyle.Render(fmt.Sprintf("%d tasks", totalCount))
+	}
+	if m.sortByPriority {
+		countStr += countStyle.Render(" · priority")
+	}
+
+	hintsStr := " " + strings.Join(hints, "  ") + "  " + countStr + " "
+	hintsWidth := lipgloss.Width(hintsStr)
+	lineLen := innerWidth + 2 - hintsWidth
+	if lineLen < 1 {
+		lineLen = 1
+	}
+	bottomBorder := borderStyle.Render("╰"+strings.Repeat("─", lineLen)) +
+		hintsStr +
+		borderStyle.Render("╯")
+
+	return topBorder + "\n" + middle + "\n" + bottomBorder
 }
 
 func (m Model) taskRowStyle(t db.Task) lipgloss.Style {
@@ -411,54 +466,81 @@ func (m Model) attentionWithProcs(t db.Task) string {
 	return label
 }
 
-// styledHint renders a "[key]label" hint with the bracketed key in accent color.
-func (m Model) styledHint(hint string) string {
-	open := strings.Index(hint, "[")
-	close := strings.Index(hint, "]")
-	if open < 0 || close < 0 || close <= open {
-		return m.styles.StatusBar.Render(hint)
-	}
-	accentStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
-	before := hint[:open]
-	key := hint[open : close+1]
-	after := hint[close+1:]
-	return before + accentStyle.Render(key) + after
+// renderHint renders a "key label" hint with the key in accent color
+// and the label in muted color.
+func (m Model) renderHint(key, label string) string {
+	keyStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
+	labelStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+	return keyStyle.Render(key) + " " + labelStyle.Render(label)
 }
 
-func (m Model) renderStatusBar() string {
-	var rawHints []string
-
-	rawHints = append(rawHints, "[n]ew")
+func (m Model) renderActionBar() string {
+	hints := []string{m.renderHint("n", "new")}
 	if m.selectedTask() != nil {
-		rawHints = append(rawHints, "[enter]focus", "[tab]detail")
+		hints = append(hints,
+			m.renderHint("enter", "focus"),
+			m.renderHint("tab", "detail"),
+			m.renderHint("c", "complete"),
+		)
 	}
-	rawHints = append(rawHints, "[/]filter", "[?]help", "[q]uit")
+	return " " + strings.Join(hints, "  ")
+}
 
-	var styledHints []string
-	for _, h := range rawHints {
-		styledHints = append(styledHints, m.styledHint(h))
+func (m Model) renderFooter() string {
+	hints := []string{
+		m.renderHint(":", "command"),
+		m.renderHint("?", "help"),
+		m.renderHint("q", "quit"),
 	}
-	left := strings.Join(styledHints, "  ")
+	return " " + strings.Join(hints, "  ")
+}
 
-	taskCount := len(m.filteredTasks())
-	totalCount := len(m.tasks)
-	var right string
-	if m.filterText != "" {
-		right = fmt.Sprintf("%d/%d tasks", taskCount, totalCount)
-	} else {
-		right = fmt.Sprintf("%d tasks", totalCount)
-	}
-	if m.sortByPriority {
-		right += " | priority"
+func (m Model) renderCommandPalette() string {
+	cmds := paletteCommands(m)
+
+	var content strings.Builder
+	content.WriteString(m.styles.ModalTitle.Render("Commands"))
+	content.WriteString("\n\n")
+
+	for i, cmd := range cmds {
+		cursor := "  "
+		if i == m.paletteCursor {
+			cursor = "> "
+		}
+		nameStyle := m.styles.ModalContent
+		if i == m.paletteCursor {
+			nameStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(m.styles.theme.Accent)
+		}
+		line := cursor + nameStyle.Render(cmd.Name) +
+			m.styles.ModalContent.Render("  "+cmd.Desc)
+		content.WriteString(line)
+		if i < len(cmds)-1 {
+			content.WriteString("\n")
+		}
 	}
 
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 2 {
-		gap = 2
+	content.WriteString("\n\n")
+	content.WriteString("  " + m.renderHint("j/k", "navigate") + "  " +
+		m.renderHint("enter", "run") + "  " +
+		m.renderHint("esc", "close"))
+
+	modalWidth := m.width / 2
+	if modalWidth < 50 {
+		modalWidth = 50
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
 	}
 
-	bar := left + strings.Repeat(" ", gap) + right
-	return m.styles.StatusBar.Render(bar)
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(content.String())
 }
 
 func krangWorkingDir() string {
@@ -504,9 +586,8 @@ func (m Model) renderHelp() string {
 	// Inner width accounts for border (2) + padding (4).
 	innerWidth := modalWidth - 6
 
-	footer := m.styles.ModalContent.Render(
-		fmt.Sprintf("%-*s", innerWidth, "  q/esc/?  Close    j/k  Scroll"),
-	)
+	footerHints := "  " + m.renderHint("q/esc/?", "Close") + "    " + m.renderHint("j/k", "Scroll")
+	footer := fmt.Sprintf("%-*s", innerWidth, footerHints)
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -521,56 +602,79 @@ func (m Model) renderHelp() string {
 	return overlayCenter(bg, content, m.width, m.height)
 }
 
-func buildHelpMarkdown() string {
-	return `# Global Keys
+func (m Model) buildHelpContent() string {
+	title := lipgloss.NewStyle().Bold(true).Foreground(m.styles.theme.Title)
+	desc := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+	subtitle := lipgloss.NewStyle().Italic(true).Foreground(m.styles.theme.Muted)
 
-- **n** — Create new task
-- **i** — Import existing Claude session
-- **Enter** — Focus selected task window
-- **Tab** — Open task detail modal
-- **d** — Complete task (with confirmation)
-- **j/k** — Navigate up/down
-- **s** — Toggle sort (created / priority)
-- **S** — Sit rep (briefing on all active tasks)
-- **r** — Refresh AI summaries
-- **C** — Compact windows (renumber sequentially)
-- **/** — Filter tasks (esc to clear)
-- **?** — Toggle this help
-- **q** — Quit krang (tasks keep running)
+	type hint struct{ key, label string }
+	renderSection := func(hints []hint) string {
+		var sb strings.Builder
+		for _, h := range hints {
+			sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", h.key), h.label) + "\n")
+		}
+		return sb.String()
+	}
 
-# Detail Modal Keys
+	var sb strings.Builder
 
-*Press Tab on a task to open*
+	sb.WriteString(title.Render("Global Keys") + "\n\n")
+	sb.WriteString(renderSection([]hint{
+		{"n", "Create new task"},
+		{"enter", "Focus selected task window"},
+		{"tab", "Open task detail modal"},
+		{"c", "Complete task (with confirmation)"},
+		{"j/k", "Navigate up/down"},
+		{"s", "Toggle sort (created / priority)"},
+		{"/", "Filter tasks (esc to clear)"},
+		{":", "Command palette (sit rep, import, compact)"},
+		{"?", "Toggle this help"},
+		{"q", "Quit krang (tasks keep running)"},
+	}))
 
-- **p** — Park / unpark (toggles based on state)
-- **f** — Freeze / unfreeze (toggles based on state)
-- **d** — Complete task
-- **+** — Create companion window
-- **F** — Edit task flags (sandbox, permissions)
-- **W** — Add repos to workspace task
-- **Enter** — Focus task window
-- **Esc/Tab** — Close modal
+	sb.WriteString("\n" + title.Render("Detail Modal Keys") + "\n")
+	sb.WriteString(subtitle.Render("  Press Tab on a task to open") + "\n\n")
+	sb.WriteString(renderSection([]hint{
+		{"p", "Park / unpark (toggles based on state)"},
+		{"f", "Freeze / unfreeze (toggles based on state)"},
+		{"c", "Complete task"},
+		{"+", "Create companion window"},
+		{"F", "Edit task flags (sandbox, permissions)"},
+		{"W", "Add repos to workspace task"},
+		{"enter", "Focus task window"},
+		{"esc/tab", "Close modal"},
+	}))
 
-# Task States
+	sb.WriteString("\n" + title.Render("Task States") + "\n\n")
+	for _, item := range []hint{
+		{"active", "Running in krang's tmux session. Claude is working or waiting for input."},
+		{"parked", "Moved to a background session. Claude is still running but not visible."},
+		{"frozen", "No tmux window. Session ID saved for --resume. Paused, no resources used."},
+	} {
+		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
+	}
 
-- **active** — Running in krang's tmux session. Claude Code is actively working or waiting for input.
-- **parked** — Moved to a background tmux session. Claude is still running but not visible. Park tasks to reduce clutter.
-- **frozen** — No tmux window. Session ID saved so Claude can resume with ` + "`--resume`" + `. Use this for tasks you want to pause without using resources.
+	sb.WriteString("\n" + title.Render("Attention States") + "\n\n")
+	for _, item := range []hint{
+		{"ok", "Claude is working normally."},
+		{"wait", "Claude stopped and is waiting for your input."},
+		{"PERM", "A permission prompt is blocking Claude."},
+		{"ERR", "Something went wrong (e.g. stop failure)."},
+		{"done", "Claude self-reported the task as complete."},
+	} {
+		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
+	}
 
-# Attention States
+	sb.WriteString("\n" + title.Render("Glossary") + "\n\n")
+	for _, item := range []struct{ term, def string }{
+		{"Companion window", "A shell window (<name>+) tied to a task. Travels on park/unpark, destroyed on freeze."},
+		{"Sort modes", "Created (default) shows all tasks in order. Priority shows active tasks by urgency."},
+	} {
+		accentStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
+		sb.WriteString("  " + accentStyle.Render(item.term) + " " + desc.Render(item.def) + "\n")
+	}
 
-- **ok** — Claude is working normally.
-- **wait** — Claude stopped and is waiting for your input. Switch to the task window to continue.
-- **PERM** — A permission prompt is blocking Claude. Approve or deny it in the task window.
-- **ERR** — Something went wrong (e.g. stop failure).
-- **done** — Claude self-reported the task as complete via the TaskCompleted hook.
-
-# Glossary
-
-- **Companion window** — A shell window (` + "`<name>+`" + `) associated with a task. Created with ` + "`+`" + ` in the detail modal. Travels with the task on park/unpark and is destroyed on freeze.
-- **Window naming** — ` + "`<name>`" + ` for task windows, ` + "`<name>+`" + ` for companion windows.
-- **Sort modes** — *Created* (default) shows all tasks in creation order. *Priority* shows only active tasks sorted by attention urgency: PERM > ERR > wait > ok > done.
-`
+	return sb.String()
 }
 
 func (m Model) renderConfirmComplete(t *db.Task) string {
@@ -585,7 +689,7 @@ func (m Model) renderConfirmComplete(t *db.Task) string {
 		content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  • Workspace at %s will be deleted", wsPath)))
 	}
 	content.WriteString("\n\n")
-	content.WriteString(m.styles.ModalContent.Render("          [y] Confirm  [n] Cancel"))
+	content.WriteString("          " + m.renderHint("y", "Confirm") + "  " + m.renderHint("n", "Cancel"))
 
 	modalWidth := m.width / 2
 	if modalWidth < 44 {
@@ -667,19 +771,19 @@ func (m Model) renderDetailModal(t *db.Task) string {
 			action{"enter", "Focus task window"},
 			action{"p", "Park"},
 			action{"f", "Freeze"},
-			action{"d", "Complete"},
+			action{"c", "Complete"},
 			action{"+", "Create companion"},
 		)
 	case db.StateParked:
 		actions = append(actions,
 			action{"p", "Unpark"},
 			action{"f", "Freeze"},
-			action{"d", "Complete"},
+			action{"c", "Complete"},
 		)
 	case db.StateDormant:
 		actions = append(actions,
 			action{"f", "Unfreeze"},
-			action{"d", "Complete"},
+			action{"c", "Complete"},
 		)
 	}
 
@@ -692,13 +796,12 @@ func (m Model) renderDetailModal(t *db.Task) string {
 	}
 
 	for _, a := range actions {
-		line := fmt.Sprintf("  %-6s %s", a.key, a.desc)
-		content.WriteString(m.styles.ModalContent.Render(line))
+		content.WriteString("  " + m.renderHint(fmt.Sprintf("%-6s", a.key), a.desc))
 		content.WriteString("\n")
 	}
 
 	content.WriteString("\n")
-	content.WriteString(m.styles.ModalContent.Render("  esc/tab  Close"))
+	content.WriteString("  " + m.renderHint("esc/tab", "Close"))
 
 	modalWidth := m.width / 2
 	if modalWidth < 40 {

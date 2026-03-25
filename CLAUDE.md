@@ -38,15 +38,21 @@ Multiple krang instances can run simultaneously for different working directorie
 
 The TUI uses a two-tier keybinding system: a minimal set of global keys on the main screen, and per-task actions in a detail modal.
 
-**Global keys** (shown in footer): `n` new, `Enter` focus, `Tab` detail modal, `/` filter, `?` help, `q` quit. Additional global keys discoverable via help: `d` complete, `i` import, `s` sort, `S` sitrep, `r` refresh, `C` compact, `j/k` navigate.
+Hints are placed in three zones below the table:
 
-**Detail modal** (`Tab` on a selected task): centered overlay showing task info (cwd, age, flags, background processes) and context-sensitive actions. Toggle keys: `f` freeze/unfreeze, `p` park/unpark. Also: `d` complete, `+` companion, `F` flags, `W` add repos, `Enter` focus. Closes with `Esc`/`Tab`.
+- **Table toolbar** — list-specific: `/` filter, `s` sort, `j/k` nav, plus task count
+- **Action bar** — task actions: `n` new, `enter` focus, `tab` detail, `c` complete (shown when a task is selected)
+- **Footer** — global: `:` command palette, `?` help, `q` quit
 
-**Complete** (`d`): unified action replacing the former separate kill/complete. Shows consequence-aware confirmation modal stating what will happen (process stop, workspace deletion). Sets `StateCompleted` + `AttentionDone`. `StateFailed` is only set by the reconciler when windows vanish unexpectedly.
+**Command palette** (`:`): modal overlay listing rare commands (sit rep, import, compact windows). Navigate with `j/k`, run with `enter`, close with `esc`.
+
+**Detail modal** (`Tab` on a selected task): centered overlay showing task info (cwd, age, flags, background processes) and context-sensitive actions. Toggle keys: `f` freeze/unfreeze, `p` park/unpark. Also: `c` complete, `+` companion, `F` flags, `W` add repos, `Enter` focus. Closes with `Esc`/`Tab`.
+
+**Complete** (`c`): unified action replacing the former separate kill/complete. Shows consequence-aware confirmation modal stating what will happen (process stop, workspace deletion). Sets `StateCompleted` + `AttentionDone`. `StateFailed` is only set by the reconciler when windows vanish unexpectedly.
 
 ## Modal Overlays
 
-Modals (detail, confirm, help) render as centered boxes over a dimmed background using `overlayCenter()` in view.go. The background is the full normal view (header, table, status bar, debug log) with ANSI faint applied. The `renderNormalView()` helper provides the background for modes that need it.
+Modals (detail, confirm, help, command palette) render as centered boxes over a dimmed background using `overlayCenter()` in view.go. The background is the full normal view (header, table, hint bars, debug log) with ANSI faint applied. The `renderNormalView()` helper provides the background for modes that need it.
 
 ## Table # Column
 

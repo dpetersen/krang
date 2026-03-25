@@ -75,6 +75,8 @@ type Model struct {
 	windowIndexes map[string]string // tmux window ID → display index
 
 	windowStylesSynced bool
+
+	paletteCursor int
 }
 
 type flagDefinition struct {
@@ -333,6 +335,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleRepoSelectKey(msg)
 	case ModeConfirmRelaunch:
 		return m.handleConfirmRelaunchKey(msg)
+	case ModeCommandPalette:
+		return m.handleCommandPaletteKey(msg)
 	default:
 		return m.handleNormalKey(msg)
 	}
@@ -393,7 +397,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "d":
+	case "c":
 		if m.selectedTask() != nil {
 			m.mode = ModeConfirmComplete
 		}
@@ -403,22 +407,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sortByPriority = !m.sortByPriority
 		return m, nil
 
-	case "r":
-		return m, m.doSummarize
-
-	case "S":
-		m.mode = ModeSitRepLoading
-		return m, m.generateSitRep
-
-	case "i":
-		form, result := newImportForm(m.taskStore.NameInUse, m.huhTheme())
-		m.activeForm = form
-		m.importFormResult = result
-		m.mode = ModeForm
-		return m, m.activeForm.Init()
-
-	case "C":
-		return m, m.compactWindows()
+	case ":":
+		m.paletteCursor = 0
+		m.mode = ModeCommandPalette
+		return m, nil
 
 	case "?":
 		modalWidth := m.width * 2 / 3
@@ -437,21 +429,8 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			vpHeight = 6
 		}
 
-		content := buildHelpMarkdown()
-		renderer, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(innerWidth),
-		)
-		var rendered string
-		if err == nil {
-			rendered, err = renderer.Render(content)
-		}
-		if err != nil {
-			rendered = content
-		}
-
 		m.helpViewport = viewport.New(innerWidth, vpHeight)
-		m.helpViewport.SetContent(rendered)
+		m.helpViewport.SetContent(m.buildHelpContent())
 		m.mode = ModeHelp
 		return m, nil
 
@@ -506,6 +485,70 @@ func (m Model) handleSitRepKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.sitRepViewport, cmd = m.sitRepViewport.Update(msg)
 	return m, cmd
+}
+
+type paletteCommand struct {
+	Name string
+	Desc string
+	Run  func(m Model) (tea.Model, tea.Cmd)
+}
+
+func paletteCommands(m Model) []paletteCommand {
+	return []paletteCommand{
+		{
+			Name: "Sit Rep",
+			Desc: "Generate a briefing on all active tasks",
+			Run: func(m Model) (tea.Model, tea.Cmd) {
+				m.mode = ModeSitRepLoading
+				return m, m.generateSitRep
+			},
+		},
+		{
+			Name: "Import",
+			Desc: "Import an existing Claude Code session as a task",
+			Run: func(m Model) (tea.Model, tea.Cmd) {
+				form, result := newImportForm(m.taskStore.NameInUse, m.huhTheme())
+				m.activeForm = form
+				m.importFormResult = result
+				m.mode = ModeForm
+				return m, m.activeForm.Init()
+			},
+		},
+		{
+			Name: "Compact",
+			Desc: "Renumber tmux windows sequentially",
+			Run: func(m Model) (tea.Model, tea.Cmd) {
+				m.mode = ModeNormal
+				return m, m.compactWindows()
+			},
+		},
+	}
+}
+
+func (m Model) handleCommandPaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	cmds := paletteCommands(m)
+	switch msg.String() {
+	case "esc", ":":
+		m.mode = ModeNormal
+		return m, nil
+	case "j", "down":
+		if m.paletteCursor < len(cmds)-1 {
+			m.paletteCursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.paletteCursor > 0 {
+			m.paletteCursor--
+		}
+		return m, nil
+	case "enter":
+		if m.paletteCursor >= 0 && m.paletteCursor < len(cmds) {
+			return cmds[m.paletteCursor].Run(m)
+		}
+		m.mode = ModeNormal
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m Model) generateSitRep() tea.Msg {
@@ -781,7 +824,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "d":
+	case "c":
 		m.mode = ModeConfirmComplete
 		return m, nil
 

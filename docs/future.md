@@ -39,9 +39,9 @@ Currently `complete` and `kill` are separate operations with only a semantic dif
 - **Fuzzy filter in repo picker** — Ctrl-F (or `/`) to enter a fuzzy search mode that narrows the repo picker list as you type. Useful when the repos directory has dozens of repos and scrolling through j/k is painful. Could reuse the existing `textinput` component from the task filter and apply fuzzy matching to both set names and repo names.
 - **Tmux window number in # column** — Replace the current sequential row index with the actual tmux window number. This lets users mentally map table rows to `Ctrl-B <n>` for quick switching. Parked and frozen tasks would show a blank since they have no active window. Requires reading the window index from tmux (already available in the window name/target).
 
-## Hotkey Hint Placement
+## ~~Hotkey Hint Placement~~ (Done)
 
-The slim footer solved the "wall of keybindings" problem but introduced hidden hotkeys (sort, import, sitrep, compact, refresh). The principle should be: **no hidden hotkeys** — if it works, it's visible somewhere. The solution likely involves rethinking *where* hints are placed, not just which ones are shown. Ideas: header region, context-sensitive hint areas, or a second hint row. Figure this out after the core workflow is solid.
+Implemented: three-zone hint layout (table toolbar, action bar, footer) plus a command palette (`:`) for rare commands (sit rep, import, compact). No hidden hotkeys remain.
 
 ## Discoverability & Feedback
 

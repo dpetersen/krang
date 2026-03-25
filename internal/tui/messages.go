@@ -52,6 +52,7 @@ const (
 	ModeForm
 	ModeRepoSelect
 	ModeWorkspaceProgress
+	ModeCommandPalette
 )
 
 type formType int

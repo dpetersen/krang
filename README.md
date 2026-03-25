@@ -272,27 +272,33 @@ details.
 
 ## Keybindings
 
+### Global Keys
+
 | Key | Action |
 |-----|--------|
 | `n` | New task |
-| `i` | Import existing Claude session |
 | `Enter` | Focus task (switch to its tmux window) |
-| `p` | Park task |
-| `u` | Unpark task |
-| `f` | Freeze task |
-| `t` | Thaw (wake) frozen task |
-| `c` | Mark task completed |
-| `x` | Kill task (with confirmation) |
+| `Tab` | Open task detail modal |
+| `c` | Complete task (with confirmation) |
+| `j/k` | Navigate up/down |
+| `s` | Toggle sort mode (created / priority) |
+| `/` | Filter tasks |
+| `:` | Command palette (sit rep, import, compact) |
+| `?` | Help |
+| `q` | Quit |
+
+### Detail Modal Keys
+
+| Key | Action |
+|-----|--------|
+| `p` | Park / unpark |
+| `f` | Freeze / unfreeze |
+| `c` | Complete task |
 | `+` | Create companion window |
 | `F` | Edit task flags |
 | `W` | Add repos to workspace task |
-| `S` | Generate sit rep |
-| `r` | Refresh AI summaries |
-| `s` | Toggle sort mode (created / priority) |
-| `C` | Compact windows (renumber) |
-| `/` | Filter tasks |
-| `?` | Help |
-| `q` | Quit |
+| `Enter` | Focus task window |
+| `Esc/Tab` | Close modal |
 
 ## Debugging
 
