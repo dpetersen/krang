@@ -129,6 +129,29 @@ func TestWindowColorUnstyledStates(t *testing.T) {
 	}
 }
 
+func TestClassifyAttentionEnabledByDefault(t *testing.T) {
+	cfg := Config{}
+	if !cfg.ClassifyAttentionEnabled() {
+		t.Error("expected classify attention enabled by default (nil pointer)")
+	}
+}
+
+func TestClassifyAttentionEnabled(t *testing.T) {
+	enabled := true
+	cfg := Config{ClassifyAttention: &enabled}
+	if !cfg.ClassifyAttentionEnabled() {
+		t.Error("expected classify attention enabled")
+	}
+}
+
+func TestClassifyAttentionExplicitlyDisabled(t *testing.T) {
+	disabled := false
+	cfg := Config{ClassifyAttention: &disabled}
+	if cfg.ClassifyAttentionEnabled() {
+		t.Error("expected classify attention disabled")
+	}
+}
+
 func TestWindowColorsEnabledByDefault(t *testing.T) {
 	cfg := Config{}
 	if !cfg.WindowColorsActive() {

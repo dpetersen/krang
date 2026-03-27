@@ -122,6 +122,17 @@ func (s *TaskStore) ListAll() ([]Task, error) {
 	return scanTasks(rows)
 }
 
+func (s *TaskStore) Get(id string) (*Task, error) {
+	row := s.db.QueryRow(
+		`SELECT id, name, COALESCE(prompt, ''), state, attention,
+		        COALESCE(session_id, ''), cwd, COALESCE(tmux_window, ''),
+		        summary, summary_hash, transcript_path, flags, workspace_dir, created_at, updated_at
+		 FROM tasks WHERE id = ?`,
+		id,
+	)
+	return scanTask(row)
+}
+
 func (s *TaskStore) GetBySessionID(sessionID string) (*Task, error) {
 	row := s.db.QueryRow(
 		`SELECT id, name, COALESCE(prompt, ''), state, attention,

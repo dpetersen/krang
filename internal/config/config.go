@@ -10,6 +10,7 @@ import (
 type Config struct {
 	SandboxCommand        string `json:"sandbox_command"`
 	Theme                 string `json:"theme,omitempty"`
+	ClassifyAttention     *bool  `json:"classify_attention,omitempty"`
 	WindowColorsEnabled   *bool  `json:"window_colors_enabled,omitempty"`
 	WindowColorPermission string `json:"window_color_permission,omitempty"`
 	WindowColorWaiting    string `json:"window_color_waiting,omitempty"`
@@ -19,6 +20,10 @@ const (
 	DefaultColorPermission = "red"
 	DefaultColorWaiting    = "yellow"
 )
+
+func (c Config) ClassifyAttentionEnabled() bool {
+	return c.ClassifyAttention == nil || *c.ClassifyAttention
+}
 
 func (c Config) WindowColorsActive() bool {
 	return c.WindowColorsEnabled == nil || *c.WindowColorsEnabled

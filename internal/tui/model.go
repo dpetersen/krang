@@ -13,8 +13,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/huh"
+	"github.com/dpetersen/krang/internal/classify"
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
@@ -71,6 +71,7 @@ type Model struct {
 	taskProcesses map[string]*proctree.TaskProcesses
 
 	pendingOps   map[string]string // taskID → operation label (e.g. "freezing...")
+	classifyGen  map[string]uint64 // taskID → generation counter for cancellation
 	spinner      spinner.Model
 	windowIndexes map[string]string // tmux window ID → display index
 
@@ -121,7 +122,6 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	rs, _ := workspace.Load(cwd)
 
 	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
-	s.Style = lipgloss.NewStyle().Foreground(styles.theme.Warning)
 
 	return Model{
 		manager:         manager,
@@ -136,6 +136,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		repoSets:        rs,
 		filterInput:     filterInput,
 		pendingOps:      make(map[string]string),
+		classifyGen:     make(map[string]uint64),
 		spinner:         s,
 	}
 }
@@ -194,14 +195,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			logLine += " tool=" + msg.Event.ToolName
 		}
 		m.appendDebugLog(logLine)
+
+		// Bump generation to invalidate any in-flight classification.
+		m.classifyGen[t.ID]++
+		delete(m.pendingOps, t.ID)
+
+		classifying := msg.Event.HookEventName == "Stop" &&
+			m.cfg.ClassifyAttentionEnabled() &&
+			msg.Event.LastAssistantMessage != ""
+
 		cmds := []tea.Cmd{
-			m.handleHookEvent(msg.Event),
+			m.handleHookEvent(msg.Event, classifying),
 			m.waitForHookEvent(),
 		}
-		// Collect processes immediately when Claude stops — this is
-		// when background children matter most for the UI.
 		if msg.Event.HookEventName == "Stop" {
 			cmds = append(cmds, m.collectProcesses)
+
+			if classifying {
+				gen := m.classifyGen[t.ID]
+				m.pendingOps[t.ID] = ""
+				cmds = append(cmds,
+					m.classifyAttention(t.ID, t.Name, msg.Event.LastAssistantMessage, m.taskProcesses[t.ID], gen),
+					m.spinner.Tick,
+				)
+			}
 		}
 		return m, tea.Batch(cmds...)
 
@@ -291,6 +308,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refreshTasks
 		}
 		return m, nil
+
+	case classifyResultMsg:
+		delete(m.pendingOps, msg.TaskID)
+		if m.classifyGen[msg.TaskID] != msg.Generation {
+			// Stale result — a newer hook event already arrived.
+			return m, m.refreshTasks
+		}
+		if msg.Err != nil {
+			m.appendDebugLog(fmt.Sprintf("[%s] classify: %s: %v",
+				time.Now().Format("15:04:05"), msg.TaskID, msg.Err))
+			// Fall back to waiting on error.
+			return m, m.applyClassificationResult(msg.TaskID, db.AttentionWaiting)
+		}
+		if msg.NeedsAttention {
+			return m, m.applyClassificationResult(msg.TaskID, db.AttentionWaiting)
+		}
+		return m, m.applyClassificationResult(msg.TaskID, db.AttentionDone)
 
 	case pendingOpDoneMsg:
 		delete(m.pendingOps, msg.TaskID)
@@ -1256,7 +1290,7 @@ func (m Model) waitForHookEvent() tea.Cmd {
 	}
 }
 
-func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
+func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool) tea.Cmd {
 	return func() tea.Msg {
 		// Task lookup already done in Update — safe to look up again for the DB writes.
 		t, err := m.taskStore.GetBySessionID(event.SessionID)
@@ -1267,6 +1301,14 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 		_ = m.eventStore.Log(t.ID, event.HookEventName, event.RawPayload)
 
 		attention, ok := hooks.AttentionFromEvent(event)
+		if ok {
+			// When classification is in flight, don't set the
+			// intermediate AttentionWaiting — let the classifier
+			// decide the final state.
+			if classifying && attention == db.AttentionWaiting {
+				ok = false
+			}
+		}
 		if ok {
 			_ = m.taskStore.UpdateAttention(t.ID, attention)
 			if t.TmuxWindow != "" {
@@ -1287,6 +1329,31 @@ func (m Model) handleHookEvent(event hooks.HookEvent) tea.Cmd {
 		}
 
 		return m.refreshTasks()
+	}
+}
+
+func (m Model) applyClassificationResult(taskID string, attention db.AttentionState) tea.Cmd {
+	return func() tea.Msg {
+		_ = m.taskStore.UpdateAttention(taskID, attention)
+		if t, _ := m.taskStore.Get(taskID); t != nil && t.TmuxWindow != "" {
+			applyWindowStyle(t.TmuxWindow, attention, m.cfg)
+		}
+		return m.refreshTasks()
+	}
+}
+
+func (m Model) classifyAttention(taskID, taskName, lastMsg string, tp *proctree.TaskProcesses, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		procCtx := proctree.FormatForPrompt(tp)
+		result, err := classify.Classify(taskName, lastMsg, procCtx)
+		if err != nil {
+			return classifyResultMsg{TaskID: taskID, Generation: gen, Err: err}
+		}
+		return classifyResultMsg{
+			TaskID:         taskID,
+			Generation:     gen,
+			NeedsAttention: result.NeedsAttention,
+		}
 	}
 }
 

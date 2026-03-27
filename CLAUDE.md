@@ -7,7 +7,8 @@ TUI task orchestrator for managing multiple Claude Code sessions via tmux.
 - **Go + Bubble Tea** TUI running in a tmux window
 - **SQLite** per-instance at `~/.local/share/krang/instances/<encoded-cwd>/krang.db` (override with `KRANG_DB` env var)
 - **Claude Code command hooks** via relay script that reads `KRANG_STATEFILE` for the dynamic port
-- **AI summaries** via `claude -p --model haiku` with structured JSON output
+- **AI summaries** via `claude -p --model haiku` with structured JSON output (includes current summary in prompt to reduce churn)
+- **Attention classification** via Haiku on Stop events to distinguish "done" vs "waiting"
 - Claude spawned via configurable sandbox wrapper
 
 ## Multi-Instance Support
@@ -22,7 +23,7 @@ Multiple krang instances can run simultaneously for different working directorie
 
 | Path | Purpose | XDG category |
 |------|---------|-------------|
-| `~/.config/krang/config.json` | Sandbox command, window colors | Config |
+| `~/.config/krang/config.json` | Sandbox command, window colors, attention classification | Config |
 | `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Config |
 | `~/.local/share/krang/instances/…/krang.db` | Per-instance SQLite database | Data |
 | `~/.local/state/krang/instances/…/krang-state.json` | Per-instance port file (ephemeral, exists while running) | State |
@@ -72,6 +73,7 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 - `internal/tmux/` — session/window/pane operations via `tmux` CLI
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
 - `internal/hooks/` — HTTP server for Claude Code hook events, relay script + settings.json installer
+- `internal/classify/` — Haiku-based attention classification (done vs waiting) on Stop events
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
 - `internal/proctree/` — process tree walking, noise/age filtering, leaf-only display for background child process awareness
 - `internal/workspace/` — `krang.yaml` parsing, workspace creation/destruction, VCS operations (jj workspace add, local git clone)
@@ -82,6 +84,26 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 Styles are derived from a `Theme` struct with semantic color roles (Title, Error, Active, etc.). The `Styles` struct holds precomputed lipgloss styles built via `BuildStyles(theme)` and retains a `theme` field for direct color access. Available themes: `classic` (original ANSI 256 colors), `catppuccin-mocha` (default), `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`. Set via `"theme"` field in config.json.
 
 Color is used throughout: accent-colored key hints in the footer, state-colored counts in the header (parked blue, frozen gray, active default white), accent-colored "Events" label in the debug log, and differentiated timestamps (faint accent) vs message text (muted) in log entries.
+
+## Attention Classification
+
+On `Stop` hook events, krang classifies Claude's `last_assistant_message` via Haiku to determine whether Claude is asking a question (`AttentionWaiting`) or finished work (`AttentionDone`). This runs as an async `tea.Cmd` — the task shows a spinner in the Attn column while classification is in flight, with no color change until the result arrives.
+
+A `classifyGen map[string]uint64` generation counter on the Model handles cancellation: every hook event bumps the counter, and stale classification results are discarded. On error, falls back to `AttentionWaiting`.
+
+When classification is active, `handleHookEvent` skips setting `AttentionWaiting` on Stop — the classifier sets the final state. When disabled (`"classify_attention": false` in config), Stop immediately sets `AttentionWaiting` as before.
+
+**Attention color scheme:**
+
+| State | Color | Label | Meaning |
+|-------|-------|-------|---------|
+| ok | uncolored | "ok" | Claude is working |
+| done | green | "done" | Claude finished work |
+| wait | yellow | "wait" | Claude is asking a question |
+| PERM | bold red | "PERM" | Permission prompt blocking |
+| ERR | red | "ERR" | Stop failure |
+
+The spinner has no hardcoded color — it inherits the row style from `StyleFunc`.
 
 ## Async Feedback
 

@@ -112,6 +112,10 @@ Some users (and teams) use Docker sandboxing for Claude Code, which requires poi
 - **Docker-specific concerns** — Dockerfile path, build caching, volume mounts for the working directory and krang state paths, env var passthrough (`KRANG_STATEFILE`, `KRANG_DEBUG`), and ensuring the relay script is accessible inside the container.
 - **Backward compatibility** — if the old `sandbox_command` string is present, treat it as a single `"command"` type sandbox named `"default"`.
 
+## Task Forking
+
+Fork an existing task to branch off a new task with the same conversation history but an independent workspace. See [forking.md](forking.md) for the full design sketch covering Claude's `--fork-session` flag, the jj-vs-git workspace story, and open questions.
+
 ## Technical
 
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL

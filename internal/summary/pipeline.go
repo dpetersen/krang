@@ -67,7 +67,7 @@ func (p *Pipeline) summarizeTask(task db.Task, processContext string) string {
 	p.aiSemaphore <- struct{}{}
 	defer func() { <-p.aiSemaphore }()
 
-	result, err := Summarize(task.Name, stripped, processContext)
+	result, err := Summarize(task.Name, stripped, processContext, task.Summary)
 	if err != nil {
 		return fmt.Sprintf("%s: AI error: %v", task.Name, err)
 	}

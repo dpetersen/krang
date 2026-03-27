@@ -14,13 +14,17 @@ type SummaryResult struct {
 
 const jsonSchema = `{"type":"object","properties":{"one_liner":{"type":"string","description":"Under 60 chars summarizing the TOPIC or WORK being done, not the UI state"},"phase":{"type":"string","enum":["planning","coding","testing","debugging","waiting","error","done"]}},"required":["one_liner","phase"]}`
 
-func Summarize(taskName, paneContent, processContext string) (*SummaryResult, error) {
+func Summarize(taskName, paneContent, processContext, currentSummary string) (*SummaryResult, error) {
 	promptText := fmt.Sprintf(`This is terminal output from a Claude Code session named %q running in tmux. Summarize what TOPIC or WORK this session is about in under 60 characters. Focus on the subject matter being discussed or the code being written, NOT the UI state (don't say "waiting for input" or "idle" — I already know that from other signals).
 
 Terminal output:
 ---
 %s
 ---`, taskName, paneContent)
+
+	if currentSummary != "" {
+		promptText += fmt.Sprintf("\n\nCurrent summary: %q\nIf this summary is still accurate, return it unchanged. Only write a new summary if the current one is materially wrong or the work has clearly shifted to something different.", currentSummary)
+	}
 
 	if processContext != "" {
 		promptText += "\n\n" + processContext

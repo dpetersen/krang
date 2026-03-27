@@ -291,7 +291,11 @@ func (m Model) renderTable() string {
 
 		attn := m.attentionWithProcs(t)
 		if op, ok := m.pendingOps[t.ID]; ok {
-			attn = m.spinner.View() + " " + op
+			if op != "" {
+				attn = m.spinner.View() + " " + op
+			} else {
+				attn = m.spinner.View()
+			}
 		}
 
 		windowIdx := ""

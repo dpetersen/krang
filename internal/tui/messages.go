@@ -79,3 +79,10 @@ type workspaceProgressMsg struct {
 type pendingOpDoneMsg struct {
 	TaskID string
 }
+
+type classifyResultMsg struct {
+	TaskID         string
+	Generation     uint64
+	NeedsAttention bool
+	Err            error
+}
