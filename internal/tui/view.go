@@ -587,7 +587,11 @@ func (m Model) renderHelp() string {
 	innerWidth := modalWidth - 6
 
 	footerHints := "  " + m.renderHint("q/esc/?", "Close") + "    " + m.renderHint("j/k", "Scroll")
-	footer := fmt.Sprintf("%-*s", innerWidth, footerHints)
+	scrollPct := ""
+	if m.helpViewport.TotalLineCount() > m.helpViewport.VisibleLineCount() {
+		scrollPct = fmt.Sprintf("%.0f%%", m.helpViewport.ScrollPercent()*100)
+	}
+	footer := fmt.Sprintf("%-*s%s", innerWidth-len(scrollPct), footerHints, scrollPct)
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -648,8 +652,8 @@ func (m Model) buildHelpContent() string {
 	sb.WriteString("\n" + title.Render("Task States") + "\n\n")
 	for _, item := range []hint{
 		{"active", "Running in krang's tmux session. Claude is working or waiting for input."},
-		{"parked", "Moved to a background session. Claude is still running but not visible."},
-		{"frozen", "No tmux window. Session ID saved for --resume. Paused, no resources used."},
+		{"parked", "Moved to a background tmux session. Claude keeps running but is out of sight."},
+		{"frozen", "Tmux window destroyed, session ID saved. No resources used. Resume later with --resume."},
 	} {
 		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
 	}
@@ -660,17 +664,17 @@ func (m Model) buildHelpContent() string {
 		{"wait", "Claude stopped and is waiting for your input."},
 		{"PERM", "A permission prompt is blocking Claude."},
 		{"ERR", "Something went wrong (e.g. stop failure)."},
-		{"done", "Claude self-reported the task as complete."},
 	} {
 		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
 	}
 
 	sb.WriteString("\n" + title.Render("Glossary") + "\n\n")
+	accentStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
 	for _, item := range []struct{ term, def string }{
 		{"Companion window", "A shell window (<name>+) tied to a task. Travels on park/unpark, destroyed on freeze."},
-		{"Sort modes", "Created (default) shows all tasks in order. Priority shows active tasks by urgency."},
+		{"Workspace", "An isolated directory (clone or jj workspace) created per task. Deleted on complete."},
+		{"Sandbox", "A wrapper command (e.g. bwrap) that confines Claude to limited filesystem/network access."},
 	} {
-		accentStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
 		sb.WriteString("  " + accentStyle.Render(item.term) + " " + desc.Render(item.def) + "\n")
 	}
 
@@ -728,6 +732,21 @@ func (m Model) renderDetailModal(t *db.Task) string {
 		content.WriteString(m.styles.ModalContent.Render("  age: " + age.String()))
 		content.WriteString("\n")
 	}
+	if t.SessionID != "" {
+		content.WriteString(m.styles.ModalContent.Render("  claude session: " + t.SessionID))
+		content.WriteString("\n")
+	}
+	if t.TmuxWindow != "" {
+		session := m.activeSession
+		if t.State == db.StateParked {
+			session = m.parkedSession
+		}
+		companions := len(tmux.FindCompanions(session, t.Name))
+		if companions > 0 {
+			content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  companions: %d", companions)))
+			content.WriteString("\n")
+		}
+	}
 	if t.Flags.HasNonDefault() {
 		var flags []string
 		if t.Flags.NoSandbox {
@@ -740,6 +759,10 @@ func (m Model) renderDetailModal(t *db.Task) string {
 			flags = append(flags, "debug")
 		}
 		content.WriteString(m.styles.ModalContent.Render("  flags: " + strings.Join(flags, ", ")))
+		content.WriteString("\n")
+	}
+	if t.Summary != "" {
+		content.WriteString(m.styles.ModalContent.Render("  summary: " + t.Summary))
 		content.WriteString("\n")
 	}
 

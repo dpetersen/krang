@@ -10,56 +10,47 @@
 
 - **Task history view** — see completed/failed tasks with their final summaries, with the ability to revive them
 
-## Hotkey Rework & Task Detail Modal
+## Detail Modal Enhancements
 
-The current hotkey system shows all keybindings at once in the footer. As the number of actions grows this doesn't scale well, and many keys are only relevant when a specific task is selected.
+The detail modal is implemented with context-sensitive actions, task stats, and background process display. Remaining additions:
 
-### Design
+- **Last hook event** — show the most recent hook event name/timestamp
+- **Token usage and estimated cost** — track from hook events if possible
 
-- **Global hotkeys only in the footer** — only show always-applicable keys like `n` (new), `I` (import), `?` (help), `q` (quit).
-- **Enter** keeps current behavior: focus the selected task's tmux pane.
-- **Task detail modal** — a new key (e.g. `Space` or `Tab`) on a selected task opens a modal/overlay showing:
-  - All context-sensitive actions for that task (park/unpark, freeze/wake, complete, companion, add repos, etc.), each with its keybinding
-  - Task stats: attention state, cwd, session ID, creation time, session age, companion count, last hook event, summary
-  - Background process list (from proctree) with full command lines
-  - Token usage and estimated cost (if trackable from hook events)
-  - Activity sparkline (larger than the inline version, if sparklines are implemented)
-- Actions are invoked from within the modal via their existing keybindings. The modal closes after the action completes (or on `Esc`).
+## Help Glossary & Scroll Indicator
 
-This reduces cognitive load on the main screen and gives a natural home for per-task details that don't fit in a table row.
+Scrollable help with j/k navigation is implemented. Remaining work:
 
-### Merge Complete and Kill
+- **Scroll position indicator** — show a visual indicator of scroll position (percentage or position bar)
+- **Expand glossary** — add explanations for concepts not covered elsewhere: workspaces and cleanup on complete, task flags, sandbox
 
-Currently `complete` and `kill` are separate operations with only a semantic difference. Consolidate into a single action — `complete` is probably the right name since `kill` sounds violent and `close` implies reopenability. The underlying behavior (graceful shutdown, workspace cleanup) is the same regardless.
+## Smart Attention Classification
+
+Currently the `Stop` hook event always maps to `AttentionWaiting`, but "Claude finished a task" and "Claude is asking you a question" feel very different. The yellow "wait" indicator can feel urgent when Claude is just done and idle.
+
+### How it would work
+
+The `Stop` hook payload includes `last_assistant_message` — Claude's final response text. A Haiku call (~350 input tokens, ~5 output tokens) can classify it as "done" (completed work, waiting for next instruction) vs "question" (asking the user something, needs a response). This maps to two distinct attention states with different visual treatments — e.g. a calm "done" vs an attention-grabbing "wait".
+
+### Implementation
+
+- **Config option** in `config.json`: `"classify_attention": true` (default off)
+- **On `Stop` event**: if enabled, fire an async Haiku call with the `last_assistant_message`. The task stays `AttentionWaiting` immediately, then a Bubble Tea message updates it to `AttentionDone` or keeps it `AttentionWaiting` when the classification returns.
+- **Nonblocking**: the classification runs in a goroutine, same pattern as the summary pipeline. The attention column updates when the result arrives (~500ms-1s later). No UI blocking.
+- **Cost**: ~$0.000375 per classification. Even at 100 stops/day across all tasks, that's ~$0.04/day.
+- **Existing infrastructure**: `AttentionDone` already exists in the DB, theme, and rendering code (currently only reachable via the `TaskCompleted` hook, which doesn't fire in standard single-agent sessions). The `last_assistant_message` field is already parsed from hook payloads.
+- **Fallback**: if the Haiku call fails or times out, keep `AttentionWaiting` — no change from current behavior.
 
 ## UI Polish
 
-- **Scrollable help with glossary** — replace the static help overlay with a scrollable viewport. Add a glossary section explaining concepts (companion windows, park/freeze, krang-parked session, attention states, etc.) so new users can understand the TUI without external docs. Use Bubble Tea's viewport for j/k scrolling with a scroll indicator.
 - **Activity sparklines** — display a small time-series graph next to each task showing recent activity, color-coded by phase (thinking, tool calls, writing code, waiting for user, permission blocked). Requires storing timestamped activity events in the DB with a rolling retention window, and rendering sparkline-style characters (▁▂▃▄▅▆▇█) in the task list. Could use hook events already being captured to classify activity phases.
-- ~~**Fuzzy filter in repo picker**~~ (Done) — `/` opens fuzzy search in the repo picker. Matches against repo names and set names + members via `sahilm/fuzzy`. Selections persist across filter changes.
-- **Tmux window number in # column** — Replace the current sequential row index with the actual tmux window number. This lets users mentally map table rows to `Ctrl-B <n>` for quick switching. Parked and frozen tasks would show a blank since they have no active window. Requires reading the window index from tmux (already available in the window name/target).
-
-## ~~Hotkey Hint Placement~~ (Done)
-
-Implemented: three-zone hint layout (table toolbar, action bar, footer) plus a command palette (`:`) for rare commands (sit rep, import, compact). No hidden hotkeys remain.
 
 ## Discoverability & Feedback
 
-The app should make it obvious what's happening and what's about to happen. Several areas need work:
-
-### Confirmations and Warnings
-
-- **Completion warning** — when completing a task with a workspace, warn that the workspace directory will be deleted and show the path. Same for any destructive lifecycle transition.
+- **Freeze confirmation** — warn about companion window destruction before freezing a task that has companions
 - **Task creation preview** — the new task wizard should show what it's about to do: which repos will be cloned, where the workspace directory will be created, what sandbox will be used. Show this as a summary step before executing.
-
-### Progress and Blocking Feedback
-
-- **Freeze/complete should block or show a spinner** — currently these operations happen asynchronously and the task row doesn't update until the process closes (up to 5 seconds). The task appears unresponsive. Either block the UI with a spinner on that row or show an intermediate "freezing..." / "completing..." state so the user knows something is happening.
 - **Workspace creation progress** — already partially implemented (workspace progress mode), but should show what's happening at each step (cloning repo X, setting up workspace at path Y).
-
-### In-App Config Editor
-
-- **Config form** — a TUI form (via `huh`) for editing both project-level (`krang.yaml`) and user-level (`config.json`) configuration. Avoids requiring users to hand-edit JSON/YAML files. Could be a modal accessible from the main screen or from the help overlay.
+- **In-app config editor** — a TUI form (via `huh`) for editing both project-level (`krang.yaml`) and user-level (`config.json`) configuration. Avoids requiring users to hand-edit JSON/YAML files. Could be a modal accessible from the main screen or from the help overlay.
 
 ## Integration
 
