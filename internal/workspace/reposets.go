@@ -24,6 +24,8 @@ type Config struct {
 	WorkspaceStrategy WorkspaceStrategy     `yaml:"workspace_strategy"`
 	ReposDir          string                `yaml:"repos_dir"`
 	WorkspacesDir     string                `yaml:"workspaces_dir"`
+	DefaultVCS        string                `yaml:"default_vcs"`
+	GitHubOrgs        []string              `yaml:"github_orgs"`
 	Repos             map[string]RepoConfig `yaml:"repos"`
 	Sets              map[string][]string   `yaml:"sets"`
 }
@@ -33,6 +35,8 @@ type RepoSets struct {
 	WorkspaceStrategy WorkspaceStrategy
 	ReposDir          string // absolute path to repos directory
 	WorkspacesDir     string // absolute path to workspaces directory
+	DefaultVCS        string // "git" (default) or "jj" for remote clones
+	GitHubOrgs        []string
 	Repos             map[string]RepoConfig
 	Sets              map[string][]string
 }
@@ -65,11 +69,21 @@ func Load(metarepoDir string) (*RepoSets, error) {
 		cfg.Sets = make(map[string][]string)
 	}
 
+	reposDir := filepath.Join(metarepoDir, reposRel)
+	workspacesDir := filepath.Join(metarepoDir, workspacesRel)
+
+	// Ensure directories exist so ListRepos and workspace creation work
+	// even on a fresh metarepo with no repos cloned yet.
+	_ = os.MkdirAll(reposDir, 0o755)
+	_ = os.MkdirAll(workspacesDir, 0o755)
+
 	return &RepoSets{
 		MetarepoDir:       metarepoDir,
 		WorkspaceStrategy: cfg.WorkspaceStrategy,
-		ReposDir:          filepath.Join(metarepoDir, reposRel),
-		WorkspacesDir:     filepath.Join(metarepoDir, workspacesRel),
+		ReposDir:          reposDir,
+		WorkspacesDir:     workspacesDir,
+		DefaultVCS:        cfg.DefaultVCS,
+		GitHubOrgs:        cfg.GitHubOrgs,
 		Repos:             cfg.Repos,
 		Sets:              cfg.Sets,
 	}, nil
@@ -93,7 +107,8 @@ func (rs *RepoSets) ListRepos() ([]string, error) {
 }
 
 // DetectVCS returns "jj" or "git" for a repo. Checks the explicit
-// config first, then looks for a .jj directory in the repo root.
+// per-repo config first, then looks for a .jj directory in the repo
+// root, then falls back to DefaultVCS (or "git" if unset).
 func (rs *RepoSets) DetectVCS(repoName string) string {
 	if rc, ok := rs.Repos[repoName]; ok && rc.VCS != "" {
 		return rc.VCS
@@ -101,6 +116,9 @@ func (rs *RepoSets) DetectVCS(repoName string) string {
 	jjDir := filepath.Join(rs.ReposDir, repoName, ".jj")
 	if info, err := os.Stat(jjDir); err == nil && info.IsDir() {
 		return "jj"
+	}
+	if rs.DefaultVCS != "" {
+		return rs.DefaultVCS
 	}
 	return "git"
 }

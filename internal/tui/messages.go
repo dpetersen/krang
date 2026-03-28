@@ -86,3 +86,18 @@ type classifyResultMsg struct {
 	NeedsAttention bool
 	Err            error
 }
+
+type remoteSearchDebounceMsg struct {
+	Generation uint64
+}
+
+type remoteSearchResultMsg struct {
+	Generation uint64
+	Repos      []string
+	Err        error
+}
+
+type remoteCloneDoneMsg struct {
+	RepoName string
+	Err      error
+}

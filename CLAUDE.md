@@ -23,7 +23,7 @@ Multiple krang instances can run simultaneously for different working directorie
 
 | Path | Purpose | XDG category |
 |------|---------|-------------|
-| `~/.config/krang/config.json` | Sandbox command, window colors, attention classification | Config |
+| `~/.config/krang/config.json` | Sandbox command, window colors, attention classification, default VCS, GitHub orgs | Config |
 | `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Config |
 | `~/.local/share/krang/instances/…/krang.db` | Per-instance SQLite database | Data |
 | `~/.local/state/krang/instances/…/krang-state.json` | Per-instance port file (ephemeral, exists while running) | State |
@@ -77,6 +77,7 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
 - `internal/proctree/` — process tree walking, noise/age filtering, leaf-only display for background child process awareness
 - `internal/workspace/` — `krang.yaml` parsing, workspace creation/destruction, VCS operations (jj workspace add, local git clone)
+- `internal/github/` — GitHub repo discovery via `gh` CLI (search, clone)
 - `internal/tui/` — Bubble Tea model, view, keybindings, messages, theming
 
 ## Theming
@@ -128,6 +129,9 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - Workspaces destroyed on task complete (jj workspace forget + rm -rf)
 - `W` in the detail modal adds repos to existing multi_repo workspaces
 - Sandbox command supports Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files
+- **GitHub repo discovery** — the repo picker has a tabbed interface (`Tab` toggles Local / Remote). The Remote tab searches GitHub orgs via `gh` CLI and clones repos into the repos dir. Config orgs show as a selectable list; "Other..." allows manual entry. Search is debounced (300ms). After cloning, the Local tab refreshes to show the new repo.
+- **`default_vcs`** — configurable in `config.json` (user-level) or `krang.yaml` (project-level, takes precedence). Controls whether remote clones use `git clone` or `jj git clone`. Defaults to `git`.
+- **`github_orgs`** — configurable in both `config.json` and `krang.yaml`, merged with dedup. Saved orgs appear in the org select list on the Remote tab.
 
 ## Building and Running
 

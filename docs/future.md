@@ -64,21 +64,10 @@ Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templat
 
 - **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI. All mutations go through the HTTP server for serialization. See `docs/workspaces.md` for the original design sketch.
 
-- **GitHub repo discovery** — Search GitHub for repos and clone them into the repos directory on demand, integrated into the repo picker flow. Detailed design:
-
-  **Auth:** Use `gh auth token` to get the GitHub CLI token. Discover the user's own account plus any orgs they belong to via the GitHub API.
-
-  **Search flow:** From the repo picker, a keybinding (e.g. `g`) opens a search modal. User types a query, results come back from GitHub across all discovered orgs/user account. Multi-select results, confirm, and they get cloned into the repos dir with a progress modal. The repo picker reloads with the new repos available.
-
-  **VCS config:** Need a config field (in `krang.yaml` or `config.json`) for default VCS when cloning from GitHub — git (default) or jj (`jj git clone`). Local repos already auto-detect via `.jj/` presence, but fresh clones from GitHub need to know which tool to use.
-
-  **Integration points:** Works for both new task creation and the `W` add-repos flow. The progress modal (already exists for workspace creation) can be reused for clone status.
-
-  **Open questions:**
-  - Should cloned repos be shallow (`--depth 1`) by default for speed, or full clones? Probably configurable.
-  - Rate limiting on GitHub search API — may need pagination or debouncing.
-  - Private repos require appropriate token scopes — surface a clear error if the token lacks `repo` scope.
-  - Should this also support cloning from a specific URL (not just search)? Could be useful for repos outside discovered orgs.
+- **GitHub repo discovery enhancements** — core search/clone flow is implemented. Remaining ideas:
+  - Shallow clones (`--depth 1`) as a configurable option for speed
+  - Clone from a specific URL (not just org search) for repos outside discovered orgs
+  - Auto-discover orgs via `gh api /user/orgs` instead of manual configuration
 
 ## Sandbox Configuration
 
@@ -121,3 +110,4 @@ Fork an existing task to branch off a new task with the same conversation histor
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
 - **Better error surfacing** — some operations fail silently; consider a dedicated error log file
 - **Configurable models** — allow changing the summary (haiku) and sit rep (sonnet) models
+- **Consolidate on YAML config format** — user-level config (`config.json`) and project-level config (`krang.yaml`) use different formats. Migrate to YAML everywhere for consistency.

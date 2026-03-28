@@ -65,11 +65,23 @@ Config lives at `~/.config/krang/config.json`:
 {
   "sandbox_command": "safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG",
   "theme": "catppuccin-mocha",
+  "default_vcs": "jj",
+  "github_orgs": ["myorg"],
   "window_colors_enabled": true,
   "window_color_permission": "red",
   "window_color_waiting": "yellow"
 }
 ```
+
+| Field | Description |
+|-------|-------------|
+| `sandbox_command` | Command to wrap Claude in a sandbox |
+| `theme` | UI theme (see Themes section) |
+| `default_vcs` | Default VCS for remote clones: `"git"` (default) or `"jj"`. Overridden by per-repo config or `.jj/` auto-detection |
+| `github_orgs` | GitHub orgs for the Remote tab in the repo picker. Merged with `krang.yaml` orgs |
+| `window_colors_enabled` | Enable tmux window color based on attention state |
+| `window_color_permission` | Color for permission-blocked windows |
+| `window_color_waiting` | Color for waiting windows |
 
 ### Sandbox Setup
 
@@ -208,6 +220,14 @@ repos_dir: repos
 # Default: "workspaces"
 workspaces_dir: workspaces
 
+# Default VCS for repos without .jj/ directory. "git" or "jj".
+# Overrides config.json's default_vcs for this project.
+default_vcs: jj
+
+# GitHub orgs for the Remote tab. Merged with config.json orgs.
+github_orgs:
+  - myorg
+
 # VCS override per repo. Only needed when auto-detection (looks for
 # .jj/ directory) gives the wrong answer.
 repos:
@@ -265,7 +285,7 @@ details.
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/krang/config.json` | Sandbox command, theme, window colors |
+| `~/.config/krang/config.json` | Sandbox, theme, window colors, default VCS, GitHub orgs |
 | `~/.config/krang/hooks/relay.sh` | Relay script (written by `krang setup`) |
 | `~/.local/share/krang/instances/<dir>/krang.db` | Per-instance SQLite database |
 | `~/.local/state/krang/instances/<dir>/krang-state.json` | Per-instance port file (ephemeral) |

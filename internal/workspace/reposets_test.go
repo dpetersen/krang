@@ -138,6 +138,44 @@ repos:
 	}
 }
 
+func TestDetectVCSDefaultFallback(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `default_vcs: jj`)
+	reposDir := filepath.Join(dir, "repos")
+	mkdirs(t, reposDir, "unknown-repo")
+
+	rs, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := rs.DetectVCS("unknown-repo")
+	if got != "jj" {
+		t.Errorf("DetectVCS with default_vcs=jj = %q, want %q", got, "jj")
+	}
+}
+
+func TestLoadGitHubOrgs(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `
+github_orgs:
+  - myorg
+  - other-org
+`)
+
+	rs, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if len(rs.GitHubOrgs) != 2 {
+		t.Fatalf("GitHubOrgs len = %d, want 2", len(rs.GitHubOrgs))
+	}
+	if rs.GitHubOrgs[0] != "myorg" || rs.GitHubOrgs[1] != "other-org" {
+		t.Errorf("GitHubOrgs = %v, want [myorg other-org]", rs.GitHubOrgs)
+	}
+}
+
 func TestResolveRepos(t *testing.T) {
 	dir := t.TempDir()
 	writeYAML(t, dir, `

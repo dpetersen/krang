@@ -10,6 +10,8 @@ import (
 type Config struct {
 	SandboxCommand        string `json:"sandbox_command"`
 	Theme                 string `json:"theme,omitempty"`
+	DefaultVCS            string   `json:"default_vcs,omitempty"`
+	GitHubOrgs            []string `json:"github_orgs,omitempty"`
 	ClassifyAttention     *bool  `json:"classify_attention,omitempty"`
 	WindowColorsEnabled   *bool  `json:"window_colors_enabled,omitempty"`
 	WindowColorPermission string `json:"window_color_permission,omitempty"`

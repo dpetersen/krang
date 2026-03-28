@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/huh"
 	"github.com/dpetersen/krang/internal/classify"
+	"github.com/dpetersen/krang/internal/github"
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
@@ -60,7 +61,9 @@ type Model struct {
 	workspaceTaskResult     *workspaceTaskResult
 	importFormResult        *importResult
 	flagEditFormResult      *flagEditResult
-	activeRepoPicker        *repoPicker
+	activeRepoPicker        *tabbedRepoPicker
+	remoteSearchGen         uint64
+	returnToPickerOnClone   bool
 	addReposTaskID          string
 	addReposWorkspaceDir    string
 
@@ -120,6 +123,24 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	// Try to load workspace config; nil means no workspace mode.
 	cwd, _ := os.Getwd()
 	rs, _ := workspace.Load(cwd)
+
+	// User-level config fills in when workspace config doesn't set values.
+	if rs != nil {
+		if rs.DefaultVCS == "" && cfg.DefaultVCS != "" {
+			rs.DefaultVCS = cfg.DefaultVCS
+		}
+		if len(cfg.GitHubOrgs) > 0 {
+			seen := make(map[string]bool)
+			for _, o := range rs.GitHubOrgs {
+				seen[o] = true
+			}
+			for _, o := range cfg.GitHubOrgs {
+				if !seen[o] {
+					rs.GitHubOrgs = append(rs.GitHubOrgs, o)
+				}
+			}
+		}
+	}
 
 	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 
@@ -309,6 +330,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case remoteSearchDebounceMsg:
+		if m.activeRepoPicker == nil || msg.Generation != m.remoteSearchGen {
+			return m, nil
+		}
+		r := &m.activeRepoPicker.remote
+		r.searching = true
+		org := r.activeOrg
+		query := strings.TrimSpace(r.searchInput.Value())
+		gen := msg.Generation
+		return m, func() tea.Msg {
+			repos, err := github.SearchRepos(org, query)
+			return remoteSearchResultMsg{Generation: gen, Repos: repos, Err: err}
+		}
+
+	case remoteSearchResultMsg:
+		if m.activeRepoPicker == nil || msg.Generation != m.remoteSearchGen {
+			return m, nil
+		}
+		r := &m.activeRepoPicker.remote
+		r.searching = false
+		if msg.Err != nil {
+			r.err = msg.Err
+			r.results = nil
+		} else {
+			r.err = nil
+			r.results = msg.Repos
+		}
+		r.cursor = 0
+		return m, nil
+
+	case remoteCloneDoneMsg:
+		if m.returnToPickerOnClone && m.activeRepoPicker != nil {
+			m.returnToPickerOnClone = false
+			tp := m.activeRepoPicker
+			tp.remote.cloning = false
+			if msg.Err != nil {
+				tp.remote.err = msg.Err
+				m.workspaceProgressLines = nil
+				m.mode = ModeRepoSelect
+				return m, nil
+			}
+			tp.refreshLocalRepos()
+			tp.switchToLocal()
+			m.workspaceProgressLines = nil
+			m.mode = ModeRepoSelect
+			return m, nil
+		}
+		// Fallthrough: treat as workspace progress done.
+		m.workspaceProgressLines = nil
+		m.mode = ModeNormal
+		if msg.Err != nil {
+			m.appendDebugLog(fmt.Sprintf("[%s] clone error: %v",
+				time.Now().Format("15:04:05"), msg.Err))
+		}
+		return m, m.refreshTasks
+
 	case classifyResultMsg:
 		delete(m.pendingOps, msg.TaskID)
 		if m.classifyGen[msg.TaskID] != msg.Generation {
@@ -403,14 +480,16 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		if m.repoSets != nil && m.repoSets.WorkspaceStrategy != "" {
 			repos, _ := m.repoSets.ListRepos()
-			if len(repos) > 0 {
-				singleRepo := m.repoSets.WorkspaceStrategy == workspace.StrategySingleRepo
-				form, result := newWorkspaceTaskForm(m.taskStore.NameInUse, repos, singleRepo, m.huhTheme())
-				m.activeForm = form
-				m.workspaceTaskResult = result
-				m.mode = ModeForm
-				return m, m.activeForm.Init()
-			}
+			singleRepo := m.repoSets.WorkspaceStrategy == workspace.StrategySingleRepo
+			// For single_repo with no local repos, skip the inline
+			// select and go through the tabbed picker after the form
+			// (same path as multi_repo) so the user can clone from Remote.
+			showInlineSelect := singleRepo && len(repos) > 0
+			form, result := newWorkspaceTaskForm(m.taskStore.NameInUse, repos, showInlineSelect, m.huhTheme())
+			m.activeForm = form
+			m.workspaceTaskResult = result
+			m.mode = ModeForm
+			return m, m.activeForm.Init()
 		}
 		baseDir, err := os.Getwd()
 		if err != nil {
@@ -628,7 +707,28 @@ func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	p := m.activeRepoPicker
+	tp := m.activeRepoPicker
+
+	// Global tab switching keys.
+	switch msg.String() {
+	case "tab":
+		if tp.activeTab == pickerTabLocal {
+			tp.switchToRemote()
+		} else {
+			tp.switchToLocal()
+		}
+		return m, nil
+	}
+
+	// Dispatch based on active tab.
+	if tp.activeTab == pickerTabRemote {
+		return m.handleRepoSelectRemoteKey(msg)
+	}
+	return m.handleRepoSelectLocalKey(msg)
+}
+
+func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	p := &m.activeRepoPicker.local
 
 	// Filter input mode: forward keys to the textinput.
 	if p.filtering {
@@ -700,6 +800,95 @@ func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleRepoSelectRemoteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	tp := m.activeRepoPicker
+	r := &tp.remote
+
+	// Handle enter on a search result — trigger clone.
+	if msg.String() == "enter" && r.phase == remotePhaseSearch && len(r.results) > 0 {
+		repo := tp.remoteSelectedRepo()
+		if repo == "" {
+			return m, nil
+		}
+		// Check if repo already exists locally.
+		rs := m.repoSets
+		if rs != nil {
+			localRepos, _ := rs.ListRepos()
+			for _, lr := range localRepos {
+				if lr == repo {
+					r.err = fmt.Errorf("%q already exists locally", repo)
+					return m, nil
+				}
+			}
+		}
+		r.cloning = true
+		m.returnToPickerOnClone = true
+		m.mode = ModeWorkspaceProgress
+		vcs := "git"
+		if rs != nil && rs.DefaultVCS != "" {
+			vcs = rs.DefaultVCS
+		}
+		m.workspaceProgressLines = []string{fmt.Sprintf("Cloning %s/%s (%s)...", r.activeOrg, repo, vcs)}
+		return m, m.cloneRemoteRepo(r.activeOrg, repo, rs.ReposDir, vcs)
+	}
+
+	// Handle esc — cancel the picker if remote can't go further back.
+	if msg.String() == "esc" {
+		phaseBefore := r.phase
+		cmd := tp.handleRemoteKey(msg)
+		// If we're at the top-level phase and can't go back further,
+		// cancel the whole picker.
+		cancelPhase := remotePhaseOrgSelect
+		if len(r.configOrgs) == 0 {
+			cancelPhase = remotePhaseOrgEntry
+		}
+		if r.phase == cancelPhase && phaseBefore == cancelPhase {
+			if cancelPhase == remotePhaseOrgEntry && strings.TrimSpace(r.orgInput.Value()) != "" {
+				r.orgInput.Reset()
+				return m, nil
+			}
+			m.workspaceTaskResult = nil
+			m.activeRepoPicker = nil
+			m.addReposTaskID = ""
+			m.addReposWorkspaceDir = ""
+			m.mode = ModeNormal
+			return m, nil
+		}
+		return m, cmd
+	}
+
+	// All other keys go to the remote handler (org entry or search input).
+	cmd := tp.handleRemoteKey(msg)
+
+	// After search input changes, trigger debounced search.
+	if r.phase == remotePhaseSearch && msg.String() != "j" && msg.String() != "k" &&
+		msg.String() != "down" && msg.String() != "up" {
+		query := strings.TrimSpace(r.searchInput.Value())
+		if query != "" {
+			m.remoteSearchGen++
+			gen := m.remoteSearchGen
+			r.searchGen = gen
+			return m, tea.Batch(cmd, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+				return remoteSearchDebounceMsg{Generation: gen}
+			}))
+		}
+		// Empty query — clear results.
+		r.results = nil
+		r.cursor = 0
+		r.err = nil
+		r.searching = false
+	}
+
+	return m, cmd
+}
+
+func (m Model) cloneRemoteRepo(org, repo, destDir, vcs string) tea.Cmd {
+	return func() tea.Msg {
+		err := github.CloneRepo(org, repo, destDir, vcs)
+		return remoteCloneDoneMsg{RepoName: repo, Err: err}
+	}
+}
+
 func (m Model) handleFormUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.activeForm == nil {
 		m.mode = ModeNormal
@@ -732,18 +921,19 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 		result := m.workspaceTaskResult
 		rs := m.repoSets
 
-		// single_repo: repos already selected in the form.
-		if rs.WorkspaceStrategy == workspace.StrategySingleRepo {
+		// single_repo with repos already selected inline in the form.
+		if rs.WorkspaceStrategy == workspace.StrategySingleRepo && len(result.SelectedRepos) > 0 {
 			m.workspaceTaskResult = nil
 			m.mode = ModeWorkspaceProgress
 			m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
 			return m, m.createWorkspaceTask(result.Name, result.Flags, result.SelectedRepos, rs)
 		}
 
-		// multi_repo: show the repo picker.
+		// Show the repo picker (multi_repo, or single_repo with no local repos).
 		repos, _ := rs.ListRepos()
 		title := fmt.Sprintf("Select repos for %q:", result.Name)
-		picker := newRepoPicker(title, rs.Sets, repos, m.styles)
+		ghAvail := github.IsAvailable()
+		picker := newTabbedRepoPicker(title, rs.Sets, repos, m.styles, rs, ghAvail)
 		m.activeRepoPicker = &picker
 		m.mode = ModeRepoSelect
 		return m, nil
@@ -928,11 +1118,10 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				available = append(available, r)
 			}
 		}
-		if len(available) == 0 {
-			return m, nil
-		}
 		title := fmt.Sprintf("Add repos to %q:", t.Name)
-		picker := newRepoPicker(title, m.repoSets.Sets, available, m.styles)
+		ghAvail := github.IsAvailable()
+		picker := newTabbedRepoPicker(title, m.repoSets.Sets, available, m.styles, m.repoSets, ghAvail)
+		picker.excludeRepos = presentSet
 		m.activeRepoPicker = &picker
 		m.addReposTaskID = t.ID
 		m.addReposWorkspaceDir = t.WorkspaceDir

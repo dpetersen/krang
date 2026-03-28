@@ -2,6 +2,8 @@ package tui
 
 import (
 	"testing"
+
+	"github.com/dpetersen/krang/internal/workspace"
 )
 
 func TestRepoPickerSetToggle(t *testing.T) {
@@ -138,4 +140,102 @@ func TestRepoPickerEmptySelection(t *testing.T) {
 	if len(selected) != 0 {
 		t.Fatalf("expected empty selection, got %v", selected)
 	}
+}
+
+func TestTabbedPickerDefaultsToLocal(t *testing.T) {
+	tp := newTabbedRepoPicker("test", nil, []string{"alpha"}, Styles{}, nil, true)
+	if tp.activeTab != pickerTabLocal {
+		t.Error("expected default tab to be Local")
+	}
+}
+
+func TestTabbedPickerTabSwitching(t *testing.T) {
+	tp := newTabbedRepoPicker("test", nil, []string{"alpha"}, Styles{}, nil, true)
+
+	tp.switchToRemote()
+	if tp.activeTab != pickerTabRemote {
+		t.Error("expected Remote tab after switchToRemote")
+	}
+
+	tp.switchToLocal()
+	if tp.activeTab != pickerTabLocal {
+		t.Error("expected Local tab after switchToLocal")
+	}
+}
+
+func TestTabbedPickerSelectedReposDelegates(t *testing.T) {
+	tp := newTabbedRepoPicker("test", nil, []string{"alpha", "beta"}, Styles{}, nil, true)
+
+	// Toggle first repo in local picker.
+	tp.local.toggle()
+
+	selected := tp.selectedRepos()
+	if len(selected) != 1 || selected[0] != "alpha" {
+		t.Fatalf("expected [alpha], got %v", selected)
+	}
+}
+
+func TestTabbedPickerRemoteOrgEntry(t *testing.T) {
+	tp := newTabbedRepoPicker("test", nil, []string{}, Styles{}, nil, true)
+	tp.switchToRemote()
+
+	if tp.remote.phase != remotePhaseOrgEntry {
+		t.Error("expected org entry phase with no config orgs")
+	}
+}
+
+func TestTabbedPickerRemoteOrgSelectWithConfigOrgs(t *testing.T) {
+	rs := &workspace.RepoSets{GitHubOrgs: []string{"myorg", "other"}}
+	tp := newTabbedRepoPicker("test", nil, []string{}, Styles{}, rs, true)
+	tp.switchToRemote()
+
+	if tp.remote.phase != remotePhaseOrgSelect {
+		t.Error("expected org select phase with config orgs")
+	}
+
+	options := tp.orgSelectOptions()
+	if len(options) != 3 {
+		t.Fatalf("expected 3 options (2 orgs + Other...), got %d", len(options))
+	}
+	if options[0] != "myorg" || options[1] != "other" || options[2] != "Other..." {
+		t.Errorf("unexpected options: %v", options)
+	}
+}
+
+func TestTabbedPickerRemoteSelectedRepo(t *testing.T) {
+	tp := newTabbedRepoPicker("test", nil, []string{}, Styles{}, nil, true)
+	tp.remote.results = []string{"repo-a", "repo-b", "repo-c"}
+	tp.remote.cursor = 1
+
+	got := tp.remoteSelectedRepo()
+	if got != "repo-b" {
+		t.Errorf("remoteSelectedRepo = %q, want %q", got, "repo-b")
+	}
+}
+
+func TestTabbedPickerGhUnavailable(t *testing.T) {
+	tp := newTabbedRepoPicker("test", nil, []string{}, Styles{}, nil, false)
+	tp.switchToRemote()
+
+	if tp.remote.ghAvailable {
+		t.Error("expected ghAvailable=false")
+	}
+
+	body := tp.renderRemoteBody()
+	if !contains(body, "GitHub CLI") {
+		t.Error("expected gh unavailable message in remote body")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchString(s, substr)
+}
+
+func searchString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

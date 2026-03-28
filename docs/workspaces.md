@@ -59,6 +59,11 @@ exists.
 workspace_strategy: multi_repo  # or single_repo
 repos_dir: repos                # default "repos"
 workspaces_dir: workspaces      # default "workspaces"
+default_vcs: jj                 # "git" (default) or "jj" — fallback for repos without .jj/
+
+github_orgs:                    # orgs for GitHub repo discovery (merged with config.json)
+  - myorg
+  - other-org
 
 repos:
   terraform-config:
@@ -77,9 +82,12 @@ sets:
     - catfood
 ```
 
-**VCS auto-detection:** Checks for `.jj/` in the repo directory.
-Present = jj, absent = git. The `repos` map is only needed to
-override auto-detection.
+**VCS auto-detection:** Checks per-repo config first, then for `.jj/`
+in the repo directory, then `default_vcs`, then falls back to `git`.
+The `repos` map is only needed to override auto-detection. `default_vcs`
+and `github_orgs` can also be set in `config.json` (user-level); the
+workspace config takes precedence for `default_vcs`, and orgs are
+merged with dedup.
 
 **Repo sets** (multi_repo only): Named groups of repos shown in
 the repo picker as toggle-able headers. Toggling a set toggles all
@@ -123,23 +131,25 @@ Task creation form gains a third step (after name and flags) with
 Task creation form gains a third step with `huh.Select[string]`
 listing repos from the repos directory. One repo, one clone.
 
-### multi_repo — Custom Repo Picker
+### multi_repo — Tabbed Repo Picker
 
-After the name+flags form completes, a custom toggle-list component
-(`ModeRepoSelect`) shows sets and individual repos:
+After the name+flags form completes, a tabbed repo picker opens
+(`ModeRepoSelect`) with two tabs toggled via `Tab`:
+
+**Local tab** — sets and individual repos from the repos directory:
 
 ```
 Select repos for "auth-refactor":
 
+  Local   Remote
+
 > [x] backend (gonfalon, gonfalon-priv)
   [x] gonfalon
   [x] gonfalon-priv
-  [ ] terraform (terraform-config, terraform-modules)
   [ ] terraform-config
-  [ ] terraform-modules
   [x] catfood
 
-j/k: navigate  space: toggle  enter: create  esc: cancel
+tab switch tab  j/k navigate  space toggle  enter create  esc cancel
 ```
 
 - Toggling a set toggles all its members
@@ -148,11 +158,23 @@ j/k: navigate  space: toggle  enter: create  esc: cancel
 - Enter with at least one selection creates the workspace
 - Esc cancels task creation
 
+**Remote tab** — search GitHub orgs and clone repos:
+
+- If `github_orgs` is configured (in `config.json` or `krang.yaml`),
+  shows an org select list with an "Other..." option for manual entry
+- If no orgs configured, shows a text input for the org name
+- After selecting an org, a debounced search input (300ms) queries
+  GitHub via `gh api` and shows results as a single-select list
+- Enter on a result clones it to the repos dir using `default_vcs`
+  (git or jj), then returns to the Local tab with the new repo visible
+- Requires `gh` CLI installed and authenticated; shows a message if unavailable
+
 ### Adding Repos (W keybinding)
 
 Press `W` on an active/parked multi_repo workspace task to add
-repos. The repo picker shows only repos not already present in the
-workspace. Uses the same VCS operations as initial creation.
+repos. The tabbed picker opens with the Local tab showing only repos
+not already present in the workspace. The Remote tab can clone new
+repos from GitHub. Uses the same VCS operations as initial creation.
 
 ### Progress Modal
 
