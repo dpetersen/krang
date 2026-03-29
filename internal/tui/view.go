@@ -303,19 +303,22 @@ func (m Model) renderTable() string {
 			windowIdx = m.windowIndexes[t.TmuxWindow]
 		}
 
+		sparkline := renderSparkline(m.sparklineData[t.ID], m.styles.theme)
+
 		rows[i] = []string{
 			cursor,
 			windowIdx,
 			name,
 			stateLabel(t.State),
 			attn,
+			sparkline,
 			relativeCwd(t.Cwd),
 			t.Summary,
 		}
 	}
 
 	t := ltable.New().
-		Headers("", "#", "Name", "State", "Attn", "Cwd", "Summary").
+		Headers("", "#", "Name", "State", "Attn", "Activity", "Cwd", "Summary").
 		Rows(rows...).
 		Border(lipgloss.HiddenBorder()).
 		BorderColumn(false).
@@ -327,6 +330,17 @@ func (m Model) renderTable() string {
 			base := lipgloss.NewStyle().PaddingRight(1)
 			if row < 0 || row >= len(tasks) {
 				return base
+			}
+
+			// Sparkline column (index 5): preserve per-character
+			// ANSI colors by not setting foreground.
+			const sparklineCol = 5
+			if col == sparklineCol {
+				s := lipgloss.NewStyle().PaddingRight(1)
+				if row == m.cursor {
+					s = s.Background(m.styles.SelectedRow.GetBackground())
+				}
+				return s
 			}
 
 			style := m.taskRowStyle(tasks[row])
@@ -361,6 +375,7 @@ func (m Model) renderTable() string {
 	hints := []string{
 		m.renderHint("/", "filter"),
 		m.renderHint("s", "sort"),
+		m.renderHint("T", m.sparklineWindow.Label()),
 		m.renderHint("j/k", "nav"),
 	}
 
@@ -634,6 +649,7 @@ func (m Model) buildHelpContent() string {
 		{"c", "Complete task (with confirmation)"},
 		{"j/k", "Navigate up/down"},
 		{"s", "Toggle sort (created / priority)"},
+		{"T", "Cycle sparkline window (1m / 10m / 60m)"},
 		{"/", "Filter tasks (esc to clear)"},
 		{":", "Command palette (sit rep, import, compact)"},
 		{"?", "Toggle this help"},

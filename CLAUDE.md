@@ -41,7 +41,7 @@ The TUI uses a two-tier keybinding system: a minimal set of global keys on the m
 
 Hints are placed in three zones below the table:
 
-- **Table toolbar** — list-specific: `/` filter, `s` sort, `j/k` nav, plus task count
+- **Table toolbar** — list-specific: `/` filter, `s` sort, `T` sparkline window, `j/k` nav, plus task count
 - **Action bar** — task actions: `n` new, `enter` focus, `tab` detail, `c` complete (shown when a task is selected)
 - **Footer** — global: `:` command palette, `?` help, `q` quit
 
@@ -105,6 +105,20 @@ When classification is active, `handleHookEvent` skips setting `AttentionWaiting
 | ERR | red | "ERR" | Stop failure |
 
 The spinner has no hardcoded color — it inherits the row style from `StyleFunc`.
+
+## Activity Sparklines
+
+The task table includes an "Activity" column showing a 20-character sparkline of recent hook events. Each character is a Unicode block (`▁▂▃▄▅▆▇█`) where height represents event density and color represents what Claude was doing.
+
+**Stacked colors**: Each cell uses foreground + background colors to show two event types simultaneously. The higher-priority type gets the foreground (the block character), the secondary type gets the background color behind it.
+
+**Color mapping**: Accent = tool calls, Active = working, Warning = waiting, Done = done, Danger = permission, Error = error, Dormant = idle.
+
+**Sticky state**: State-transition events (PermissionRequest, Stop, etc.) fill forward into subsequent empty buckets until the next event clears them. This means a permission block shows continuous red, not a single blip.
+
+**Time windows**: `T` cycles all tasks through 1m / 10m / 60m. At 20 chars: 3s, 30s, or 3min per bucket. Data comes from the existing `events` table, queried every 5 seconds. Events older than 2 hours are trimmed on the reconcile tick.
+
+The sparkline column gets special treatment in the table's `StyleFunc` — no foreground color is set, preserving the per-character ANSI colors embedded in the rendered string.
 
 ## Async Feedback
 

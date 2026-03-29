@@ -80,6 +80,9 @@ type Model struct {
 
 	windowStylesSynced bool
 
+	sparklineWindow SparklineWindow
+	sparklineData   map[string][]sparklineBucket
+
 	paletteCursor int
 }
 
@@ -158,6 +161,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		filterInput:     filterInput,
 		pendingOps:      make(map[string]string),
 		classifyGen:     make(map[string]uint64),
+		sparklineData:   make(map[string][]sparklineBucket),
 		spinner:         s,
 	}
 }
@@ -169,6 +173,8 @@ func (m Model) Init() tea.Cmd {
 		m.waitForHookEvent(),
 		m.summaryTick(),
 		m.processTick(),
+		m.sparklineTick(),
+		m.fetchSparklineData,
 	)
 }
 
@@ -303,6 +309,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ProcessesUpdatedMsg:
 		m.taskProcesses = msg.Processes
+		return m, nil
+
+	case SparklineTickMsg:
+		return m, tea.Batch(
+			m.fetchSparklineData,
+			m.sparklineTick(),
+		)
+
+	case SparklineUpdatedMsg:
+		m.sparklineData = msg.Data
 		return m, nil
 
 	case ErrorMsg:
@@ -520,6 +536,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.sortByPriority = !m.sortByPriority
 		m.cursor = 0
 		return m, nil
+
+	case "T":
+		m.sparklineWindow = m.sparklineWindow.Next()
+		return m, m.fetchSparklineData
 
 	case ":":
 		m.paletteCursor = 0
@@ -1245,6 +1265,7 @@ func (m Model) doReconcile() tea.Msg {
 	if err := m.manager.Reconcile(); err != nil {
 		return ErrorMsg{Err: err}
 	}
+	_ = m.eventStore.TrimOlderThan(2 * time.Hour)
 	return m.refreshTasks()
 }
 
@@ -1258,6 +1279,32 @@ func (m Model) processTick() tea.Cmd {
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
 		return ProcessTickMsg{}
 	})
+}
+
+func (m Model) sparklineTick() tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg {
+		return SparklineTickMsg{}
+	})
+}
+
+func (m Model) fetchSparklineData() tea.Msg {
+	taskIDs := make([]string, len(m.tasks))
+	for i, t := range m.tasks {
+		taskIDs[i] = t.ID
+	}
+
+	now := time.Now()
+	since := now.Add(-m.sparklineWindow.Duration())
+	events, err := m.eventStore.ActivityEvents(taskIDs, since)
+	if err != nil {
+		return ErrorMsg{Err: err}
+	}
+
+	data := make(map[string][]sparklineBucket)
+	for _, id := range taskIDs {
+		data[id] = bucketEvents(events[id], m.sparklineWindow.Duration(), sparklineWidth, now)
+	}
+	return SparklineUpdatedMsg{Data: data}
 }
 
 func (m Model) collectProcesses() tea.Msg {
@@ -1524,6 +1571,15 @@ func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool) tea.Cmd 
 func (m Model) applyClassificationResult(taskID string, attention db.AttentionState) tea.Cmd {
 	return func() tea.Msg {
 		_ = m.taskStore.UpdateAttention(taskID, attention)
+
+		// Log a synthetic event so sparklines reflect the classification.
+		switch attention {
+		case db.AttentionDone:
+			_ = m.eventStore.Log(taskID, "ClassifyDone", "")
+		case db.AttentionWaiting:
+			_ = m.eventStore.Log(taskID, "ClassifyWaiting", "")
+		}
+
 		if t, _ := m.taskStore.Get(taskID); t != nil && t.TmuxWindow != "" {
 			applyWindowStyle(t.TmuxWindow, attention, m.cfg)
 		}

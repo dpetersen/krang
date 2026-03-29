@@ -41,10 +41,6 @@ The `Stop` hook payload includes `last_assistant_message` — Claude's final res
 - **Existing infrastructure**: `AttentionDone` already exists in the DB, theme, and rendering code (currently only reachable via the `TaskCompleted` hook, which doesn't fire in standard single-agent sessions). The `last_assistant_message` field is already parsed from hook payloads.
 - **Fallback**: if the Haiku call fails or times out, keep `AttentionWaiting` — no change from current behavior.
 
-## UI Polish
-
-- **Activity sparklines** — display a small time-series graph next to each task showing recent activity, color-coded by phase (thinking, tool calls, writing code, waiting for user, permission blocked). Requires storing timestamped activity events in the DB with a rolling retention window, and rendering sparkline-style characters (▁▂▃▄▅▆▇█) in the task list. Could use hook events already being captured to classify activity phases.
-
 ## Discoverability & Feedback
 
 - **Freeze confirmation** — warn about companion window destruction before freezing a task that has companions

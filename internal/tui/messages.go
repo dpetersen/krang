@@ -87,6 +87,12 @@ type classifyResultMsg struct {
 	Err            error
 }
 
+type SparklineTickMsg struct{}
+
+type SparklineUpdatedMsg struct {
+	Data map[string][]sparklineBucket
+}
+
 type remoteSearchDebounceMsg struct {
 	Generation uint64
 }

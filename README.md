@@ -302,6 +302,7 @@ details.
 | `c` | Complete task (with confirmation) |
 | `j/k` | Navigate up/down |
 | `s` | Toggle sort mode (created / priority) |
+| `T` | Cycle sparkline window (1m / 10m / 60m) |
 | `/` | Filter tasks |
 | `:` | Command palette (sit rep, import, compact) |
 | `?` | Help |
