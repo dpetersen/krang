@@ -9,11 +9,11 @@ run = "go test ./..."
 [tasks.setup]
 description = "Install Claude Code hooks and configure krang (dev config)"
 depends = ["build"]
-env = { KRANG_CONFIG = ".krang-dev-config.json" }
+env = { KRANG_CONFIG = ".krang-dev-config.yaml" }
 run = "./krang setup"
 
 [tasks.run]
 description = "Build, install hooks, and launch krang (dev DB)"
 depends = ["build", "setup"]
-env = { KRANG_DB = ".krang-dev.db", KRANG_CONFIG = ".krang-dev-config.json" }
+env = { KRANG_DB = ".krang-dev.db", KRANG_CONFIG = ".krang-dev-config.yaml" }
 run = "./krang"

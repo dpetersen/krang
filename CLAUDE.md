@@ -23,7 +23,7 @@ Multiple krang instances can run simultaneously for different working directorie
 
 | Path | Purpose | XDG category |
 |------|---------|-------------|
-| `~/.config/krang/config.json` | Sandbox command, window colors, attention classification, default VCS, GitHub orgs | Config |
+| `~/.config/krang/config.yaml` | Sandbox command, window colors, attention classification, default VCS, GitHub orgs | Config |
 | `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Config |
 | `~/.local/share/krang/instances/…/krang.db` | Per-instance SQLite database | Data |
 | `~/.local/state/krang/instances/…/krang-state.json` | Per-instance port file (ephemeral, exists while running) | State |
@@ -82,7 +82,7 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 
 ## Theming
 
-Styles are derived from a `Theme` struct with semantic color roles (Title, Error, Active, etc.). The `Styles` struct holds precomputed lipgloss styles built via `BuildStyles(theme)` and retains a `theme` field for direct color access. Available themes: `classic` (original ANSI 256 colors), `catppuccin-mocha` (default), `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`. Set via `"theme"` field in config.json.
+Styles are derived from a `Theme` struct with semantic color roles (Title, Error, Active, etc.). The `Styles` struct holds precomputed lipgloss styles built via `BuildStyles(theme)` and retains a `theme` field for direct color access. Available themes: `classic` (original ANSI 256 colors), `catppuccin-mocha` (default), `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`. Set via `"theme"` field in config.yaml.
 
 Color is used throughout: accent-colored key hints in the footer, state-colored counts in the header (parked blue, frozen gray, active default white), accent-colored "Events" label in the debug log, and differentiated timestamps (faint accent) vs message text (muted) in log entries.
 
@@ -144,8 +144,8 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - `W` in the detail modal adds repos to existing multi_repo workspaces
 - Sandbox command supports Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files
 - **GitHub repo discovery** — the repo picker has a tabbed interface (`Tab` toggles Local / Remote). The Remote tab searches GitHub orgs via `gh` CLI and clones repos into the repos dir. Config orgs show as a selectable list; "Other..." allows manual entry. Search is debounced (300ms). After cloning, the Local tab refreshes to show the new repo.
-- **`default_vcs`** — configurable in `config.json` (user-level) or `krang.yaml` (project-level, takes precedence). Controls whether remote clones use `git clone` or `jj git clone`. Defaults to `git`.
-- **`github_orgs`** — configurable in both `config.json` and `krang.yaml`, merged with dedup. Saved orgs appear in the org select list on the Remote tab.
+- **`default_vcs`** — configurable in `config.yaml` (user-level) or `krang.yaml` (project-level, takes precedence). Controls whether remote clones use `git clone` or `jj git clone`. Defaults to `git`.
+- **`github_orgs`** — configurable in both `config.yaml` and `krang.yaml`, merged with dedup. Saved orgs appear in the org select list on the Remote tab.
 
 ## Building and Running
 
@@ -158,7 +158,7 @@ mise run setup   # install Claude Code hooks only
 
 Must be run inside tmux. Uses `jj` for version control, not `git`.
 
-Development uses `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.json` (set in mise.toml) to isolate from production paths.
+Development uses `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.yaml` (set in mise.toml) to isolate from production paths.
 
 ## Graceful Shutdown
 

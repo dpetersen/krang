@@ -2,4 +2,4 @@
 /krang
 # Dev database and config
 .krang-dev.db*
-.krang-dev-config.json
+.krang-dev-config.yaml

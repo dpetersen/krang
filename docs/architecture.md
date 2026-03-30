@@ -41,7 +41,7 @@ Krang follows XDG conventions for file placement:
 
 | Path | Purpose | Lifecycle |
 |------|---------|-----------|
-| `~/.config/krang/config.json` | Sandbox command, window colors | Permanent, user-edited |
+| `~/.config/krang/config.yaml` | Sandbox command, window colors | Permanent, user-edited |
 | `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Written by setup, static |
 | `~/.local/share/krang/instances/<encoded-cwd>/krang.db` | Per-instance SQLite database | Persistent across restarts |
 | `~/.local/state/krang/instances/<encoded-cwd>/krang-state.json` | Per-instance port file | Ephemeral, exists while running |
@@ -203,7 +203,7 @@ Task cwd updates live from hook event `cwd` field, which reflects Claude's curre
 
 ## Development
 
-- `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.json` isolate dev state (set in mise.toml)
+- `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.yaml` isolate dev state (set in mise.toml)
 - Uses `jj` for version control, never `git` commands
 - Temp files use `NOCOMMIT-` prefix to avoid jj snapshotting them into commits
 - Claude sandbox wrapper is configurable via `krang setup`

@@ -1,21 +1,22 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	SandboxCommand        string `json:"sandbox_command"`
-	Theme                 string `json:"theme,omitempty"`
-	DefaultVCS            string   `json:"default_vcs,omitempty"`
-	GitHubOrgs            []string `json:"github_orgs,omitempty"`
-	ClassifyAttention     *bool  `json:"classify_attention,omitempty"`
-	WindowColorsEnabled   *bool  `json:"window_colors_enabled,omitempty"`
-	WindowColorPermission string `json:"window_color_permission,omitempty"`
-	WindowColorWaiting    string `json:"window_color_waiting,omitempty"`
+	SandboxCommand        string   `yaml:"sandbox_command"`
+	Theme                 string   `yaml:"theme,omitempty"`
+	DefaultVCS            string   `yaml:"default_vcs,omitempty"`
+	GitHubOrgs            []string `yaml:"github_orgs,omitempty"`
+	ClassifyAttention     *bool    `yaml:"classify_attention,omitempty"`
+	WindowColorsEnabled   *bool    `yaml:"window_colors_enabled,omitempty"`
+	WindowColorPermission string   `yaml:"window_color_permission,omitempty"`
+	WindowColorWaiting    string   `yaml:"window_color_waiting,omitempty"`
 }
 
 const (
@@ -53,16 +54,16 @@ func (c Config) WindowColor(attention string) string {
 
 // Path returns the resolved config file path, checking
 // KRANG_CONFIG env var first, then falling back to
-// ~/.config/krang/config.json.
+// ~/.config/krang/config.yaml.
 func Path() string {
 	if p := os.Getenv("KRANG_CONFIG"); p != "" {
 		return p
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".config", "krang", "config.json")
+		return filepath.Join(".config", "krang", "config.yaml")
 	}
-	return filepath.Join(home, ".config", "krang", "config.json")
+	return filepath.Join(home, ".config", "krang", "config.yaml")
 }
 
 // Load reads and parses the config file at the given path.
@@ -78,22 +79,21 @@ func Load(path string) (Config, error) {
 	}
 
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parsing config at %s: %w", path, err)
 	}
 	return cfg, nil
 }
 
-// Write marshals the config to indented JSON and writes it to path,
+// Write marshals the config to YAML and writes it to path,
 // creating parent directories as needed.
 func Write(path string, cfg Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
-	data = append(data, '\n')
 	return os.WriteFile(path, data, 0o644)
 }

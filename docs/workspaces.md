@@ -61,7 +61,7 @@ repos_dir: repos                # default "repos"
 workspaces_dir: workspaces      # default "workspaces"
 default_vcs: jj                 # "git" (default) or "jj" — fallback for repos without .jj/
 
-github_orgs:                    # orgs for GitHub repo discovery (merged with config.json)
+github_orgs:                    # orgs for GitHub repo discovery (merged with config.yaml)
   - myorg
   - other-org
 
@@ -85,7 +85,7 @@ sets:
 **VCS auto-detection:** Checks per-repo config first, then for `.jj/`
 in the repo directory, then `default_vcs`, then falls back to `git`.
 The `repos` map is only needed to override auto-detection. `default_vcs`
-and `github_orgs` can also be set in `config.json` (user-level); the
+and `github_orgs` can also be set in `config.yaml` (user-level); the
 workspace config takes precedence for `default_vcs`, and orgs are
 merged with dedup.
 
@@ -160,7 +160,7 @@ tab switch tab  j/k navigate  space toggle  enter create  esc cancel
 
 **Remote tab** — search GitHub orgs and clone repos:
 
-- If `github_orgs` is configured (in `config.json` or `krang.yaml`),
+- If `github_orgs` is configured (in `config.yaml` or `krang.yaml`),
   shows an org select list with an "Other..." option for manual entry
 - If no orgs configured, shows a text input for the org name
 - After selecting an org, a debounced search input (300ms) queries

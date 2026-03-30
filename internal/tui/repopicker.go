@@ -763,7 +763,7 @@ func (tp *tabbedRepoPicker) renderRemoteBody() string {
 		b.WriteString("\n\n")
 
 		hintStyle := lipgloss.NewStyle().Foreground(tp.theme.Muted).Italic(true)
-		b.WriteString(hintStyle.Render("  Tip: add github_orgs to config.json to save orgs permanently"))
+		b.WriteString(hintStyle.Render("  Tip: add github_orgs to config.yaml to save orgs permanently"))
 		b.WriteString("\n")
 
 	case remotePhaseSearch:

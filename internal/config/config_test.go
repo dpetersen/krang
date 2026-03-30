@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadMissingFileReturnsHelpfulError(t *testing.T) {
-	_, err := Load("/nonexistent/path/config.json")
+	_, err := Load("/nonexistent/path/config.yaml")
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -16,9 +16,9 @@ func TestLoadMissingFileReturnsHelpfulError(t *testing.T) {
 	}
 }
 
-func TestLoadValidJSON(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(path, []byte(`{"sandbox_command": "sandvault run"}`), 0o644)
+func TestLoadValidYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("sandbox_command: sandvault run\n"), 0o644)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -30,8 +30,8 @@ func TestLoadValidJSON(t *testing.T) {
 }
 
 func TestLoadEmptySandboxCommandAllowed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(path, []byte(`{"sandbox_command": ""}`), 0o644)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("sandbox_command: \"\"\n"), 0o644)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -43,8 +43,8 @@ func TestLoadEmptySandboxCommandAllowed(t *testing.T) {
 }
 
 func TestLoadMissingSandboxFieldDefaultsToEmpty(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(path, []byte(`{}`), 0o644)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("{}\n"), 0o644)
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -55,19 +55,19 @@ func TestLoadMissingSandboxFieldDefaultsToEmpty(t *testing.T) {
 	}
 }
 
-func TestLoadMalformedJSONReturnsError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	os.WriteFile(path, []byte(`{not json`), 0o644)
+func TestLoadMalformedYAMLReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte("sandbox_command: [invalid\n"), 0o644)
 
 	_, err := Load(path)
 	if err == nil {
-		t.Fatal("expected error for malformed JSON")
+		t.Fatal("expected error for malformed YAML")
 	}
 }
 
 func TestPathEnvVarOverride(t *testing.T) {
-	t.Setenv("KRANG_CONFIG", "/custom/path/config.json")
-	if got := Path(); got != "/custom/path/config.json" {
+	t.Setenv("KRANG_CONFIG", "/custom/path/config.yaml")
+	if got := Path(); got != "/custom/path/config.yaml" {
 		t.Errorf("expected env var path, got %q", got)
 	}
 }
@@ -75,13 +75,13 @@ func TestPathEnvVarOverride(t *testing.T) {
 func TestPathDefaultFallback(t *testing.T) {
 	t.Setenv("KRANG_CONFIG", "")
 	got := Path()
-	if !contains(got, filepath.Join(".config", "krang", "config.json")) {
-		t.Errorf("expected default path containing .config/krang/config.json, got %q", got)
+	if !contains(got, filepath.Join(".config", "krang", "config.yaml")) {
+		t.Errorf("expected default path containing .config/krang/config.yaml, got %q", got)
 	}
 }
 
 func TestWriteAndLoad(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "config.json")
+	path := filepath.Join(t.TempDir(), "sub", "config.yaml")
 
 	cfg := Config{SandboxCommand: "safehouse --append-profile foo.sb"}
 	if err := Write(path, cfg); err != nil {

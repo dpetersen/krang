@@ -59,18 +59,17 @@ require a relaunch to take effect):
 
 ## Configuration
 
-Config lives at `~/.config/krang/config.json`:
+Config lives at `~/.config/krang/config.yaml`:
 
-```json
-{
-  "sandbox_command": "safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG",
-  "theme": "catppuccin-mocha",
-  "default_vcs": "jj",
-  "github_orgs": ["myorg"],
-  "window_colors_enabled": true,
-  "window_color_permission": "red",
-  "window_color_waiting": "yellow"
-}
+```yaml
+sandbox_command: safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+theme: catppuccin-mocha
+default_vcs: jj
+github_orgs:
+  - myorg
+window_colors_enabled: true
+window_color_permission: red
+window_color_waiting: yellow
 ```
 
 | Field | Description |
@@ -121,10 +120,8 @@ Krang handles all DB writes from outside the sandbox.
 
 And in your krang config, pass the env vars through:
 
-```json
-{
-  "sandbox_command": "safehouse --append-profile ~/.config/safehouse/claude-overrides.sb --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
-}
+```yaml
+sandbox_command: safehouse --append-profile ~/.config/safehouse/claude-overrides.sb --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
 ```
 
 If hook events aren't showing up, the sandbox is the most likely cause.
@@ -221,10 +218,10 @@ repos_dir: repos
 workspaces_dir: workspaces
 
 # Default VCS for repos without .jj/ directory. "git" or "jj".
-# Overrides config.json's default_vcs for this project.
+# Overrides config.yaml's default_vcs for this project.
 default_vcs: jj
 
-# GitHub orgs for the Remote tab. Merged with config.json orgs.
+# GitHub orgs for the Remote tab. Merged with config.yaml orgs.
 github_orgs:
   - myorg
 
@@ -269,10 +266,8 @@ config files:
 
 Example — grant config reads and VCS write access for jj/worktree repos:
 
-```json
-{
-  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
-}
+```yaml
+sandbox_command: safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
 ```
 
 The `{{.ReposDir}}` write access is needed because jj workspaces and
@@ -285,7 +280,7 @@ details.
 
 | Path | Purpose |
 |------|---------|
-| `~/.config/krang/config.json` | Sandbox, theme, window colors, default VCS, GitHub orgs |
+| `~/.config/krang/config.yaml` | Sandbox, theme, window colors, default VCS, GitHub orgs |
 | `~/.config/krang/hooks/relay.sh` | Relay script (written by `krang setup`) |
 | `~/.local/share/krang/instances/<dir>/krang.db` | Per-instance SQLite database |
 | `~/.local/state/krang/instances/<dir>/krang-state.json` | Per-instance port file (ephemeral) |
@@ -346,4 +341,4 @@ use the relaunch keybinding).
 Available themes: `catppuccin-mocha` (default), `catppuccin-latte`,
 `catppuccin-frappe`, `catppuccin-macchiato`, `classic`.
 
-Set via the `"theme"` field in config.json.
+Set via the `"theme"` field in config.yaml.
