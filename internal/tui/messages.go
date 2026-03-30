@@ -4,6 +4,7 @@ import (
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/proctree"
+	"github.com/dpetersen/krang/internal/usage"
 )
 
 type TasksRefreshedMsg struct {
@@ -106,4 +107,10 @@ type remoteSearchResultMsg struct {
 type remoteCloneDoneMsg struct {
 	RepoName string
 	Err      error
+}
+
+type usageResultMsg struct {
+	TaskID string
+	Usage  *usage.UsageSummary
+	Err    error
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/dpetersen/krang/internal/proctree"
 	"github.com/dpetersen/krang/internal/summary"
 	"github.com/dpetersen/krang/internal/task"
+	"github.com/dpetersen/krang/internal/usage"
 	"github.com/dpetersen/krang/internal/tmux"
 	"github.com/dpetersen/krang/internal/workspace"
 )
@@ -83,6 +84,9 @@ type Model struct {
 
 	sparklineWindow SparklineWindow
 	sparklineData   map[string][]sparklineBucket
+
+	usageCache   map[string]*usage.UsageSummary
+	usageLoading map[string]bool
 
 	paletteCursor int
 }
@@ -164,6 +168,8 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		subagents:       make(map[string]map[string]string),
 		classifyGen:     make(map[string]uint64),
 		sparklineData:   make(map[string][]sparklineBucket),
+		usageCache:      make(map[string]*usage.UsageSummary),
+		usageLoading:    make(map[string]bool),
 		spinner:         s,
 	}
 }
@@ -441,6 +447,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.applyClassificationResult(msg.TaskID, db.AttentionDone)
 
+	case usageResultMsg:
+		delete(m.usageLoading, msg.TaskID)
+		if msg.Err != nil {
+			m.appendDebugLog(fmt.Sprintf("[%s] usage: %s: %v",
+				time.Now().Format("15:04:05"), msg.TaskID, msg.Err))
+			m.usageCache[msg.TaskID] = &usage.UsageSummary{Err: msg.Err}
+		} else {
+			m.usageCache[msg.TaskID] = msg.Usage
+		}
+		return m, nil
+
 	case pendingOpDoneMsg:
 		delete(m.pendingOps, msg.TaskID)
 		return m, m.refreshTasks
@@ -543,8 +560,9 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.focusSelected()
 
 	case "tab":
-		if m.selectedTask() != nil {
+		if t := m.selectedTask(); t != nil {
 			m.mode = ModeDetail
+			return m, m.fetchUsageIfNeeded(t)
 		}
 		return m, nil
 
@@ -1625,6 +1643,19 @@ func (m Model) classifyAttention(taskID, taskName, lastMsg string, tp *proctree.
 			Generation:     gen,
 			NeedsAttention: result.NeedsAttention,
 		}
+	}
+}
+
+func (m Model) fetchUsageIfNeeded(t *db.Task) tea.Cmd {
+	if t.TranscriptPath == "" || m.usageCache[t.ID] != nil || m.usageLoading[t.ID] {
+		return nil
+	}
+	m.usageLoading[t.ID] = true
+	taskID := t.ID
+	path := t.TranscriptPath
+	return func() tea.Msg {
+		summary, err := usage.ParseTranscript(path)
+		return usageResultMsg{TaskID: taskID, Usage: summary, Err: err}
 	}
 }
 

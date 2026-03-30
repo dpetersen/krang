@@ -10,6 +10,7 @@ import (
 	ltable "github.com/charmbracelet/lipgloss/table"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/tmux"
+	"github.com/dpetersen/krang/internal/usage"
 	"github.com/dpetersen/krang/internal/workspace"
 )
 
@@ -743,6 +744,14 @@ func (m Model) renderConfirmComplete(t *db.Task) string {
 func (m Model) renderDetailModal(t *db.Task) string {
 	var content strings.Builder
 
+	modalWidth := m.width / 2
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
 	// Header: name + state + attention
 	stateStr := stateLabel(t.State)
 	attnStr := m.attentionWithIndicators(*t)
@@ -816,6 +825,9 @@ func (m Model) renderDetailModal(t *db.Task) string {
 		}
 	}
 
+	// Usage section
+	content.WriteString(m.renderUsageSection(t, modalWidth))
+
 	// Actions section
 	content.WriteString("\n")
 	content.WriteString(m.styles.ModalTitle.Render("Actions"))
@@ -865,14 +877,6 @@ func (m Model) renderDetailModal(t *db.Task) string {
 	content.WriteString("\n")
 	content.WriteString("  " + m.renderHint("esc/tab", "Close"))
 
-	modalWidth := m.width / 2
-	if modalWidth < 40 {
-		modalWidth = 40
-	}
-	if modalWidth > m.width-4 {
-		modalWidth = m.width - 4
-	}
-
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.styles.ModalBorder).
@@ -882,6 +886,86 @@ func (m Model) renderDetailModal(t *db.Task) string {
 	return box.Render(content.String())
 }
 
+
+func (m Model) renderUsageSection(t *db.Task, modalWidth int) string {
+	if t.TranscriptPath == "" {
+		return ""
+	}
+
+	var b strings.Builder
+
+	if m.usageLoading[t.ID] {
+		b.WriteString("\n")
+		b.WriteString(m.styles.ModalContent.Render("  loading usage..."))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	summary := m.usageCache[t.ID]
+	if summary == nil {
+		return ""
+	}
+	if summary.Err != nil {
+		b.WriteString("\n")
+		b.WriteString(m.styles.ModalContent.Render("  usage: " + summary.Err.Error()))
+		b.WriteString("\n")
+		return b.String()
+	}
+	if len(summary.Snapshots) == 0 {
+		b.WriteString("\n")
+		b.WriteString(m.styles.ModalContent.Render("  usage: no token data found in transcript"))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	b.WriteString("\n")
+	b.WriteString(m.styles.ModalTitle.Render("Token Usage"))
+	b.WriteString("\n")
+
+	// Chart: inner width = modalWidth - border (2) - padding (4) - left indent (2).
+	chartWidth := modalWidth - 8
+	if chartWidth > 10 {
+		b.WriteString("\n")
+		chart := usage.RenderChart(summary, chartWidth, m.styles.theme.Accent, m.styles.theme.Muted)
+		for _, line := range strings.Split(strings.TrimRight(chart, "\n"), "\n") {
+			b.WriteString("  " + line + "\n")
+		}
+	}
+
+	// Per-model breakdown matching /cost format.
+	b.WriteString("\n")
+	for model, mu := range summary.TotalByModel {
+		shortModel := shortModelName(model)
+		line := fmt.Sprintf("  %s: %s input, %s output, %s cache read, %s cache write",
+			shortModel,
+			usage.FormatTokenCount(mu.Input),
+			usage.FormatTokenCount(mu.Output),
+			usage.FormatTokenCount(mu.CacheRead),
+			usage.FormatTokenCount(mu.CacheCreate),
+		)
+		b.WriteString(m.styles.ModalContent.Render(line))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func shortModelName(model string) string {
+	lower := strings.ToLower(model)
+	switch {
+	case strings.Contains(lower, "opus"):
+		return "opus"
+	case strings.Contains(lower, "sonnet"):
+		return "sonnet"
+	case strings.Contains(lower, "haiku"):
+		return "haiku"
+	default:
+		if len(model) > 12 {
+			return model[:12]
+		}
+		return model
+	}
+}
 
 func (m Model) renderWorkspaceProgress() string {
 	var content strings.Builder

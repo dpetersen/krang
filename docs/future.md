@@ -3,7 +3,6 @@
 ## Sit Rep Enhancements
 
 - **Parked sit rep variant** — a separate command to get briefings on parked tasks ("what should I do with these?")
-- **Store `last_assistant_message`** from Stop hook payloads — gives cheaper context without reading full transcripts
 - **Sit rep as modal overlay** — render on top of the existing TUI instead of replacing it (requires terminal compositing or a Bubble Tea overlay approach)
 
 ## Task Management
@@ -15,7 +14,6 @@
 The detail modal is implemented with context-sensitive actions, task stats, and background process display. Remaining additions:
 
 - **Last hook event** — show the most recent hook event name/timestamp
-- **Token usage and estimated cost** — track from hook events if possible
 
 ## Help Glossary & Scroll Indicator
 
@@ -24,28 +22,10 @@ Scrollable help with j/k navigation is implemented. Remaining work:
 - **Scroll position indicator** — show a visual indicator of scroll position (percentage or position bar)
 - **Expand glossary** — add explanations for concepts not covered elsewhere: workspaces and cleanup on complete, task flags, sandbox
 
-## Smart Attention Classification
-
-Currently the `Stop` hook event always maps to `AttentionWaiting`, but "Claude finished a task" and "Claude is asking you a question" feel very different. The yellow "wait" indicator can feel urgent when Claude is just done and idle.
-
-### How it would work
-
-The `Stop` hook payload includes `last_assistant_message` — Claude's final response text. A Haiku call (~350 input tokens, ~5 output tokens) can classify it as "done" (completed work, waiting for next instruction) vs "question" (asking the user something, needs a response). This maps to two distinct attention states with different visual treatments — e.g. a calm "done" vs an attention-grabbing "wait".
-
-### Implementation
-
-- **Config option** in `config.yaml`: `"classify_attention": true` (default off)
-- **On `Stop` event**: if enabled, fire an async Haiku call with the `last_assistant_message`. The task stays `AttentionWaiting` immediately, then a Bubble Tea message updates it to `AttentionDone` or keeps it `AttentionWaiting` when the classification returns.
-- **Nonblocking**: the classification runs in a goroutine, same pattern as the summary pipeline. The attention column updates when the result arrives (~500ms-1s later). No UI blocking.
-- **Cost**: ~$0.000375 per classification. Even at 100 stops/day across all tasks, that's ~$0.04/day.
-- **Existing infrastructure**: `AttentionDone` already exists in the DB, theme, and rendering code. It is set by the `TaskCompleted` hook (fires on subagent/subtask completion) and by the attention classifier. The `last_assistant_message` field is already parsed from hook payloads.
-- **Fallback**: if the Haiku call fails or times out, keep `AttentionWaiting` — no change from current behavior.
-
 ## Discoverability & Feedback
 
 - **Freeze confirmation** — warn about companion window destruction before freezing a task that has companions
 - **Task creation preview** — the new task wizard should show what it's about to do: which repos will be cloned, where the workspace directory will be created, what sandbox will be used. Show this as a summary step before executing.
-- **Workspace creation progress** — already partially implemented (workspace progress mode), but should show what's happening at each step (cloning repo X, setting up workspace at path Y).
 - **In-app config editor** — a TUI form (via `huh`) for editing both project-level (`krang.yaml`) and user-level (`config.yaml`) configuration. Avoids requiring users to hand-edit JSON/YAML files. Could be a modal accessible from the main screen or from the help overlay.
 
 ## Integration
@@ -123,3 +103,22 @@ Fork an existing task to branch off a new task with the same conversation histor
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
 - **Better error surfacing** — some operations fail silently; consider a dedicated error log file
 - **Configurable models** — allow changing the summary (haiku) and sit rep (sonnet) models
+
+## Discarded / Deferred Ideas
+
+### Estimated cost tracking
+
+Token usage display is implemented in the detail modal (parsing transcript JSONL files for per-API-call usage), but dollar cost estimation was dropped.
+
+**What we found:**
+- Claude Code hook events do **not** include token usage data. The hooks provide session IDs, event names, tool names, etc., but nothing about tokens or billing.
+- The transcript JSONL files (`~/.claude/projects/<project>/<session-id>.jsonl`) **do** contain full Anthropic API usage on every `assistant` message: `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, plus the model ID.
+- Transcripts write multiple entries per API response (streaming updates), so entries must be deduplicated by `message.id` to avoid double-counting.
+- Subagent transcripts are stored separately in `<session-id>/subagents/*.jsonl` and contain only the subagent's messages (no overlap with the main transcript).
+
+**Why cost estimation doesn't work well:**
+- Enterprise pricing differs significantly from published API rates (~5x cheaper for Opus in at least one case), making hard-coded rates misleading.
+- There's no programmatic API to query actual billing rates.
+- The Claude Code `/cost` command shows accurate per-session costs, but that data isn't exposed via hooks or any external interface.
+
+**Possible future path:** The `claude-cost` CLI plugin (`~/.claude/plugins/`) stores cost data somewhere locally. If that storage format can be reverse-engineered or if the plugin exposes an API, it could provide accurate cost data without hard-coding rates. Worth revisiting if the plugin ecosystem matures.
