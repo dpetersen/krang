@@ -52,6 +52,25 @@ The `Stop` hook payload includes `last_assistant_message` — Claude's final res
 
 - **Obsidian Kanban sync** — create tasks from Kanban cards, mark cards done when tasks complete
 
+## MCP Read API
+
+Expose krang's task state to external agents (e.g. a workload manager Claude that reads a Kanban/JIRA board) via read-only MCP resources or tools. The goal is not to build project management into krang, but to let agents query krang for situational awareness.
+
+**Core data to expose:**
+
+- **Task list with status** — name, state (active/parked/frozen), attention state, summary text from the DB. Essentially the data backing the TUI table without requiring the TUI.
+- **Per-task detail** — summary, cwd, flags, workspace dir, age, last hook event. The same info the detail modal shows.
+
+**Optional / configurable:**
+
+- **Tmux pane contents** — capture recent output from task panes via `tmux capture-pane`. Useful for agents that want to check on task progress directly. Default off since pane contents can be large and noisy. Could offer two modes: raw capture, or just session/window/pane identifiers so the caller can capture themselves.
+
+**Design notes:**
+
+- All reads come from the SQLite DB and tmux queries — no spinning up Haiku calls or doing expensive work on behalf of callers.
+- The existing hook HTTP server could host MCP endpoints, or this could be a separate MCP server process that reads the same DB.
+- Start with tools (`get_tasks`, `get_task_detail`) rather than resources, since the data changes frequently.
+
 ## Workspace Enhancements
 
 Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented. Remaining ideas:
