@@ -56,8 +56,6 @@ The `Stop` hook payload includes `last_assistant_message` — Claude's final res
 
 Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented. Remaining ideas:
 
-- **Blank slate workspace** — The task creation wizard should support creating a task in a brand new empty directory that krang provisions. Useful for experiments and greenfield projects where you don't need an existing repo. Krang would create a temp directory (e.g. `~/.local/share/krang/workspaces/<task-name>/`), set it as the task's cwd, and clean it up on complete like any other workspace. The wizard could offer this as a "New directory" option alongside the existing repo/cwd pickers.
-
 - **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI. All mutations go through the HTTP server for serialization. See `docs/workspaces.md` for the original design sketch.
 
 - **GitHub repo discovery enhancements** — core search/clone flow is implemented. Remaining ideas:

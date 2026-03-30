@@ -779,12 +779,12 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, p.filter.Cursor.BlinkCmd()
 	case "enter":
 		selected := p.selectedRepos()
-		if len(selected) == 0 {
-			return m, nil
-		}
 
-		// Add-repos flow.
+		// Add-repos flow — no point adding zero repos.
 		if m.addReposTaskID != "" {
+			if len(selected) == 0 {
+				return m, nil
+			}
 			rs := m.repoSets
 			workspaceDir := m.addReposWorkspaceDir
 			taskName := filepath.Base(workspaceDir)
@@ -947,6 +947,14 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 			m.mode = ModeWorkspaceProgress
 			m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
 			return m, m.createWorkspaceTask(result.Name, result.Flags, result.SelectedRepos, rs)
+		}
+
+		// single_repo with "(none)" selected — create empty workspace.
+		if rs.WorkspaceStrategy == workspace.StrategySingleRepo && len(result.SelectedRepos) == 0 {
+			m.workspaceTaskResult = nil
+			m.mode = ModeWorkspaceProgress
+			m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
+			return m, m.createWorkspaceTask(result.Name, result.Flags, nil, rs)
 		}
 
 		// Show the repo picker (multi_repo, or single_repo with no local repos).

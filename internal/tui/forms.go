@@ -196,9 +196,11 @@ func newWorkspaceTaskForm(nameInUse func(string) bool, availableRepos []string, 
 	// single_repo includes the repo picker inline; multi_repo uses
 	// the custom repo picker component after the form completes.
 	if singleRepo {
-		repoOptions := make([]huh.Option[string], len(availableRepos))
-		for i, r := range availableRepos {
-			repoOptions[i] = huh.NewOption(r, r)
+		repoOptions := []huh.Option[string]{
+			huh.NewOption("(none — empty workspace)", ""),
+		}
+		for _, r := range availableRepos {
+			repoOptions = append(repoOptions, huh.NewOption(r, r))
 		}
 		groups = append(groups, huh.NewGroup(
 			huh.NewSelect[string]().
@@ -221,7 +223,7 @@ func newWorkspaceTaskForm(nameInUse func(string) bool, availableRepos []string, 
 				result.Flags.Debug = true
 			}
 		}
-		if singleRepo {
+		if singleRepo && selectedRepo != "" {
 			result.SelectedRepos = []string{selectedRepo}
 		}
 		return formCompletedMsg{formType: formTypeWorkspaceTask}

@@ -93,6 +93,81 @@ func TestCreateSingleRepoWorkspace(t *testing.T) {
 	}
 }
 
+func TestCreateEmptyWorkspace(t *testing.T) {
+	for _, strategy := range []WorkspaceStrategy{StrategySingleRepo, StrategyMultiRepo} {
+		t.Run(string(strategy), func(t *testing.T) {
+			dir := t.TempDir()
+
+			workspacesDir := filepath.Join(dir, "workspaces")
+
+			rs := &RepoSets{
+				MetarepoDir:       dir,
+				WorkspaceStrategy: strategy,
+				ReposDir:          filepath.Join(dir, "repos"),
+				WorkspacesDir:     workspacesDir,
+				Repos:             map[string]RepoConfig{},
+				Sets:              map[string][]string{},
+			}
+
+			result, err := Create(rs, "empty-task", nil)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			expectedDir := filepath.Join(workspacesDir, "empty-task")
+			if result.WorkspaceDir != expectedDir {
+				t.Errorf("WorkspaceDir = %q, want %q", result.WorkspaceDir, expectedDir)
+			}
+			if len(result.Created) != 0 {
+				t.Errorf("Created = %v, want empty", result.Created)
+			}
+			if len(result.Errors) != 0 {
+				t.Errorf("Errors = %v, want empty", result.Errors)
+			}
+
+			info, err := os.Stat(expectedDir)
+			if err != nil {
+				t.Fatalf("workspace dir should exist: %v", err)
+			}
+			if !info.IsDir() {
+				t.Error("workspace path should be a directory")
+			}
+		})
+	}
+}
+
+func TestDestroyEmptyWorkspace(t *testing.T) {
+	for _, strategy := range []WorkspaceStrategy{StrategySingleRepo, StrategyMultiRepo} {
+		t.Run(string(strategy), func(t *testing.T) {
+			dir := t.TempDir()
+
+			workspacesDir := filepath.Join(dir, "workspaces")
+
+			rs := &RepoSets{
+				MetarepoDir:       dir,
+				WorkspaceStrategy: strategy,
+				ReposDir:          filepath.Join(dir, "repos"),
+				WorkspacesDir:     workspacesDir,
+				Repos:             map[string]RepoConfig{},
+				Sets:              map[string][]string{},
+			}
+
+			result, err := Create(rs, "empty-destroy", nil)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+
+			if err := Destroy(rs, result.WorkspaceDir); err != nil {
+				t.Fatalf("Destroy: %v", err)
+			}
+
+			if _, err := os.Stat(result.WorkspaceDir); !os.IsNotExist(err) {
+				t.Error("workspace dir should be removed after Destroy")
+			}
+		})
+	}
+}
+
 func TestCreateAlreadyExists(t *testing.T) {
 	dir := t.TempDir()
 

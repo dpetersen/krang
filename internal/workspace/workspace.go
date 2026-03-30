@@ -24,6 +24,16 @@ func Create(rs *RepoSets, taskName string, repos []string) (*CreateResult, error
 		return nil, fmt.Errorf("workspace directory already exists: %s", workspaceDir)
 	}
 
+	if len(repos) == 0 {
+		if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating empty workspace: %w", err)
+		}
+		return &CreateResult{
+			WorkspaceDir: workspaceDir,
+			Created:      map[string]string{},
+		}, nil
+	}
+
 	if rs.WorkspaceStrategy == StrategySingleRepo {
 		return createSingleRepo(rs, taskName, workspaceDir, repos[0])
 	}
