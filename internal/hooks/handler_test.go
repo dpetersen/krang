@@ -33,9 +33,26 @@ func TestAttentionFromEvent(t *testing.T) {
 			wantOK:        true,
 		},
 		{
+			event:         HookEvent{HookEventName: "PostToolUseFailure"},
+			wantAttention: db.AttentionOK,
+			wantOK:        true,
+		},
+		{
 			event:         HookEvent{HookEventName: "StopFailure"},
 			wantAttention: db.AttentionError,
 			wantOK:        true,
+		},
+		{
+			event:  HookEvent{HookEventName: "SubagentStart"},
+			wantOK: false,
+		},
+		{
+			event:  HookEvent{HookEventName: "SubagentStop"},
+			wantOK: false,
+		},
+		{
+			event:  HookEvent{HookEventName: "PreToolUse"},
+			wantOK: false,
 		},
 		{
 			event:         HookEvent{HookEventName: "TaskCompleted"},

@@ -38,7 +38,7 @@ The `Stop` hook payload includes `last_assistant_message` — Claude's final res
 - **On `Stop` event**: if enabled, fire an async Haiku call with the `last_assistant_message`. The task stays `AttentionWaiting` immediately, then a Bubble Tea message updates it to `AttentionDone` or keeps it `AttentionWaiting` when the classification returns.
 - **Nonblocking**: the classification runs in a goroutine, same pattern as the summary pipeline. The attention column updates when the result arrives (~500ms-1s later). No UI blocking.
 - **Cost**: ~$0.000375 per classification. Even at 100 stops/day across all tasks, that's ~$0.04/day.
-- **Existing infrastructure**: `AttentionDone` already exists in the DB, theme, and rendering code (currently only reachable via the `TaskCompleted` hook, which doesn't fire in standard single-agent sessions). The `last_assistant_message` field is already parsed from hook payloads.
+- **Existing infrastructure**: `AttentionDone` already exists in the DB, theme, and rendering code. It is set by the `TaskCompleted` hook (fires on subagent/subtask completion) and by the attention classifier. The `last_assistant_message` field is already parsed from hook payloads.
 - **Fallback**: if the Haiku call fails or times out, keep `AttentionWaiting` — no change from current behavior.
 
 ## Discoverability & Feedback

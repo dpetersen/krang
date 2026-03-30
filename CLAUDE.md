@@ -168,7 +168,9 @@ On krang exit, parked tasks are offered for freezing. If frozen (or none exist),
 
 ## Hook Events
 
-Krang listens for: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `ToolResult`, `TaskCompleted`, `StopFailure`, `Notification`, `SessionEnd`. Events matched to tasks by `session_id`. Resumed sessions adopted via cwd matching on `SessionStart`.
+Krang listens for: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, `TaskCompleted`, `StopFailure`, `Notification`, `SessionEnd`. Events matched to tasks by `session_id`. Resumed sessions adopted via cwd matching on `SessionStart`.
+
+Events may include `agent_id` and `agent_type` fields identifying which subagent fired them. Krang tracks active subagents per task via `SubagentStart`/`SubagentStop` events and displays a 🤖N indicator in the Attn column. Subagent state is cleared on `Stop` or `SessionEnd` (main agent finished).
 
 Hooks are `type: "command"` entries in `~/.claude/settings.json` pointing to the relay script. The relay script only forwards events when `KRANG_STATEFILE` is set (which krang does for sessions it launches), so standalone Claude sessions are unaffected.
 

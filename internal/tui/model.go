@@ -72,6 +72,7 @@ type Model struct {
 	debugLog []string
 
 	taskProcesses map[string]*proctree.TaskProcesses
+	subagents     map[string]map[string]string // taskID → agentID → agentType
 
 	pendingOps   map[string]string // taskID → operation label (e.g. "freezing...")
 	classifyGen  map[string]uint64 // taskID → generation counter for cancellation
@@ -160,6 +161,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		repoSets:        rs,
 		filterInput:     filterInput,
 		pendingOps:      make(map[string]string),
+		subagents:       make(map[string]map[string]string),
 		classifyGen:     make(map[string]uint64),
 		sparklineData:   make(map[string][]sparklineBucket),
 		spinner:         s,
@@ -221,7 +223,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Event.ToolName != "" {
 			logLine += " tool=" + msg.Event.ToolName
 		}
+		if msg.Event.AgentID != "" {
+			logLine += " agent=" + msg.Event.AgentID
+		}
 		m.appendDebugLog(logLine)
+
+		// Track subagent lifecycle.
+		switch msg.Event.HookEventName {
+		case "SubagentStart":
+			if m.subagents[t.ID] == nil {
+				m.subagents[t.ID] = make(map[string]string)
+			}
+			m.subagents[t.ID][msg.Event.AgentID] = msg.Event.AgentType
+		case "SubagentStop":
+			delete(m.subagents[t.ID], msg.Event.AgentID)
+			if len(m.subagents[t.ID]) == 0 {
+				delete(m.subagents, t.ID)
+			}
+		case "Stop", "SessionEnd":
+			// Main agent stopped — all subagents are gone.
+			delete(m.subagents, t.ID)
+		}
 
 		// Bump generation to invalidate any in-flight classification.
 		m.classifyGen[t.ID]++
@@ -1566,10 +1588,6 @@ func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool) tea.Cmd 
 
 		if event.TranscriptPath != "" && event.TranscriptPath != t.TranscriptPath {
 			_ = m.taskStore.UpdateTranscriptPath(t.ID, event.TranscriptPath)
-		}
-
-		if event.HookEventName == "TaskCompleted" {
-			_ = m.taskStore.UpdateState(t.ID, db.StateCompleted)
 		}
 
 		return m.refreshTasks()

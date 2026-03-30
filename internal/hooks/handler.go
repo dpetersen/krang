@@ -13,6 +13,8 @@ type HookEvent struct {
 	NotificationType     string `json:"notification_type,omitempty"`
 	ToolName             string `json:"tool_name,omitempty"`
 	LastAssistantMessage string `json:"last_assistant_message,omitempty"`
+	AgentID              string `json:"agent_id,omitempty"`
+	AgentType            string `json:"agent_type,omitempty"`
 	RawPayload           string `json:"-"`
 }
 
@@ -28,6 +30,8 @@ func AttentionFromEvent(event HookEvent) (db.AttentionState, bool) {
 	case "PermissionRequest":
 		return db.AttentionPermission, true
 	case "PostToolUse":
+		return db.AttentionOK, true
+	case "PostToolUseFailure":
 		return db.AttentionOK, true
 	case "StopFailure":
 		return db.AttentionError, true

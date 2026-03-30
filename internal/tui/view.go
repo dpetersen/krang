@@ -289,7 +289,7 @@ func (m Model) renderTable() string {
 			cursor = ">"
 		}
 
-		attn := m.attentionWithProcs(t)
+		attn := m.attentionWithIndicators(t)
 		if op, ok := m.pendingOps[t.ID]; ok {
 			if op != "" {
 				attn = m.spinner.View() + " " + op
@@ -472,15 +472,21 @@ func attentionLabel(attention db.AttentionState) string {
 	}
 }
 
-// attentionWithProcs returns the attention label, appending ⚙N when
-// Claude is stopped but background child processes are still running.
-func (m Model) attentionWithProcs(t db.Task) string {
+// attentionWithIndicators returns the attention label with optional
+// indicators: ⚙N for background processes, 🤖N for active subagents.
+func (m Model) attentionWithIndicators(t db.Task) string {
 	label := attentionLabel(t.Attention)
 	if t.Attention == db.AttentionOK {
+		if agents := m.subagents[t.ID]; len(agents) > 0 {
+			return label + fmt.Sprintf("🤖%d", len(agents))
+		}
 		return label
 	}
 	if tp, ok := m.taskProcesses[t.ID]; ok && len(tp.Children) > 0 {
 		label += fmt.Sprintf("⚙%d", len(tp.Children))
+	}
+	if agents := m.subagents[t.ID]; len(agents) > 0 {
+		label += fmt.Sprintf("🤖%d", len(agents))
 	}
 	return label
 }
@@ -684,6 +690,8 @@ func (m Model) buildHelpContent() string {
 		{"wait", "Claude stopped and is waiting for your input."},
 		{"PERM", "A permission prompt is blocking Claude."},
 		{"ERR", "Something went wrong (e.g. stop failure)."},
+		{"⚙N", "N background child processes running."},
+		{"\U0001F916N", "N active subagents running."},
 	} {
 		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
 	}
@@ -737,7 +745,7 @@ func (m Model) renderDetailModal(t *db.Task) string {
 
 	// Header: name + state + attention
 	stateStr := stateLabel(t.State)
-	attnStr := m.attentionWithProcs(*t)
+	attnStr := m.attentionWithIndicators(*t)
 	header := fmt.Sprintf("%s  [%s]  %s", t.Name, stateStr, attnStr)
 	content.WriteString(m.styles.ModalTitle.Render(header))
 	content.WriteString("\n")
@@ -793,6 +801,17 @@ func (m Model) renderDetailModal(t *db.Task) string {
 		content.WriteString("\n")
 		for _, child := range tp.Children {
 			content.WriteString(m.styles.ModalContent.Render("    " + child.Command))
+			content.WriteString("\n")
+		}
+	}
+
+	// Subagent section
+	if agents := m.subagents[t.ID]; len(agents) > 0 {
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  Active subagents (%d):", len(agents))))
+		content.WriteString("\n")
+		for _, agentType := range agents {
+			content.WriteString(m.styles.ModalContent.Render("    " + agentType))
 			content.WriteString("\n")
 		}
 	}
