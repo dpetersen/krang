@@ -483,6 +483,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
+	case ModeConfirmQuit:
+		return m.handleConfirmQuitKey(msg)
 	case ModeConfirmComplete:
 		return m.handleConfirmCompleteKey(msg)
 	case ModeDetail:
@@ -518,6 +520,10 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "q", "ctrl+c":
+		if m.hasParkedTasks() {
+			m.mode = ModeConfirmQuit
+			return m, nil
+		}
 		return m, tea.Quit
 
 	case "j", "down":
@@ -1093,6 +1099,27 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeNormal
 		return m, nil
 	}
+}
+
+func (m Model) handleConfirmQuitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		return m, tea.Quit
+	case "n", "N", "esc":
+		m.mode = ModeNormal
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) hasParkedTasks() bool {
+	for _, t := range m.tasks {
+		if t.State == db.StateParked {
+			return true
+		}
+	}
+	return false
 }
 
 // startPendingOp sets a pending operation label on a task and starts the

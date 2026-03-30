@@ -46,6 +46,8 @@ func (m Model) View() string {
 		}
 	case ModeCommandPalette:
 		modalContent = m.renderCommandPalette()
+	case ModeConfirmQuit:
+		modalContent = m.renderConfirmQuit()
 	case ModeFilter:
 		top.WriteString("\n")
 		top.WriteString(m.styles.InputLabel.Render("Filter: "))
@@ -71,7 +73,8 @@ func (m Model) View() string {
 	// Action bar shown in normal mode and modal overlay modes (where
 	// it's visible behind the overlay).
 	showHints := m.mode == ModeNormal || m.mode == ModeDetail ||
-		m.mode == ModeConfirmComplete || m.mode == ModeCommandPalette
+		m.mode == ModeConfirmComplete || m.mode == ModeCommandPalette ||
+		m.mode == ModeConfirmQuit
 	if showHints {
 		if m.filterText != "" {
 			top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
@@ -735,6 +738,50 @@ func (m Model) renderConfirmComplete(t *db.Task) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.styles.theme.Error).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(content.String())
+}
+
+func (m Model) renderConfirmQuit() string {
+	var parkedNames []string
+	for _, t := range m.tasks {
+		if t.State == db.StateParked {
+			parkedNames = append(parkedNames, t.Name)
+		}
+	}
+
+	var content strings.Builder
+
+	content.WriteString(m.styles.ModalTitle.Render("Quit krang?"))
+	content.WriteString("\n\n")
+
+	content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf(
+		"You have %d parked task(s) still running:",
+		len(parkedNames))))
+	content.WriteString("\n")
+	for _, name := range parkedNames {
+		content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  • %s", name)))
+		content.WriteString("\n")
+	}
+	content.WriteString("\n")
+	content.WriteString(m.styles.ModalContent.Render(
+		"They will continue in a detached tmux session but won't be visible outside krang. They will reappear as parked when krang is restarted. If you want to stop them, go back and freeze them first."))
+	content.WriteString("\n\n")
+	content.WriteString("          " + m.renderHint("y", "Quit") + "  " + m.renderHint("n", "Cancel"))
+
+	modalWidth := m.width / 2
+	if modalWidth < 50 {
+		modalWidth = 50
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.theme.Warning).
 		Padding(1, 2).
 		Width(modalWidth)
 

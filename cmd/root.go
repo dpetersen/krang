@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/dpetersen/krang/internal/config"
@@ -133,51 +131,6 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("running TUI: %w", err)
 	}
 
-	cleanupParkedSession(manager, parkedSession)
-
 	return nil
 }
 
-func cleanupParkedSession(manager *task.Manager, parkedSession string) {
-	if !tmux.SessionExists(parkedSession) {
-		return
-	}
-
-	tasks, err := manager.ListTasks()
-	if err != nil {
-		return
-	}
-
-	var parkedTasks []db.Task
-	for _, t := range tasks {
-		if t.State == db.StateParked {
-			parkedTasks = append(parkedTasks, t)
-		}
-	}
-
-	if len(parkedTasks) == 0 {
-		_ = tmux.KillSession(parkedSession)
-		return
-	}
-
-	fmt.Printf("\n%d parked task(s) still running in the background:\n", len(parkedTasks))
-	for _, t := range parkedTasks {
-		fmt.Printf("  - %s\n", t.Name)
-	}
-	fmt.Print("\nFreeze them before exiting? [Y/n] ")
-
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
-	answer = strings.TrimSpace(strings.ToLower(answer))
-
-	if answer == "" || answer == "y" || answer == "yes" {
-		for _, t := range parkedTasks {
-			if err := manager.Dormify(t.ID); err != nil {
-				fmt.Fprintf(os.Stderr, "  warning: could not freeze %s: %s\n", t.Name, err)
-			} else {
-				fmt.Printf("  froze %s\n", t.Name)
-			}
-		}
-		_ = tmux.KillSession(parkedSession)
-	}
-}
