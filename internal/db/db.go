@@ -78,8 +78,11 @@ func migrate(database *sql.DB) error {
 	if version < 5 {
 		database.Exec(schemaV5)
 	}
+	if version < 6 {
+		database.Exec(schemaV6)
+	}
 
-	_, _ = database.Exec("PRAGMA user_version = 5")
+	_, _ = database.Exec("PRAGMA user_version = 6")
 	return nil
 }
 

@@ -52,8 +52,9 @@ type Model struct {
 
 	helpViewport viewport.Model
 
-	pendingFlags   db.TaskFlags
-	flagEditTaskID string
+	pendingFlags          db.TaskFlags
+	pendingSandboxProfile string
+	flagEditTaskID        string
 
 	repoSets *workspace.RepoSets
 
@@ -101,13 +102,6 @@ type flagDefinition struct {
 }
 
 var flagDefinitions = []flagDefinition{
-	{
-		Label:            "No Sandbox",
-		Description:      "Launch claude directly (skip sandbox wrapper)",
-		Get:              func(f db.TaskFlags) bool { return f.NoSandbox },
-		Set:              func(f *db.TaskFlags, v bool) { f.NoSandbox = v },
-		RequiresRelaunch: true,
-	},
 	{
 		Label:            "Skip Permissions",
 		Description:      "Pass --dangerously-skip-permissions",
@@ -732,7 +726,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// select and go through the tabbed picker after the form
 			// (same path as multi_repo) so the user can clone from Remote.
 			showInlineSelect := singleRepo && len(repos) > 0
-			form, result := newWorkspaceTaskForm(m.taskStore.NameInUse, repos, showInlineSelect, m.huhTheme())
+			form, result := newWorkspaceTaskForm(m.taskStore.NameInUse, repos, showInlineSelect, m.cfg.SandboxProfileNames(), m.cfg.DefaultSandbox, m.huhTheme())
 			m.activeForm = form
 			m.workspaceTaskResult = result
 			m.mode = ModeForm
@@ -742,7 +736,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return m, func() tea.Msg { return ErrorMsg{Err: err} }
 		}
-		form, result := newTaskCreationForm(m.taskStore.NameInUse, baseDir, m.huhTheme())
+		form, result := newTaskCreationForm(m.taskStore.NameInUse, baseDir, m.cfg.SandboxProfileNames(), m.cfg.DefaultSandbox, m.huhTheme())
 		m.activeForm = form
 		m.taskCreationResult = result
 		m.mode = ModeForm
@@ -937,10 +931,17 @@ func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		taskID := m.flagEditTaskID
 		flags := m.pendingFlags
+		sandboxProfile := m.pendingSandboxProfile
 		m.mode = ModeNormal
+		m.pendingSandboxProfile = ""
 		return m, func() tea.Msg {
 			if err := m.taskStore.UpdateFlags(taskID, flags); err != nil {
 				return ErrorMsg{Err: err}
+			}
+			if sandboxProfile != "" {
+				if err := m.taskStore.UpdateSandboxProfile(taskID, sandboxProfile); err != nil {
+					return ErrorMsg{Err: err}
+				}
 			}
 			if err := m.manager.Relaunch(taskID); err != nil {
 				return ErrorMsg{Err: err}
@@ -949,6 +950,7 @@ func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	default:
 		m.mode = ModeNormal
+		m.pendingSandboxProfile = ""
 		return m, nil
 	}
 }
@@ -1043,7 +1045,7 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.addReposWorkspaceDir = ""
 			m.mode = ModeWorkspaceProgress
 			title := fmt.Sprintf("Adding repos to %q", taskName)
-			m.initWSProgress(title, selected, rs, false, taskName, db.TaskFlags{})
+			m.initWSProgress(title, selected, rs, false, taskName, db.TaskFlags{}, "")
 			m.wsProgress.WorkspaceDir = workspaceDir
 			// Start first clone directly (dir already exists).
 			if len(selected) > 0 {
@@ -1063,7 +1065,7 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activeRepoPicker = nil
 		m.mode = ModeWorkspaceProgress
 		title := fmt.Sprintf("Creating workspace %q", result.Name)
-		m.initWSProgress(title, selected, rs, true, result.Name, result.Flags)
+		m.initWSProgress(title, selected, rs, true, result.Name, result.Flags, result.SandboxProfile)
 		return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
 	case "esc":
 		// If there's filter text, clear it first.
@@ -1193,7 +1195,7 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 		}
 		result := m.taskCreationResult
 		m.taskCreationResult = nil
-		return m, m.createTask(result.Name, "", result.Cwd, result.Flags)
+		return m, m.createTask(result.Name, "", result.Cwd, result.Flags, result.SandboxProfile)
 
 	case formTypeWorkspaceTask:
 		if m.workspaceTaskResult == nil {
@@ -1207,7 +1209,7 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 			m.workspaceTaskResult = nil
 			m.mode = ModeWorkspaceProgress
 			title := fmt.Sprintf("Creating workspace %q", result.Name)
-			m.initWSProgress(title, result.SelectedRepos, rs, true, result.Name, result.Flags)
+			m.initWSProgress(title, result.SelectedRepos, rs, true, result.Name, result.Flags, result.SandboxProfile)
 			return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
 		}
 
@@ -1216,7 +1218,7 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 			m.workspaceTaskResult = nil
 			m.mode = ModeWorkspaceProgress
 			title := fmt.Sprintf("Creating workspace %q", result.Name)
-			m.initWSProgress(title, nil, rs, true, result.Name, result.Flags)
+			m.initWSProgress(title, nil, rs, true, result.Name, result.Flags, result.SandboxProfile)
 			return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
 		}
 
@@ -1256,11 +1258,27 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// For dormant tasks, just save flags directly.
+		// Determine effective original sandbox profile for comparison.
+		originalProfile := originalTask.SandboxProfile
+		if originalProfile == "" {
+			originalProfile = m.cfg.DefaultSandbox
+		}
+		if originalProfile == "" {
+			originalProfile = "none"
+		}
+		sandboxChanged := result.SandboxProfile != originalProfile
+
+		// For dormant tasks, just save directly.
 		if originalTask.State == db.StateDormant {
+			newProfile := result.SandboxProfile
 			return m, func() tea.Msg {
 				if err := m.taskStore.UpdateFlags(taskID, result.Flags); err != nil {
 					return ErrorMsg{Err: err}
+				}
+				if sandboxChanged {
+					if err := m.taskStore.UpdateSandboxProfile(taskID, newProfile); err != nil {
+						return ErrorMsg{Err: err}
+					}
 				}
 				return m.refreshTasks()
 			}
@@ -1274,6 +1292,9 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		if sandboxChanged {
+			relaunchNeeded = true
+		}
 
 		if !relaunchNeeded {
 			return m, func() tea.Msg {
@@ -1286,6 +1307,7 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 
 		// Need confirmation for relaunch.
 		m.pendingFlags = result.Flags
+		m.pendingSandboxProfile = result.SandboxProfile
 		m.mode = ModeConfirmRelaunch
 		return m, nil
 	}
@@ -1458,7 +1480,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "F":
 		if t.State != db.StateCompleted && t.State != db.StateFailed {
 			m.flagEditTaskID = t.ID
-			form, result := newFlagEditForm(t.Flags, t.Name, m.huhTheme())
+			form, result := newFlagEditForm(t.Flags, t.SandboxProfile, m.cfg.SandboxProfileNames(), m.cfg.DefaultSandbox, t.Name, m.huhTheme())
 			m.activeForm = form
 			m.flagEditFormResult = result
 			m.mode = ModeForm
@@ -1707,16 +1729,16 @@ func (m Model) doSummarize() tea.Msg {
 	return SummariesUpdatedMsg{DebugLines: debugLines}
 }
 
-func (m Model) createTask(name, prompt, cwd string, flags db.TaskFlags) tea.Cmd {
+func (m Model) createTask(name, prompt, cwd string, flags db.TaskFlags, sandboxProfile string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := m.manager.CreateTask(name, prompt, cwd, flags); err != nil {
+		if _, err := m.manager.CreateTask(name, prompt, cwd, flags, sandboxProfile); err != nil {
 			return ErrorMsg{Err: err}
 		}
 		return m.refreshTasks()
 	}
 }
 
-func (m *Model) initWSProgress(title string, repos []string, rs *workspace.RepoSets, launchTask bool, taskName string, flags db.TaskFlags) {
+func (m *Model) initWSProgress(title string, repos []string, rs *workspace.RepoSets, launchTask bool, taskName string, flags db.TaskFlags, sandboxProfile string) {
 	entries := make([]repoCloneEntry, len(repos))
 	for i, repo := range repos {
 		entries[i] = repoCloneEntry{
@@ -1725,11 +1747,12 @@ func (m *Model) initWSProgress(title string, repos []string, rs *workspace.RepoS
 		}
 	}
 	m.wsProgress = &wsProgressState{
-		Title:      title,
-		Repos:      entries,
-		LaunchTask: launchTask,
-		TaskName:   taskName,
-		TaskFlags:  flags,
+		Title:              title,
+		Repos:              entries,
+		LaunchTask:         launchTask,
+		TaskName:           taskName,
+		TaskFlags:          flags,
+		TaskSandboxProfile: sandboxProfile,
 	}
 }
 
@@ -1779,8 +1802,9 @@ func (m Model) wsLaunchTaskCmd() tea.Cmd {
 	name := ws.TaskName
 	workspaceDir := ws.WorkspaceDir
 	flags := ws.TaskFlags
+	sandboxProfile := ws.TaskSandboxProfile
 	return func() tea.Msg {
-		t, err := m.manager.CreateTask(name, "", workspaceDir, flags)
+		t, err := m.manager.CreateTask(name, "", workspaceDir, flags, sandboxProfile)
 		if err != nil {
 			return wsLaunchDoneMsg{Err: err}
 		}

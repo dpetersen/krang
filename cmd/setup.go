@@ -57,10 +57,15 @@ func runSetup() error {
 	configPath := config.Path()
 	if cfg, err := config.Load(configPath); err == nil {
 		fmt.Printf("Config already exists at %s\n", configPath)
-		if cfg.SandboxCommand != "" {
-			fmt.Printf("  sandbox_command: %s\n", cfg.SandboxCommand)
+		if len(cfg.Sandboxes) > 0 {
+			for name, profile := range cfg.Sandboxes {
+				fmt.Printf("  sandbox %q: %s\n", name, profile.Command)
+			}
+			if cfg.DefaultSandbox != "" {
+				fmt.Printf("  default_sandbox: %s\n", cfg.DefaultSandbox)
+			}
 		} else {
-			fmt.Println("  sandbox_command: (none — no sandboxing)")
+			fmt.Println("  sandboxes: (none — no sandboxing)")
 		}
 		return nil
 	}
@@ -82,11 +87,17 @@ func configureSandbox(reader *bufio.Reader, configPath string) error {
 	}
 	sandboxCommand := strings.TrimSpace(input)
 
+	var cfg config.Config
 	if sandboxCommand == "" {
 		fmt.Println("Warning: no sandbox configured. Claude will run without sandboxing.")
+	} else {
+		cfg = config.Config{
+			Sandboxes: map[string]config.SandboxProfile{
+				"default": {Type: "command", Command: sandboxCommand},
+			},
+			DefaultSandbox: "default",
+		}
 	}
-
-	cfg := config.Config{SandboxCommand: sandboxCommand}
 	if err := config.Write(configPath, cfg); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}

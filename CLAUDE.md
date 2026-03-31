@@ -9,7 +9,7 @@ TUI task orchestrator for managing multiple Claude Code sessions via tmux.
 - **Claude Code command hooks** via relay script that reads `KRANG_STATEFILE` for the dynamic port
 - **AI summaries** via `claude -p --model haiku` with structured JSON output (includes current summary in prompt to reduce churn)
 - **Attention classification** via Haiku on Stop events to distinguish "done" vs "waiting"
-- Claude spawned via configurable sandbox wrapper
+- Claude spawned via named sandbox profiles (configurable per-task)
 
 ## Multi-Instance Support
 
@@ -23,7 +23,7 @@ Multiple krang instances can run simultaneously for different working directorie
 
 | Path | Purpose | XDG category |
 |------|---------|-------------|
-| `~/.config/krang/config.yaml` | Sandbox command, window colors, attention classification, default VCS, GitHub orgs | Config |
+| `~/.config/krang/config.yaml` | Named sandbox profiles, window colors, attention classification, default VCS, GitHub orgs | Config |
 | `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Config |
 | `~/.local/share/krang/instances/…/krang.db` | Per-instance SQLite database | Data |
 | `~/.local/state/krang/instances/…/krang-state.json` | Per-instance port file (ephemeral, exists while running) | State |
@@ -144,7 +144,7 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - Git clones use local hardlinks for speed; jj repos use `jj workspace add`
 - Workspaces destroyed on task complete (jj workspace forget + rm -rf)
 - `W` in the detail modal adds repos to existing multi_repo workspaces
-- Sandbox command supports Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files
+- Sandbox profiles of type `command` support Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files
 - **GitHub repo discovery** — the repo picker has a tabbed interface (`Tab` toggles Local / Remote). The Remote tab searches GitHub orgs via `gh` CLI and clones repos into the repos dir. Config orgs show as a selectable list; "Other..." allows manual entry. Search is debounced (300ms). After cloning, the Local tab refreshes to show the new repo.
 - **`default_vcs`** — configurable in `config.yaml` (user-level) or `krang.yaml` (project-level, takes precedence). Controls whether remote clones use `git clone` or `jj git clone`. Defaults to `git`.
 - **`github_orgs`** — configurable in both `config.yaml` and `krang.yaml`, merged with dedup. Saved orgs appear in the org select list on the Remote tab.
@@ -190,6 +190,21 @@ Task cwd updates live from hook event payloads. Displayed as relative paths when
 - **Priority** — active tasks only, sorted by attention: permission > error > waiting > ok > done
 
 ## Sandboxing
+
+Krang supports named sandbox profiles configured in `config.yaml`. Each profile has a `type` (currently only `command`) and type-specific fields. Tasks can be assigned a specific profile at creation time or via the flag edit form (`F` in detail modal); changing the profile on an active task triggers a relaunch.
+
+```yaml
+sandboxes:
+  default:
+    type: command
+    command: "safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
+  cloud-tools:
+    type: command
+    command: "safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG --env-pass AWS_PROFILE"
+default_sandbox: default
+```
+
+Selecting "(none)" in the sandbox picker or not configuring any profiles runs Claude unsandboxed (shown with ☠ in the task table, like `DangerouslySkipPermissions`).
 
 Krang itself runs unsandboxed; only the Claude processes inside task windows are sandboxed. The sandbox must pass through `KRANG_STATEFILE` (required) and `KRANG_DEBUG` (optional) env vars, and allow read access to `~/.local/state/krang/` (state file) and read+execute on `~/.config/krang/hooks/` (relay script). No write access to krang paths is needed from inside the sandbox. See README.md for full details.
 

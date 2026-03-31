@@ -62,7 +62,14 @@ require a relaunch to take effect):
 Config lives at `~/.config/krang/config.yaml`:
 
 ```yaml
-sandbox_command: safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+sandboxes:
+  default:
+    type: command
+    command: safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+  cloud-tools:
+    type: command
+    command: safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG --env-pass AWS_PROFILE
+default_sandbox: default
 theme: catppuccin-mocha
 default_vcs: jj
 github_orgs:
@@ -74,7 +81,8 @@ window_color_waiting: yellow
 
 | Field | Description |
 |-------|-------------|
-| `sandbox_command` | Command to wrap Claude in a sandbox |
+| `sandboxes` | Named sandbox profiles, each with a `type` and type-specific fields |
+| `default_sandbox` | Name of the sandbox profile to use by default |
 | `theme` | UI theme (see Themes section) |
 | `default_vcs` | Default VCS for remote clones: `"git"` (default) or `"jj"`. Overridden by per-repo config or `.jj/` auto-detection |
 | `github_orgs` | GitHub orgs for the Remote tab in the repo picker. Merged with `krang.yaml` orgs |
@@ -84,9 +92,11 @@ window_color_waiting: yellow
 
 ### Sandbox Setup
 
-Krang supports wrapping Claude in a sandbox (configured via
-`sandbox_command`). The sandbox runs around the Claude process inside
-each task's tmux window. Krang itself runs unsandboxed.
+Krang supports named sandbox profiles configured via `sandboxes` in
+config.yaml. Each profile has a `type` field (currently only `command`
+is supported) and type-specific fields. Tasks can be assigned a
+specific sandbox profile at creation time or changed later via the
+flag edit form. Krang itself runs unsandboxed.
 
 If you use a sandbox, it must allow the following or hook events will
 silently fail:
@@ -121,7 +131,11 @@ Krang handles all DB writes from outside the sandbox.
 And in your krang config, pass the env vars through:
 
 ```yaml
-sandbox_command: safehouse --append-profile ~/.config/safehouse/claude-overrides.sb --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+sandboxes:
+  default:
+    type: command
+    command: safehouse --append-profile ~/.config/safehouse/claude-overrides.sb --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+default_sandbox: default
 ```
 
 If hook events aren't showing up, the sandbox is the most likely cause.
@@ -253,8 +267,8 @@ called before removal. Frozen tasks keep their workspace intact.
 
 ### Sandbox Template Variables
 
-When using a sandbox, the `sandbox_command` supports Go template
-variables for granting workspace tasks access to metarepo-level
+Sandbox profiles of type `command` support Go template variables in
+the `command` field for granting workspace tasks access to metarepo-level
 config files:
 
 | Variable | Description |
@@ -267,7 +281,11 @@ config files:
 Example — grant config reads and VCS write access for jj/worktree repos:
 
 ```yaml
-sandbox_command: safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+sandboxes:
+  default:
+    type: command
+    command: safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+default_sandbox: default
 ```
 
 The `{{.ReposDir}}` write access is needed because jj workspaces and

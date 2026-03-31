@@ -234,11 +234,11 @@ func TestTaskFlagsHasNonDefault(t *testing.T) {
 	if (TaskFlags{}).HasNonDefault() {
 		t.Error("zero-value flags should not be non-default")
 	}
-	if !(TaskFlags{NoSandbox: true}).HasNonDefault() {
-		t.Error("NoSandbox should be non-default")
-	}
 	if !(TaskFlags{DangerouslySkipPermissions: true}).HasNonDefault() {
 		t.Error("DangerouslySkipPermissions should be non-default")
+	}
+	if !(TaskFlags{Debug: true}).HasNonDefault() {
+		t.Error("Debug should be non-default")
 	}
 }
 
@@ -248,7 +248,7 @@ func TestTaskCreateWithFlags(t *testing.T) {
 	task := &Task{
 		ID: "01ABC", Name: "flagged", State: StateActive,
 		Attention: AttentionOK, Cwd: "/tmp",
-		Flags: TaskFlags{NoSandbox: true, DangerouslySkipPermissions: true},
+		Flags: TaskFlags{DangerouslySkipPermissions: true},
 	}
 	if err := store.Create(task); err != nil {
 		t.Fatalf("creating: %v", err)
@@ -257,9 +257,6 @@ func TestTaskCreateWithFlags(t *testing.T) {
 	tasks, err := store.List()
 	if err != nil {
 		t.Fatalf("listing: %v", err)
-	}
-	if !tasks[0].Flags.NoSandbox {
-		t.Error("expected NoSandbox to be true")
 	}
 	if !tasks[0].Flags.DangerouslySkipPermissions {
 		t.Error("expected DangerouslySkipPermissions to be true")
@@ -277,7 +274,7 @@ func TestTaskUpdateFlags(t *testing.T) {
 		t.Fatalf("creating: %v", err)
 	}
 
-	if err := store.UpdateFlags("01ABC", TaskFlags{NoSandbox: true}); err != nil {
+	if err := store.UpdateFlags("01ABC", TaskFlags{DangerouslySkipPermissions: true}); err != nil {
 		t.Fatalf("updating flags: %v", err)
 	}
 
@@ -285,11 +282,41 @@ func TestTaskUpdateFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing: %v", err)
 	}
-	if !tasks[0].Flags.NoSandbox {
-		t.Error("expected NoSandbox after update")
+	if !tasks[0].Flags.DangerouslySkipPermissions {
+		t.Error("expected DangerouslySkipPermissions after update")
 	}
-	if tasks[0].Flags.DangerouslySkipPermissions {
-		t.Error("expected DangerouslySkipPermissions to remain false")
+}
+
+func TestTaskSandboxProfile(t *testing.T) {
+	store := NewTaskStore(openTestDB(t))
+
+	task := &Task{
+		ID: "01ABC", Name: "sandboxed", State: StateActive,
+		Attention: AttentionOK, Cwd: "/tmp",
+		SandboxProfile: "cloud-tools",
+	}
+	if err := store.Create(task); err != nil {
+		t.Fatalf("creating: %v", err)
+	}
+
+	tasks, err := store.List()
+	if err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if tasks[0].SandboxProfile != "cloud-tools" {
+		t.Errorf("expected sandbox_profile 'cloud-tools', got %q", tasks[0].SandboxProfile)
+	}
+
+	if err := store.UpdateSandboxProfile("01ABC", "default"); err != nil {
+		t.Fatalf("updating sandbox profile: %v", err)
+	}
+
+	got, err := store.Get("01ABC")
+	if err != nil {
+		t.Fatalf("getting: %v", err)
+	}
+	if got.SandboxProfile != "default" {
+		t.Errorf("expected sandbox_profile 'default' after update, got %q", got.SandboxProfile)
 	}
 }
 

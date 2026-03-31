@@ -244,7 +244,7 @@ which breaks two things:
    Plain `git clone` workspaces are self-contained and don't need
    this.
 
-The `sandbox_command` config supports Go template variables:
+Sandbox profiles of type `command` support Go template variables:
 
 | Variable | Value |
 |----------|-------|
@@ -255,10 +255,12 @@ The `sandbox_command` config supports Go template variables:
 
 Example granting config reads and full VCS access:
 
-```json
-{
-  "sandbox_command": "safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
-}
+```yaml
+sandboxes:
+  default:
+    type: command
+    command: safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
+default_sandbox: default
 ```
 
 If your repos are all plain git clones (not jj workspaces or git

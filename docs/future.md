@@ -66,35 +66,10 @@ Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templat
 
 ## Sandbox Configuration
 
-Currently krang supports a single `sandbox_command` string in config. This should evolve to support multiple sandboxing technologies — particularly Docker-based sandboxing alongside the existing command-line approach.
+Named sandbox profiles with a `type` discriminator are implemented (currently only `command` type). Remaining work:
 
-### Motivation
-
-Some users (and teams) use Docker sandboxing for Claude Code, which requires pointing at a Dockerfile and potentially passing different flags than a CLI sandbox wrapper. Supporting both technologies lets users pick what fits their environment, and opens the door to per-task sandbox selection.
-
-### Design Sketch
-
-- **Replace `sandbox_command` with a richer config object** — something like:
-  ```json
-  {
-    "sandboxes": {
-      "bwrap": {
-        "type": "command",
-        "command": "bwrap --ro-bind / / ..."
-      },
-      "docker": {
-        "type": "docker",
-        "dockerfile": "~/.config/krang/sandbox/Dockerfile",
-        "build_args": {},
-        "run_args": ["--network=host"]
-      }
-    },
-    "default_sandbox": "bwrap"
-  }
-  ```
-- **Named sandboxes** — each sandbox config gets a name. One is marked as the default. The task creation form could offer a sandbox picker when multiple are configured.
-- **Docker-specific concerns** — Dockerfile path, build caching, volume mounts for the working directory and krang state paths, env var passthrough (`KRANG_STATEFILE`, `KRANG_DEBUG`), and ensuring the relay script is accessible inside the container.
-- **Backward compatibility** — if the old `sandbox_command` string is present, treat it as a single `"command"` type sandbox named `"default"`.
+- **Docker sandbox type** — Dockerfile path, build caching, volume mounts, env var passthrough. The `type: docker` schema would add `dockerfile`, `build_args`, `run_args` fields.
+- **SafeHouse-specific type** — additive profile configs that could enable multi-select ("this task needs Kubernetes AND AWS").
 
 ## Task Forking
 
@@ -102,6 +77,7 @@ Fork an existing task to branch off a new task with the same conversation histor
 
 ## Technical
 
+- **Relay script curl timeout** — the relay script (`relay.sh`) runs `curl` with no `--max-time`, so if krang's HTTP server becomes unresponsive (crash, deadlock, heavy load), every hook invocation hangs indefinitely. Since hooks are synchronous `type: "command"`, this blocks Claude completely — indistinguishable from "Claude thinking forever." Adding `--max-time 5` to the curl would make it fail fast; the script already exits 0 regardless, so Claude would continue unaffected.
 - **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
 - **Better error surfacing** — some operations fail silently; consider a dedicated error log file
 - **Configurable models** — allow changing the summary (haiku) and sit rep (sonnet) models

@@ -18,31 +18,27 @@ func TestLoadMissingFileReturnsHelpfulError(t *testing.T) {
 
 func TestLoadValidYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	os.WriteFile(path, []byte("sandbox_command: sandvault run\n"), 0o644)
+	os.WriteFile(path, []byte(`
+sandboxes:
+  default:
+    type: command
+    command: sandvault run
+default_sandbox: default
+`), 0o644)
 
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.SandboxCommand != "sandvault run" {
-		t.Errorf("expected 'sandvault run', got %q", cfg.SandboxCommand)
+	if cfg.Sandboxes["default"].Command != "sandvault run" {
+		t.Errorf("expected 'sandvault run', got %q", cfg.Sandboxes["default"].Command)
+	}
+	if cfg.DefaultSandbox != "default" {
+		t.Errorf("expected default_sandbox 'default', got %q", cfg.DefaultSandbox)
 	}
 }
 
-func TestLoadEmptySandboxCommandAllowed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	os.WriteFile(path, []byte("sandbox_command: \"\"\n"), 0o644)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.SandboxCommand != "" {
-		t.Errorf("expected empty string, got %q", cfg.SandboxCommand)
-	}
-}
-
-func TestLoadMissingSandboxFieldDefaultsToEmpty(t *testing.T) {
+func TestLoadEmptyConfigAllowed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	os.WriteFile(path, []byte("{}\n"), 0o644)
 
@@ -50,18 +46,130 @@ func TestLoadMissingSandboxFieldDefaultsToEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.SandboxCommand != "" {
-		t.Errorf("expected empty string for missing field, got %q", cfg.SandboxCommand)
+	if len(cfg.Sandboxes) != 0 {
+		t.Errorf("expected no sandboxes, got %d", len(cfg.Sandboxes))
 	}
 }
 
 func TestLoadMalformedYAMLReturnsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	os.WriteFile(path, []byte("sandbox_command: [invalid\n"), 0o644)
+	os.WriteFile(path, []byte("sandboxes: [invalid\n"), 0o644)
 
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for malformed YAML")
+	}
+}
+
+func TestValidateUnknownType(t *testing.T) {
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"bad": {Type: "docker"},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for unknown sandbox type")
+	}
+}
+
+func TestValidateDefaultSandboxMissing(t *testing.T) {
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"default": {Type: "command", Command: "safehouse"},
+		},
+		DefaultSandbox: "nonexistent",
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for missing default_sandbox reference")
+	}
+}
+
+func TestValidateDefaultSandboxNoSandboxes(t *testing.T) {
+	cfg := Config{DefaultSandbox: ""}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected error for empty config: %v", err)
+	}
+}
+
+func TestSandboxProfileNames(t *testing.T) {
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"zulu":  {Type: "command"},
+			"alpha": {Type: "command"},
+			"mike":  {Type: "command"},
+		},
+	}
+	names := cfg.SandboxProfileNames()
+	if len(names) != 3 {
+		t.Fatalf("expected 3 names, got %d", len(names))
+	}
+	if names[0] != "alpha" || names[1] != "mike" || names[2] != "zulu" {
+		t.Errorf("expected sorted names, got %v", names)
+	}
+}
+
+func TestSandboxProfileNamesEmpty(t *testing.T) {
+	cfg := Config{}
+	names := cfg.SandboxProfileNames()
+	if len(names) != 0 {
+		t.Errorf("expected empty names, got %v", names)
+	}
+}
+
+func TestResolveSandboxCommandExplicitProfile(t *testing.T) {
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"default": {Type: "command", Command: "safehouse run"},
+			"cloud":   {Type: "command", Command: "safehouse run --cloud"},
+		},
+		DefaultSandbox: "default",
+	}
+	if got := cfg.ResolveSandboxCommand("cloud"); got != "safehouse run --cloud" {
+		t.Errorf("expected cloud command, got %q", got)
+	}
+}
+
+func TestResolveSandboxCommandFallsBackToDefault(t *testing.T) {
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"default": {Type: "command", Command: "safehouse run"},
+		},
+		DefaultSandbox: "default",
+	}
+	if got := cfg.ResolveSandboxCommand(""); got != "safehouse run" {
+		t.Errorf("expected default command, got %q", got)
+	}
+}
+
+func TestResolveSandboxCommandMissingProfile(t *testing.T) {
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"default": {Type: "command", Command: "safehouse run"},
+		},
+		DefaultSandbox: "default",
+	}
+	if got := cfg.ResolveSandboxCommand("nonexistent"); got != "" {
+		t.Errorf("expected empty string for missing profile, got %q", got)
+	}
+}
+
+func TestResolveSandboxCommandNoProfiles(t *testing.T) {
+	cfg := Config{}
+	if got := cfg.ResolveSandboxCommand(""); got != "" {
+		t.Errorf("expected empty string with no profiles, got %q", got)
+	}
+}
+
+func TestResolveSandboxCommandNoneProfile(t *testing.T) {
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"default": {Type: "command", Command: "safehouse run"},
+		},
+		DefaultSandbox: "default",
+	}
+	// "none" is not a real profile — it should resolve to empty.
+	if got := cfg.ResolveSandboxCommand("none"); got != "" {
+		t.Errorf("expected empty string for 'none' profile, got %q", got)
 	}
 }
 
@@ -83,7 +191,12 @@ func TestPathDefaultFallback(t *testing.T) {
 func TestWriteAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "config.yaml")
 
-	cfg := Config{SandboxCommand: "safehouse --append-profile foo.sb"}
+	cfg := Config{
+		Sandboxes: map[string]SandboxProfile{
+			"default": {Type: "command", Command: "safehouse --append-profile foo.sb"},
+		},
+		DefaultSandbox: "default",
+	}
 	if err := Write(path, cfg); err != nil {
 		t.Fatalf("Write failed: %v", err)
 	}
@@ -92,8 +205,9 @@ func TestWriteAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after Write failed: %v", err)
 	}
-	if loaded.SandboxCommand != cfg.SandboxCommand {
-		t.Errorf("round-trip mismatch: wrote %q, loaded %q", cfg.SandboxCommand, loaded.SandboxCommand)
+	if loaded.Sandboxes["default"].Command != cfg.Sandboxes["default"].Command {
+		t.Errorf("round-trip mismatch: wrote %q, loaded %q",
+			cfg.Sandboxes["default"].Command, loaded.Sandboxes["default"].Command)
 	}
 }
 

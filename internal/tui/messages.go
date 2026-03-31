@@ -109,10 +109,11 @@ type wsProgressState struct {
 	LaunchTask   bool // true if we should launch Claude after cloning
 	Destroying   bool // true if this is a destroy/complete operation
 	StoppingDone bool // true once Claude has been stopped
-	TaskName     string
-	TaskID       string
-	TaskFlags    db.TaskFlags
-	WorkspaceDir string
+	TaskName           string
+	TaskID             string
+	TaskFlags          db.TaskFlags
+	TaskSandboxProfile string
+	WorkspaceDir       string
 }
 
 // wsDirCreatedMsg signals that the workspace directory was created.

@@ -4,25 +4,70 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 )
 
+type SandboxProfile struct {
+	Type    string `yaml:"type"`
+	Command string `yaml:"command,omitempty"`
+}
+
 type Config struct {
-	SandboxCommand        string   `yaml:"sandbox_command"`
-	Theme                 string   `yaml:"theme,omitempty"`
-	DefaultVCS            string   `yaml:"default_vcs,omitempty"`
-	GitHubOrgs            []string `yaml:"github_orgs,omitempty"`
-	ClassifyAttention     *bool    `yaml:"classify_attention,omitempty"`
-	WindowColorsEnabled   *bool    `yaml:"window_colors_enabled,omitempty"`
-	WindowColorPermission string   `yaml:"window_color_permission,omitempty"`
-	WindowColorWaiting    string   `yaml:"window_color_waiting,omitempty"`
+	Sandboxes             map[string]SandboxProfile `yaml:"sandboxes,omitempty"`
+	DefaultSandbox        string                    `yaml:"default_sandbox,omitempty"`
+	Theme                 string                    `yaml:"theme,omitempty"`
+	DefaultVCS            string                    `yaml:"default_vcs,omitempty"`
+	GitHubOrgs            []string                  `yaml:"github_orgs,omitempty"`
+	ClassifyAttention     *bool                     `yaml:"classify_attention,omitempty"`
+	WindowColorsEnabled   *bool                     `yaml:"window_colors_enabled,omitempty"`
+	WindowColorPermission string                    `yaml:"window_color_permission,omitempty"`
+	WindowColorWaiting    string                    `yaml:"window_color_waiting,omitempty"`
 }
 
 const (
 	DefaultColorPermission = "red"
 	DefaultColorWaiting    = "yellow"
 )
+
+func (c Config) Validate() error {
+	for name, profile := range c.Sandboxes {
+		if profile.Type != "command" {
+			return fmt.Errorf("sandbox %q has unknown type %q (supported: command)", name, profile.Type)
+		}
+	}
+	if c.DefaultSandbox != "" {
+		if _, ok := c.Sandboxes[c.DefaultSandbox]; !ok {
+			return fmt.Errorf("default_sandbox %q not found in sandboxes", c.DefaultSandbox)
+		}
+	}
+	return nil
+}
+
+func (c Config) SandboxProfileNames() []string {
+	names := make([]string, 0, len(c.Sandboxes))
+	for name := range c.Sandboxes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (c Config) ResolveSandboxCommand(profileName string) string {
+	name := profileName
+	if name == "" {
+		name = c.DefaultSandbox
+	}
+	if name == "" {
+		return ""
+	}
+	profile, ok := c.Sandboxes[name]
+	if !ok || profile.Type != "command" {
+		return ""
+	}
+	return profile.Command
+}
 
 func (c Config) ClassifyAttentionEnabled() bool {
 	return c.ClassifyAttention == nil || *c.ClassifyAttention
@@ -81,6 +126,9 @@ func Load(path string) (Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("parsing config at %s: %w", path, err)
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, fmt.Errorf("invalid config at %s: %w", path, err)
 	}
 	return cfg, nil
 }

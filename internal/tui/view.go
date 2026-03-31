@@ -286,7 +286,7 @@ func (m Model) renderTable() string {
 		if companionCounts[t.Name] > 0 {
 			name += strings.Repeat("+", companionCounts[t.Name])
 		}
-		if t.Flags.HasNonDefault() {
+		if m.taskIsDangerous(t) {
 			name = "☠ " + name
 		}
 
@@ -866,11 +866,19 @@ func (m Model) renderDetailModal(t *db.Task) string {
 			content.WriteString("\n")
 		}
 	}
+	sandboxLabel := t.SandboxProfile
+	if sandboxLabel == "" {
+		sandboxLabel = m.cfg.DefaultSandbox
+	}
+	if sandboxLabel != "" {
+		if t.SandboxProfile == "" {
+			sandboxLabel += " (default)"
+		}
+		content.WriteString(m.styles.ModalContent.Render("  sandbox: " + sandboxLabel))
+		content.WriteString("\n")
+	}
 	if t.Flags.HasNonDefault() {
 		var flags []string
-		if t.Flags.NoSandbox {
-			flags = append(flags, "no-sandbox")
-		}
 		if t.Flags.DangerouslySkipPermissions {
 			flags = append(flags, "skip-perms")
 		}
@@ -1289,4 +1297,17 @@ func (m Model) renderDebugLog() string {
 		Width(m.width - 2)
 
 	return topBorder + "\n" + boxStyle.Render(content.String())
+}
+
+func (m Model) taskIsDangerous(t db.Task) bool {
+	if t.Flags.DangerouslySkipPermissions {
+		return true
+	}
+	if t.SandboxProfile == "none" {
+		return true
+	}
+	if t.SandboxProfile == "" && m.cfg.DefaultSandbox == "" && len(m.cfg.Sandboxes) == 0 {
+		return true
+	}
+	return false
 }

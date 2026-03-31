@@ -12,6 +12,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/pathutil"
 	"github.com/dpetersen/krang/internal/tmux"
@@ -22,18 +23,34 @@ import (
 const gracefulShutdownTimeout = 5 * time.Second
 
 type Manager struct {
-	tasks          *db.TaskStore
-	events         *db.EventStore
-	activeSession  string
-	parkedSession  string
-	sandboxCommand string
-	stateFilePath  string
-	metarepoDir    string
-	reposDir       string
+	tasks           *db.TaskStore
+	events          *db.EventStore
+	activeSession   string
+	parkedSession   string
+	sandboxProfiles map[string]config.SandboxProfile
+	defaultSandbox  string
+	stateFilePath   string
+	metarepoDir     string
+	reposDir        string
 }
 
-func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession, parkedSession, sandboxCommand, stateFilePath, metarepoDir, reposDir string) *Manager {
-	return &Manager{tasks: tasks, events: events, activeSession: activeSession, parkedSession: parkedSession, sandboxCommand: sandboxCommand, stateFilePath: stateFilePath, metarepoDir: metarepoDir, reposDir: reposDir}
+func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession, parkedSession string, sandboxProfiles map[string]config.SandboxProfile, defaultSandbox, stateFilePath, metarepoDir, reposDir string) *Manager {
+	return &Manager{tasks: tasks, events: events, activeSession: activeSession, parkedSession: parkedSession, sandboxProfiles: sandboxProfiles, defaultSandbox: defaultSandbox, stateFilePath: stateFilePath, metarepoDir: metarepoDir, reposDir: reposDir}
+}
+
+func (m *Manager) resolveSandboxCommand(profileName string) string {
+	name := profileName
+	if name == "" {
+		name = m.defaultSandbox
+	}
+	if name == "" {
+		return ""
+	}
+	profile, ok := m.sandboxProfiles[name]
+	if !ok || profile.Type != "command" {
+		return ""
+	}
+	return profile.Command
 }
 
 func (m *Manager) templateData(taskName, taskCwd string) sandboxTemplateData {
@@ -70,7 +87,7 @@ func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool,
 		cmd = "export KRANG_STATEFILE=" + shellQuote(stateFilePath) + "; "
 	}
 
-	if flags.NoSandbox || sandboxCommand == "" {
+	if sandboxCommand == "" {
 		cmd += "claude"
 	} else {
 		expanded := expandSandboxCommand(sandboxCommand, tmplData)
@@ -96,22 +113,24 @@ func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool,
 	return cmd
 }
 
-func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags) (*db.Task, error) {
+func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags, sandboxProfile string) (*db.Task, error) {
 	taskID := ulid.Make().String()
 	sessionID := uuid.New().String()
 
 	task := &db.Task{
-		ID:        taskID,
-		Name:      name,
-		Prompt:    prompt,
-		State:     db.StateActive,
-		Attention: db.AttentionOK,
-		SessionID: sessionID,
-		Cwd:       cwd,
-		Flags:     flags,
+		ID:             taskID,
+		Name:           name,
+		Prompt:         prompt,
+		State:          db.StateActive,
+		Attention:      db.AttentionOK,
+		SessionID:      sessionID,
+		Cwd:            cwd,
+		Flags:          flags,
+		SandboxProfile: sandboxProfile,
 	}
 
-	claudeCmd := buildClaudeCommand(sessionID, name, flags, false, m.sandboxCommand, m.stateFilePath, m.templateData(name, cwd))
+	sandboxCmd := m.resolveSandboxCommand(sandboxProfile)
+	claudeCmd := buildClaudeCommand(sessionID, name, flags, false, sandboxCmd, m.stateFilePath, m.templateData(name, cwd))
 
 	windowName := tmux.WindowName(name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, cwd, claudeCmd)
@@ -358,7 +377,8 @@ func (m *Manager) Wake(taskID string) error {
 		return fmt.Errorf("task %s has no session ID to resume", task.Name)
 	}
 
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand, m.stateFilePath, m.templateData(task.Name, task.Cwd))
+	sandboxCmd := m.resolveSandboxCommand(task.SandboxProfile)
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, sandboxCmd, m.stateFilePath, m.templateData(task.Name, task.Cwd))
 
 	// Use the session's original project directory rather than the
 	// live cwd, which may have drifted as Claude cd'd around. Claude
@@ -411,7 +431,8 @@ func (m *Manager) Relaunch(taskID string) error {
 	}
 
 	// Build new command with --resume and current flags.
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, m.sandboxCommand, m.stateFilePath, m.templateData(task.Name, task.Cwd))
+	sandboxCmd := m.resolveSandboxCommand(task.SandboxProfile)
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, sandboxCmd, m.stateFilePath, m.templateData(task.Name, task.Cwd))
 
 	// Use the session's original project directory (see Thaw for rationale).
 	launchCwd := task.Cwd

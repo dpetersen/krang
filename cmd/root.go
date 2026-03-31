@@ -97,7 +97,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	if rs, err := workspace.Load(cwd); err == nil {
 		reposDir = rs.ReposDir
 	}
-	manager := task.NewManager(taskStore, eventStore, krangSession, parkedSession, cfg.SandboxCommand, stateFilePath, cwd, reposDir)
+	manager := task.NewManager(taskStore, eventStore, krangSession, parkedSession, cfg.Sandboxes, cfg.DefaultSandbox, stateFilePath, cwd, reposDir)
 
 	if err := manager.Reconcile(); err != nil {
 		return fmt.Errorf("initial reconciliation: %w", err)
