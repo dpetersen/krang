@@ -82,8 +82,10 @@ sets:
     - catfood
 ```
 
-**VCS auto-detection:** Checks per-repo config first, then for `.jj/`
-in the repo directory, then `default_vcs`, then falls back to `git`.
+**VCS auto-detection:** Checks per-repo config first, then probes the
+repo directory for `.jj/` (returns "jj") or `.git` (returns "git"),
+then falls back to `default_vcs`, then "git". The `.git` check handles
+both directories (normal clones) and files (worktrees/submodules).
 The `repos` map is only needed to override auto-detection. `default_vcs`
 and `github_orgs` can also be set in `config.yaml` (user-level); the
 workspace config takes precedence for `default_vcs`, and orgs are
@@ -178,9 +180,24 @@ repos from GitHub. Uses the same VCS operations as initial creation.
 
 ### Progress Modal
 
-Workspace creation and destruction show a bordered modal overlay
-that blocks TUI input while operations run. Displays per-repo
-status lines.
+Workspace creation and destruction render as centered modal overlays
+(2/3 terminal width) using `overlayCenter()`. Each repo clone or
+forget is a separate `tea.Cmd`, so the UI updates between operations.
+
+**Creation progress** shows:
+- Per-repo checklist with status icons: `·` pending, spinner active,
+  `✓` done, `✗` failed. A `[done/total]` counter on the last line.
+- Scrollable log (last 8 lines) showing clone output.
+- `esc` cancels remaining clones; for new tasks the workspace dir
+  is cleaned up, for add-repos already-cloned repos are kept.
+- On completion: "Done!" then any key to dismiss.
+
+**Completion/destruction progress** shows:
+- "Stopping Claude" with spinner (waiting for graceful SIGINT shutdown,
+  up to 5 seconds).
+- Per-repo `jj workspace forget` checklist (multi_repo only).
+- Workspace directory removal.
+- No cancel — destruction runs to completion.
 
 ## Task Lifecycle Integration
 
@@ -197,12 +214,16 @@ status lines.
 
 ### Workspace Destruction
 
-1. For multi_repo: enumerate subdirectories; for each jj repo, run
-   `jj workspace forget <workspace-name>` from the source repo.
+1. Claude is stopped via SIGINT with a 5-second graceful shutdown
+   timeout (falls back to tmux kill-window).
+2. For multi_repo: enumerate subdirectories that contain `.git` or
+   `.jj` (skipping non-repo dirs like `.claude`); for each jj repo,
+   run `jj workspace forget <workspace-name>` from the source repo.
    For single_repo: try `jj workspace forget` against all known
    jj repos.
-2. `rm -rf` the workspace directory.
-3. Errors are logged but don't block the state transition.
+3. `rm -rf` the workspace directory (unconditional, removes
+   everything including non-repo files).
+4. Errors are logged but don't block the state transition.
 
 ## Sandbox Integration
 
@@ -255,7 +276,7 @@ tasks table. Empty string = no workspace (backward compatible).
 | Package | Key types/functions |
 |---------|-------------------|
 | `internal/workspace/reposets.go` | `RepoSets`, `Load()`, `ListRepos()`, `DetectVCS()`, `ResolveRepos()` |
-| `internal/workspace/workspace.go` | `Create()`, `AddRepos()`, `Destroy()`, `PresentRepos()` |
+| `internal/workspace/workspace.go` | `Create()`, `AddRepos()`, `Destroy()`, `PresentRepos()`, `CreateWorkspaceDir()`, `CloneRepo()`, `ForgetRepo()`, `DestroyRepoList()` |
 | `internal/tui/repopicker.go` | `repoPicker` — custom toggle-list component |
 | `internal/tui/forms.go` | `newWorkspaceTaskForm()` |
 

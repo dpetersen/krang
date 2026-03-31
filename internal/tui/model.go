@@ -69,6 +69,7 @@ type Model struct {
 	addReposWorkspaceDir    string
 
 	workspaceProgressLines []string
+	wsProgress             *wsProgressState
 
 	debugLog []string
 
@@ -374,6 +375,186 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case wsDirCreatedMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		m.wsProgress.WorkspaceDir = msg.WorkspaceDir
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+			fmt.Sprintf("Created workspace directory: %s", msg.WorkspaceDir))
+		if len(m.wsProgress.Repos) == 0 {
+			// No repos — launch task immediately.
+			if m.wsProgress.LaunchTask {
+				m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Launching Claude...")
+				return m, m.wsLaunchTaskCmd()
+			}
+			m.wsProgress.Done = true
+			return m, nil
+		}
+		// Start the first clone.
+		m.wsProgress.Repos[0].Status = cloneStatusCloning
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+			fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
+		return m, m.wsCloneRepoCmd(0, m.repoSets)
+
+	case wsCloneDoneMsg:
+		if m.wsProgress == nil || msg.Index >= len(m.wsProgress.Repos) {
+			return m, nil
+		}
+		entry := &m.wsProgress.Repos[msg.Index]
+		if msg.Err != nil {
+			entry.Status = cloneStatusFailed
+			entry.Err = msg.Err
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Failed: %s — %v", entry.Repo, msg.Err))
+		} else {
+			entry.Status = cloneStatusDone
+			entry.VCS = msg.VCS
+			if output := strings.TrimSpace(msg.Output); output != "" {
+				for _, line := range strings.Split(output, "\n") {
+					m.wsProgress.LogLines = append(m.wsProgress.LogLines, line)
+				}
+			}
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Done: %s (%s)", entry.Repo, entry.VCS))
+		}
+		entry.Output = msg.Output
+
+		// Check for cancellation.
+		if m.wsProgress.Cancelled {
+			if m.wsProgress.LaunchTask {
+				// New task was cancelled — clean up workspace dir.
+				m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Cancelled. Cleaning up...")
+				_ = os.RemoveAll(m.wsProgress.WorkspaceDir)
+			} else {
+				m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Cancelled. Already-cloned repos kept.")
+			}
+			m.wsProgress.Done = true
+			return m, nil
+		}
+
+		// Kick off next repo, or finish.
+		nextIdx := msg.Index + 1
+		if nextIdx < len(m.wsProgress.Repos) {
+			m.wsProgress.Repos[nextIdx].Status = cloneStatusCloning
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[nextIdx].Repo, m.wsProgress.Repos[nextIdx].VCS))
+			return m, m.wsCloneRepoCmd(nextIdx, m.repoSets)
+		}
+
+		// All repos done. Launch task if needed.
+		if m.wsProgress.LaunchTask {
+			// Check if any repos succeeded.
+			anySuccess := false
+			for _, r := range m.wsProgress.Repos {
+				if r.Status == cloneStatusDone {
+					anySuccess = true
+					break
+				}
+			}
+			if !anySuccess {
+				m.wsProgress.Err = fmt.Errorf("all repos failed")
+				m.wsProgress.Done = true
+				_ = os.RemoveAll(m.wsProgress.WorkspaceDir)
+				return m, nil
+			}
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Launching Claude...")
+			return m, m.wsLaunchTaskCmd()
+		}
+		m.wsProgress.Done = true
+		return m, nil
+
+	case wsLaunchDoneMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.wsProgress.Err = msg.Err
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Error: %v", msg.Err))
+		} else {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Done!")
+		}
+		m.wsProgress.Done = true
+		return m, nil
+
+	case wsCompleteDoneMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		m.wsProgress.StoppingDone = true
+		if msg.Err != nil {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Warning stopping Claude: %v", msg.Err))
+		} else {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Claude stopped.")
+		}
+
+		// Start per-repo forget sequence.
+		if len(m.wsProgress.Repos) > 0 {
+			m.wsProgress.Repos[0].Status = cloneStatusCloning
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Forgetting workspace for %s...", m.wsProgress.Repos[0].Repo))
+			return m, m.wsForgetRepoCmd(0, m.repoSets)
+		}
+
+		// Single-repo or no repos — try single-repo forget then remove.
+		rs := m.repoSets
+		if rs != nil && rs.WorkspaceStrategy == workspace.StrategySingleRepo {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Forgetting jj workspace...")
+			return m, m.wsForgetSingleRepoCmd(rs)
+		}
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Removing workspace directory...")
+		return m, m.wsRemoveDirCmd()
+
+	case wsForgetDoneMsg:
+		if m.wsProgress == nil || msg.Index >= len(m.wsProgress.Repos) {
+			return m, nil
+		}
+		entry := &m.wsProgress.Repos[msg.Index]
+		if msg.Err != nil {
+			entry.Status = cloneStatusFailed
+			entry.Err = msg.Err
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Warning: %s — %v", entry.Repo, msg.Err))
+		} else {
+			entry.Status = cloneStatusDone
+			if output := strings.TrimSpace(msg.Output); output != "" {
+				for _, line := range strings.Split(output, "\n") {
+					m.wsProgress.LogLines = append(m.wsProgress.LogLines, line)
+				}
+			}
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Forgot: %s", entry.Repo))
+		}
+		entry.Output = msg.Output
+
+		// Next repo or move to removal.
+		nextIdx := msg.Index + 1
+		if nextIdx < len(m.wsProgress.Repos) {
+			m.wsProgress.Repos[nextIdx].Status = cloneStatusCloning
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Forgetting workspace for %s...", m.wsProgress.Repos[nextIdx].Repo))
+			return m, m.wsForgetRepoCmd(nextIdx, m.repoSets)
+		}
+
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Removing workspace directory...")
+		return m, m.wsRemoveDirCmd()
+
+	case wsRemoveDoneMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.wsProgress.Err = msg.Err
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Warning: %v", msg.Err))
+		} else {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Done!")
+		}
+		m.wsProgress.Done = true
+		return m, nil
+
 	case remoteSearchDebounceMsg:
 		if m.activeRepoPicker == nil || msg.Generation != m.remoteSearchGen {
 			return m, nil
@@ -463,7 +644,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refreshTasks
 
 	case spinner.TickMsg:
-		if len(m.pendingOps) > 0 {
+		wsActive := m.wsProgress != nil && !m.wsProgress.Done
+		if len(m.pendingOps) > 0 || wsActive {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd
@@ -491,8 +673,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(msg)
 	case ModeHelp:
 		return m.handleHelpKey(msg)
-	case ModeSitRepLoading, ModeWorkspaceProgress:
+	case ModeSitRepLoading:
 		return m, nil
+	case ModeWorkspaceProgress:
+		return m.handleWSProgressKey(msg)
 	case ModeSitRep:
 		return m.handleSitRepKey(msg)
 	case ModeFilter:
@@ -772,6 +956,29 @@ func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleWSProgressKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	ws := m.wsProgress
+	if ws == nil {
+		// Legacy path (remote clone in picker uses workspaceProgressLines).
+		return m, nil
+	}
+	if ws.Done {
+		// Any key dismisses when done.
+		m.mode = ModeNormal
+		m.wsProgress = nil
+		if ws.Err != nil {
+			m.appendDebugLog(fmt.Sprintf("[%s] workspace error: %v",
+				time.Now().Format("15:04:05"), ws.Err))
+		}
+		return m, m.refreshTasks
+	}
+	if msg.String() == "esc" && !ws.Destroying {
+		ws.Cancelled = true
+		ws.LogLines = append(ws.LogLines, "Cancelling...")
+	}
+	return m, nil
+}
+
 func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	tp := m.activeRepoPicker
 
@@ -838,8 +1045,18 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.addReposTaskID = ""
 			m.addReposWorkspaceDir = ""
 			m.mode = ModeWorkspaceProgress
-			m.workspaceProgressLines = []string{fmt.Sprintf("Adding repos to %q...", taskName)}
-			return m, m.addReposToWorkspace(workspaceDir, taskName, selected, rs)
+			title := fmt.Sprintf("Adding repos to %q", taskName)
+			m.initWSProgress(title, selected, rs, false, taskName, db.TaskFlags{})
+			m.wsProgress.WorkspaceDir = workspaceDir
+			// Start first clone directly (dir already exists).
+			if len(selected) > 0 {
+				m.wsProgress.Repos[0].Status = cloneStatusCloning
+				m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+					fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
+				return m, tea.Batch(m.wsCloneRepoCmd(0, rs), m.spinner.Tick)
+			}
+			m.wsProgress.Done = true
+			return m, nil
 		}
 
 		// New workspace task flow.
@@ -848,8 +1065,9 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.workspaceTaskResult = nil
 		m.activeRepoPicker = nil
 		m.mode = ModeWorkspaceProgress
-		m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
-		return m, m.createWorkspaceTask(result.Name, result.Flags, selected, rs)
+		title := fmt.Sprintf("Creating workspace %q", result.Name)
+		m.initWSProgress(title, selected, rs, true, result.Name, result.Flags)
+		return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
 	case "esc":
 		// If there's filter text, clear it first.
 		if strings.TrimSpace(p.filter.Value()) != "" {
@@ -991,16 +1209,18 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 		if rs.WorkspaceStrategy == workspace.StrategySingleRepo && len(result.SelectedRepos) > 0 {
 			m.workspaceTaskResult = nil
 			m.mode = ModeWorkspaceProgress
-			m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
-			return m, m.createWorkspaceTask(result.Name, result.Flags, result.SelectedRepos, rs)
+			title := fmt.Sprintf("Creating workspace %q", result.Name)
+			m.initWSProgress(title, result.SelectedRepos, rs, true, result.Name, result.Flags)
+			return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
 		}
 
 		// single_repo with "(none)" selected — create empty workspace.
 		if rs.WorkspaceStrategy == workspace.StrategySingleRepo && len(result.SelectedRepos) == 0 {
 			m.workspaceTaskResult = nil
 			m.mode = ModeWorkspaceProgress
-			m.workspaceProgressLines = []string{fmt.Sprintf("Creating workspace %q...", result.Name)}
-			return m, m.createWorkspaceTask(result.Name, result.Flags, nil, rs)
+			title := fmt.Sprintf("Creating workspace %q", result.Name)
+			m.initWSProgress(title, nil, rs, true, result.Name, result.Flags)
+			return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
 		}
 
 		// Show the repo picker (multi_repo, or single_repo with no local repos).
@@ -1084,17 +1304,43 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		t := m.selectedTask()
-		if t != nil && t.WorkspaceDir != "" {
-			m.mode = ModeWorkspaceProgress
-			m.workspaceProgressLines = []string{fmt.Sprintf("Completing %q...", t.Name)}
-		} else if t != nil {
+		if t == nil {
+			m.mode = ModeNormal
+			return m, nil
+		}
+
+		if t.WorkspaceDir == "" {
+			// No workspace — use the simple pending-op spinner.
 			m.mode = ModeNormal
 			tick := m.startPendingOp(t.ID, "completing...")
 			return m, tea.Batch(m.completeSelected(), tick)
-		} else {
-			m.mode = ModeNormal
 		}
-		return m, m.completeSelected()
+
+		// Workspace task — use the rich progress modal.
+		m.mode = ModeWorkspaceProgress
+		rs := m.repoSets
+
+		// Build repo list for the checklist (multi_repo only).
+		var entries []repoCloneEntry
+		if rs != nil && rs.WorkspaceStrategy == workspace.StrategyMultiRepo {
+			repos := workspace.DestroyRepoList(t.WorkspaceDir)
+			entries = make([]repoCloneEntry, len(repos))
+			for i, repo := range repos {
+				entries[i] = repoCloneEntry{Repo: repo, VCS: rs.DetectVCS(repo)}
+			}
+		}
+
+		m.wsProgress = &wsProgressState{
+			Title:        fmt.Sprintf("Completing %q", t.Name),
+			Repos:        entries,
+			Destroying:   true,
+			TaskName:     t.Name,
+			TaskID:       t.ID,
+			WorkspaceDir: t.WorkspaceDir,
+			LogLines:     []string{"Stopping Claude..."},
+		}
+
+		return m, tea.Batch(m.wsCompleteTaskCmd(t.ID), m.spinner.Tick)
 	default:
 		m.mode = ModeNormal
 		return m, nil
@@ -1444,72 +1690,131 @@ func (m Model) createTask(name, prompt, cwd string, flags db.TaskFlags) tea.Cmd 
 	}
 }
 
-func (m Model) createWorkspaceTask(name string, flags db.TaskFlags, repos []string, rs *workspace.RepoSets) tea.Cmd {
-	return func() tea.Msg {
-		lines := []string{fmt.Sprintf("Creating workspace %q...", name)}
-
-		for _, repo := range repos {
-			vcs := rs.DetectVCS(repo)
-			lines = append(lines, fmt.Sprintf("  Cloning %s (%s)...", repo, vcs))
+func (m *Model) initWSProgress(title string, repos []string, rs *workspace.RepoSets, launchTask bool, taskName string, flags db.TaskFlags) {
+	entries := make([]repoCloneEntry, len(repos))
+	for i, repo := range repos {
+		entries[i] = repoCloneEntry{
+			Repo: repo,
+			VCS:  rs.DetectVCS(repo),
 		}
-
-		result, err := workspace.Create(rs, name, repos)
-		if err != nil {
-			return workspaceProgressMsg{
-				Lines: append(lines, fmt.Sprintf("  Error: %v", err)),
-				Done:  true,
-				Err:   err,
-			}
-		}
-
-		for repo, vcs := range result.Created {
-			lines = append(lines, fmt.Sprintf("  Done: %s (%s)", repo, vcs))
-		}
-		for _, e := range result.Errors {
-			lines = append(lines, fmt.Sprintf("  Failed: %s", e))
-		}
-
-		lines = append(lines, "Launching Claude...")
-
-		t, err := m.manager.CreateTask(name, "", result.WorkspaceDir, flags)
-		if err != nil {
-			return workspaceProgressMsg{
-				Lines: append(lines, fmt.Sprintf("  Error: %v", err)),
-				Done:  true,
-				Err:   err,
-			}
-		}
-
-		if err := m.taskStore.UpdateWorkspaceDir(t.ID, result.WorkspaceDir); err != nil {
-			return workspaceProgressMsg{
-				Lines: append(lines, fmt.Sprintf("  Error: %v", err)),
-				Done:  true,
-				Err:   err,
-			}
-		}
-
-		return workspaceProgressMsg{Lines: lines, Done: true}
+	}
+	m.wsProgress = &wsProgressState{
+		Title:      title,
+		Repos:      entries,
+		LaunchTask: launchTask,
+		TaskName:   taskName,
+		TaskFlags:  flags,
 	}
 }
 
-func (m Model) addReposToWorkspace(workspaceDir, taskName string, repos []string, rs *workspace.RepoSets) tea.Cmd {
+// wsCreateDirAndStart creates the workspace dir, stores its path, and
+// kicks off the first repo clone (or launches immediately if no repos).
+func (m Model) wsCreateDirAndStart(rs *workspace.RepoSets) tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil {
+		return nil
+	}
 	return func() tea.Msg {
-		lines := []string{fmt.Sprintf("Adding repos to %q...", taskName)}
-
-		result, err := workspace.AddRepos(rs, workspaceDir, taskName, repos)
+		workspaceDir, err := workspace.CreateWorkspaceDir(rs, ws.TaskName)
 		if err != nil {
-			lines = append(lines, fmt.Sprintf("  Error: %v", err))
-			return workspaceProgressMsg{Lines: lines, Done: true, Err: err}
+			return wsLaunchDoneMsg{Err: err}
 		}
+		// Smuggle the dir back via a dedicated msg so model can store it.
+		return wsDirCreatedMsg{WorkspaceDir: workspaceDir}
+	}
+}
 
-		for repo, vcs := range result.Created {
-			lines = append(lines, fmt.Sprintf("  Added: %s (%s)", repo, vcs))
+// wsCloneRepoCmd clones a single repo at the given index.
+func (m Model) wsCloneRepoCmd(index int, rs *workspace.RepoSets) tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil || index >= len(ws.Repos) {
+		return nil
+	}
+	entry := ws.Repos[index]
+	dst := workspace.RepoDst(rs, ws.WorkspaceDir, entry.Repo)
+	taskName := ws.TaskName
+	return func() tea.Msg {
+		result := workspace.CloneRepo(rs, taskName, dst, entry.Repo)
+		return wsCloneDoneMsg{
+			Index:  index,
+			Output: result.Output,
+			VCS:    result.VCS,
+			Err:    result.Err,
 		}
-		for _, e := range result.Errors {
-			lines = append(lines, fmt.Sprintf("  Failed: %s", e))
-		}
+	}
+}
 
-		return workspaceProgressMsg{Lines: lines, Done: true}
+// wsLaunchTaskCmd creates the task and launches Claude.
+func (m Model) wsLaunchTaskCmd() tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil {
+		return nil
+	}
+	name := ws.TaskName
+	workspaceDir := ws.WorkspaceDir
+	flags := ws.TaskFlags
+	return func() tea.Msg {
+		t, err := m.manager.CreateTask(name, "", workspaceDir, flags)
+		if err != nil {
+			return wsLaunchDoneMsg{Err: err}
+		}
+		if err := m.taskStore.UpdateWorkspaceDir(t.ID, workspaceDir); err != nil {
+			return wsLaunchDoneMsg{Err: err}
+		}
+		return wsLaunchDoneMsg{}
+	}
+}
+
+// wsCompleteTaskCmd stops Claude via manager.Complete.
+func (m Model) wsCompleteTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.manager.Complete(taskID)
+		return wsCompleteDoneMsg{Err: err}
+	}
+}
+
+// wsForgetRepoCmd runs jj workspace forget for a single repo.
+func (m Model) wsForgetRepoCmd(index int, rs *workspace.RepoSets) tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil || index >= len(ws.Repos) {
+		return nil
+	}
+	entry := ws.Repos[index]
+	workspaceDir := ws.WorkspaceDir
+	return func() tea.Msg {
+		result := workspace.ForgetRepo(rs, workspaceDir, entry.Repo)
+		return wsForgetDoneMsg{
+			Index:  index,
+			Output: result.Output,
+			Err:    result.Err,
+		}
+	}
+}
+
+// wsForgetSingleRepoCmd forgets the jj workspace for a single_repo
+// workspace, then removes the directory.
+func (m Model) wsForgetSingleRepoCmd(rs *workspace.RepoSets) tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil {
+		return nil
+	}
+	workspaceDir := ws.WorkspaceDir
+	return func() tea.Msg {
+		_ = workspace.ForgetSingleRepoWorkspace(rs, workspaceDir)
+		err := workspace.RemoveWorkspaceDir(workspaceDir)
+		return wsRemoveDoneMsg{Err: err}
+	}
+}
+
+// wsRemoveDirCmd removes the workspace directory.
+func (m Model) wsRemoveDirCmd() tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil {
+		return nil
+	}
+	workspaceDir := ws.WorkspaceDir
+	return func() tea.Msg {
+		return wsRemoveDoneMsg{Err: workspace.RemoveWorkspaceDir(workspaceDir)}
 	}
 }
 
@@ -1745,28 +2050,10 @@ func (m Model) completeSelected() tea.Cmd {
 		return nil
 	}
 	taskID := t.ID
-	workspaceDir := t.WorkspaceDir
-	rs := m.repoSets
 	return func() tea.Msg {
 		if err := m.manager.Complete(taskID); err != nil {
 			return ErrorMsg{Err: err}
 		}
-		if workspaceDir != "" {
-			return destroyWorkspace(rs, workspaceDir)
-		}
 		return pendingOpDoneMsg{TaskID: taskID}
 	}
-}
-
-func destroyWorkspace(rs *workspace.RepoSets, workspaceDir string) tea.Msg {
-	lines := []string{fmt.Sprintf("Destroying workspace %s...", filepath.Base(workspaceDir))}
-
-	err := workspace.Destroy(rs, workspaceDir)
-	if err != nil {
-		lines = append(lines, fmt.Sprintf("  Warning: %v", err))
-	} else {
-		lines = append(lines, "  Done.")
-	}
-
-	return workspaceProgressMsg{Lines: lines, Done: true, Err: err}
 }

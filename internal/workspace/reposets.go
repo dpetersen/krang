@@ -107,15 +107,18 @@ func (rs *RepoSets) ListRepos() ([]string, error) {
 }
 
 // DetectVCS returns "jj" or "git" for a repo. Checks the explicit
-// per-repo config first, then looks for a .jj directory in the repo
-// root, then falls back to DefaultVCS (or "git" if unset).
+// per-repo config first, then probes the repo directory for .jj or
+// .git, then falls back to DefaultVCS (or "git" if unset).
 func (rs *RepoSets) DetectVCS(repoName string) string {
 	if rc, ok := rs.Repos[repoName]; ok && rc.VCS != "" {
 		return rc.VCS
 	}
-	jjDir := filepath.Join(rs.ReposDir, repoName, ".jj")
-	if info, err := os.Stat(jjDir); err == nil && info.IsDir() {
+	repoDir := filepath.Join(rs.ReposDir, repoName)
+	if info, err := os.Stat(filepath.Join(repoDir, ".jj")); err == nil && info.IsDir() {
 		return "jj"
+	}
+	if info, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil && (info.IsDir() || info.Mode().IsRegular()) {
+		return "git"
 	}
 	if rs.DefaultVCS != "" {
 		return rs.DefaultVCS

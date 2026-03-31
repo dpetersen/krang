@@ -78,6 +78,77 @@ type workspaceProgressMsg struct {
 	Err   error
 }
 
+// repoCloneStatus tracks the state of a single repo clone.
+type repoCloneStatus int
+
+const (
+	cloneStatusPending repoCloneStatus = iota
+	cloneStatusCloning
+	cloneStatusDone
+	cloneStatusFailed
+)
+
+// repoCloneEntry tracks one repo within the progress modal.
+type repoCloneEntry struct {
+	Repo   string
+	VCS    string
+	Status repoCloneStatus
+	Output string // clone output (on success or failure)
+	Err    error
+}
+
+// wsProgressState holds the full state for the workspace progress modal.
+type wsProgressState struct {
+	Title        string
+	Repos        []repoCloneEntry
+	LogLines     []string // scrollable log output
+	Done         bool
+	Cancelled    bool
+	Err          error
+	LaunchTask   bool // true if we should launch Claude after cloning
+	Destroying   bool // true if this is a destroy/complete operation
+	StoppingDone bool // true once Claude has been stopped
+	TaskName     string
+	TaskID       string
+	TaskFlags    db.TaskFlags
+	WorkspaceDir string
+}
+
+// wsDirCreatedMsg signals that the workspace directory was created.
+type wsDirCreatedMsg struct {
+	WorkspaceDir string
+}
+
+// wsCloneDoneMsg signals that a single repo clone has completed.
+type wsCloneDoneMsg struct {
+	Index  int
+	Output string
+	VCS    string
+	Err    error
+}
+
+// wsLaunchDoneMsg signals that the task launch step completed.
+type wsLaunchDoneMsg struct {
+	Err error
+}
+
+// wsCompleteDoneMsg signals that manager.Complete finished (Claude stopped).
+type wsCompleteDoneMsg struct {
+	Err error
+}
+
+// wsForgetDoneMsg signals that a single repo forget has completed.
+type wsForgetDoneMsg struct {
+	Index  int
+	Output string
+	Err    error
+}
+
+// wsRemoveDoneMsg signals that the workspace dir removal is done.
+type wsRemoveDoneMsg struct {
+	Err error
+}
+
 type pendingOpDoneMsg struct {
 	TaskID string
 }

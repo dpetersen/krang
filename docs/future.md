@@ -25,7 +25,6 @@ Scrollable help with j/k navigation is implemented. Remaining work:
 ## Discoverability & Feedback
 
 - **Freeze confirmation** — warn about companion window destruction before freezing a task that has companions
-- **Task creation preview** — the new task wizard should show what it's about to do: which repos will be cloned, where the workspace directory will be created, what sandbox will be used. Show this as a summary step before executing.
 - **In-app config editor** — a TUI form (via `huh`) for editing both project-level (`krang.yaml`) and user-level (`config.yaml`) configuration. Avoids requiring users to hand-edit JSON/YAML files. Could be a modal accessible from the main screen or from the help overlay.
 
 ## Integration

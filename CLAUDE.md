@@ -53,7 +53,9 @@ Hints are placed in three zones below the table:
 
 ## Modal Overlays
 
-Modals (detail, confirm, help, command palette) render as centered boxes over a dimmed background using `overlayCenter()` in view.go. The background is the full normal view (header, table, hint bars, debug log) with ANSI faint applied. The `renderNormalView()` helper provides the background for modes that need it.
+Modals (detail, confirm, help, command palette, workspace wizard) render as centered boxes over a dimmed background using `overlayCenter()` in view.go. The background is the full normal view (header, table, hint bars, debug log) with ANSI faint applied. The `renderNormalView()` helper provides the background for modes that need it.
+
+The workspace wizard (task creation form, repo picker, and workspace creation progress) uses wider modals (2/3 terminal width) via `wideModalWidth()`. The workspace progress modal shows a per-repo checklist with status icons (spinner for active, ✓/✗ for done/failed), a scrollable log of clone output, and supports esc-to-cancel. Progress is incremental — each repo clone is a separate `tea.Cmd`, so the UI updates between clones.
 
 ## Table # Column
 
@@ -130,7 +132,7 @@ Help (`?`) renders as a centered modal overlay with glamour-rendered markdown co
 
 ## Task Creation
 
-Task creation and import use `charmbracelet/huh` forms (multi-step wizard). The task table uses `lipgloss/table`. Task names must match `[a-zA-Z0-9_-]+`.
+Task creation and import use `charmbracelet/huh` forms rendered as modal overlays. The task table uses `lipgloss/table`. Task names must match `[a-zA-Z0-9_-]+`.
 
 ## Workspaces
 

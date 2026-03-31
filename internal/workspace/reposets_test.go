@@ -115,6 +115,8 @@ repos:
 	mkdirs(t, reposDir, "jj-repo", "git-repo", "forced-git")
 	// Make jj-repo look like a jj repo.
 	mkdirs(t, filepath.Join(reposDir, "jj-repo"), ".jj")
+	// Make git-repo look like a git repo.
+	mkdirs(t, filepath.Join(reposDir, "git-repo"), ".git")
 
 	rs, err := Load(dir)
 	if err != nil {
@@ -152,6 +154,24 @@ func TestDetectVCSDefaultFallback(t *testing.T) {
 	got := rs.DetectVCS("unknown-repo")
 	if got != "jj" {
 		t.Errorf("DetectVCS with default_vcs=jj = %q, want %q", got, "jj")
+	}
+}
+
+func TestDetectVCSGitBeatsDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, `default_vcs: jj`)
+	reposDir := filepath.Join(dir, "repos")
+	mkdirs(t, reposDir, "git-repo")
+	mkdirs(t, filepath.Join(reposDir, "git-repo"), ".git")
+
+	rs, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := rs.DetectVCS("git-repo")
+	if got != "git" {
+		t.Errorf("DetectVCS for .git repo with default_vcs=jj = %q, want %q", got, "git")
 	}
 }
 

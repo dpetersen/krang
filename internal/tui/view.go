@@ -48,23 +48,20 @@ func (m Model) View() string {
 		modalContent = m.renderCommandPalette()
 	case ModeConfirmQuit:
 		modalContent = m.renderConfirmQuit()
+	case ModeForm:
+		if m.activeForm != nil {
+			modalContent = m.renderFormModal()
+		}
+	case ModeRepoSelect:
+		if m.activeRepoPicker != nil {
+			modalContent = m.renderRepoSelectModal()
+		}
+	case ModeWorkspaceProgress:
+		modalContent = m.renderWorkspaceProgress()
 	case ModeFilter:
 		top.WriteString("\n")
 		top.WriteString(m.styles.InputLabel.Render("Filter: "))
 		top.WriteString(m.filterInput.View())
-	case ModeForm:
-		if m.activeForm != nil {
-			top.WriteString("\n")
-			top.WriteString(m.activeForm.View())
-		}
-	case ModeRepoSelect:
-		if m.activeRepoPicker != nil {
-			top.WriteString("\n")
-			top.WriteString(m.activeRepoPicker.view())
-		}
-	case ModeWorkspaceProgress:
-		top.WriteString("\n")
-		top.WriteString(m.renderWorkspaceProgress())
 	case ModeConfirmRelaunch:
 		top.WriteString("\n")
 		top.WriteString(m.styles.ErrorText.Render("Flags changed. Claude will be relaunched (session resumes). Proceed? [y/N]"))
@@ -74,7 +71,8 @@ func (m Model) View() string {
 	// it's visible behind the overlay).
 	showHints := m.mode == ModeNormal || m.mode == ModeDetail ||
 		m.mode == ModeConfirmComplete || m.mode == ModeCommandPalette ||
-		m.mode == ModeConfirmQuit
+		m.mode == ModeConfirmQuit || m.mode == ModeForm ||
+		m.mode == ModeRepoSelect || m.mode == ModeWorkspaceProgress
 	if showHints {
 		if m.filterText != "" {
 			top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
@@ -1014,23 +1012,183 @@ func shortModelName(model string) string {
 	}
 }
 
-func (m Model) renderWorkspaceProgress() string {
-	var content strings.Builder
-	for i, line := range m.workspaceProgressLines {
-		if i == 0 {
-			content.WriteString(m.styles.ModalTitle.Render(line))
-		} else {
-			content.WriteString(m.styles.ModalContent.Render(line))
-		}
-		content.WriteString("\n")
-	}
-
-	modalWidth := m.width / 2
-	if modalWidth < 40 {
-		modalWidth = 40
+func (m Model) wideModalWidth() int {
+	modalWidth := m.width * 2 / 3
+	if modalWidth < 60 {
+		modalWidth = 60
 	}
 	if modalWidth > m.width-4 {
 		modalWidth = m.width - 4
+	}
+	return modalWidth
+}
+
+func (m Model) renderFormModal() string {
+	modalWidth := m.wideModalWidth()
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(m.activeForm.View())
+}
+
+func (m Model) renderRepoSelectModal() string {
+	modalWidth := m.wideModalWidth()
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(m.activeRepoPicker.view())
+}
+
+func (m Model) renderWorkspaceProgress() string {
+	// Legacy path: remote clone in picker uses workspaceProgressLines.
+	if m.wsProgress == nil {
+		var content strings.Builder
+		for i, line := range m.workspaceProgressLines {
+			if i == 0 {
+				content.WriteString(m.styles.ModalTitle.Render(line))
+			} else {
+				content.WriteString(m.styles.ModalContent.Render(line))
+			}
+			content.WriteString("\n")
+		}
+
+		modalWidth := m.width / 2
+		if modalWidth < 40 {
+			modalWidth = 40
+		}
+		if modalWidth > m.width-4 {
+			modalWidth = m.width - 4
+		}
+
+		box := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.styles.ModalBorder).
+			Padding(1, 2).
+			Width(modalWidth)
+
+		return box.Render(content.String())
+	}
+
+	// Rich progress modal.
+	ws := m.wsProgress
+	modalWidth := m.wideModalWidth()
+	var content strings.Builder
+
+	// Title.
+	content.WriteString(m.styles.ModalTitle.Render(ws.Title))
+	content.WriteString("\n\n")
+
+	// For destroy: show "Stopping Claude..." status before repo checklist.
+	if ws.Destroying {
+		doneStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Done)
+		if ws.StoppingDone {
+			content.WriteString(fmt.Sprintf("  %s Stopping Claude\n", doneStyle.Render("✓")))
+		} else {
+			content.WriteString(fmt.Sprintf("  %s Stopping Claude\n", m.spinner.View()))
+		}
+		if len(ws.Repos) > 0 || ws.StoppingDone {
+			content.WriteString("\n")
+		}
+	}
+
+	// Repo checklist.
+	if len(ws.Repos) > 0 {
+		doneStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Done)
+		failStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Error)
+		mutedStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+
+		doneCount := 0
+		for _, r := range ws.Repos {
+			if r.Status == cloneStatusDone || r.Status == cloneStatusFailed {
+				doneCount++
+			}
+		}
+		counter := mutedStyle.Render(fmt.Sprintf("[%d/%d]", doneCount, len(ws.Repos)))
+
+		for i, r := range ws.Repos {
+			var icon string
+			var repoStyle lipgloss.Style
+			switch r.Status {
+			case cloneStatusPending:
+				icon = mutedStyle.Render("·")
+				repoStyle = mutedStyle
+			case cloneStatusCloning:
+				icon = m.spinner.View()
+				repoStyle = lipgloss.NewStyle()
+			case cloneStatusDone:
+				icon = doneStyle.Render("✓")
+				repoStyle = doneStyle
+			case cloneStatusFailed:
+				icon = failStyle.Render("✗")
+				repoStyle = failStyle
+			}
+
+			line := fmt.Sprintf("  %s %s", icon, repoStyle.Render(fmt.Sprintf("%s (%s)", r.Repo, r.VCS)))
+			if i == len(ws.Repos)-1 {
+				// Append counter to last line.
+				// Inner width = modalWidth - border (2) - padding (4).
+				innerWidth := modalWidth - 6
+				lineWidth := lipgloss.Width(line)
+				counterWidth := lipgloss.Width(counter)
+				gap := innerWidth - lineWidth - counterWidth
+				if gap > 0 {
+					line += strings.Repeat(" ", gap) + counter
+				}
+			}
+			content.WriteString(line)
+			content.WriteString("\n")
+		}
+	}
+
+	// Separator + log output.
+	innerWidth := modalWidth - 6
+	if len(ws.LogLines) > 0 {
+		content.WriteString("\n")
+		sep := lipgloss.NewStyle().Foreground(m.styles.theme.Muted).
+			Render(strings.Repeat("─", innerWidth))
+		content.WriteString(sep)
+		content.WriteString("\n")
+
+		logStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+		maxLogLines := 8
+		logLines := ws.LogLines
+		if len(logLines) > maxLogLines {
+			logLines = logLines[len(logLines)-maxLogLines:]
+		}
+		for _, line := range logLines {
+			// Truncate long lines.
+			if lipgloss.Width(line) > innerWidth {
+				line = line[:innerWidth-1] + "…"
+			}
+			content.WriteString(logStyle.Render(line))
+			content.WriteString("\n")
+		}
+	}
+
+	// Footer hints.
+	content.WriteString("\n")
+	if ws.Done {
+		if ws.Err != nil {
+			content.WriteString(lipgloss.NewStyle().Foreground(m.styles.theme.Error).
+				Render(fmt.Sprintf("Error: %v", ws.Err)))
+			content.WriteString("\n\n")
+		}
+		content.WriteString(m.renderHint("any key", "dismiss"))
+	} else if ws.Destroying {
+		// No cancel for destroy — just wait.
+	} else if ws.Cancelled {
+		content.WriteString(lipgloss.NewStyle().Foreground(m.styles.theme.Warning).
+			Render("Cancelling after current operation..."))
+	} else {
+		content.WriteString(m.renderHint("esc", "cancel"))
 	}
 
 	box := lipgloss.NewStyle().
