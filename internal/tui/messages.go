@@ -55,6 +55,7 @@ const (
 	ModeWorkspaceProgress
 	ModeCommandPalette
 	ModeConfirmQuit
+	ModeConfirmFreeze
 )
 
 type formType int

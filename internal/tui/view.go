@@ -48,6 +48,10 @@ func (m Model) View() string {
 		modalContent = m.renderCommandPalette()
 	case ModeConfirmQuit:
 		modalContent = m.renderConfirmQuit()
+	case ModeConfirmFreeze:
+		if t := m.selectedTask(); t != nil {
+			modalContent = m.renderConfirmFreeze(t)
+		}
 	case ModeForm:
 		if m.activeForm != nil {
 			modalContent = m.renderFormModal()
@@ -71,7 +75,7 @@ func (m Model) View() string {
 	// it's visible behind the overlay).
 	showHints := m.mode == ModeNormal || m.mode == ModeDetail ||
 		m.mode == ModeConfirmComplete || m.mode == ModeCommandPalette ||
-		m.mode == ModeConfirmQuit || m.mode == ModeForm ||
+		m.mode == ModeConfirmQuit || m.mode == ModeConfirmFreeze || m.mode == ModeForm ||
 		m.mode == ModeRepoSelect || m.mode == ModeWorkspaceProgress
 	if showHints {
 		if m.filterText != "" {
@@ -736,6 +740,40 @@ func (m Model) renderConfirmComplete(t *db.Task) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(m.styles.theme.Error).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(content.String())
+}
+
+func (m Model) renderConfirmFreeze(t *db.Task) string {
+	session := m.activeSession
+	if t.State == db.StateParked {
+		session = m.parkedSession
+	}
+	companionCount := len(tmux.FindCompanions(session, t.Name))
+
+	var content strings.Builder
+
+	content.WriteString(m.styles.ModalTitle.Render(fmt.Sprintf("Freeze %q?", t.Name)))
+	content.WriteString("\n\n")
+	content.WriteString(m.styles.ModalContent.Render("  \u2022 Claude window will be closed (session saved for resume)"))
+	content.WriteString("\n")
+	content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  \u2022 %d companion window(s) will be destroyed", companionCount)))
+	content.WriteString("\n\n")
+	content.WriteString("          " + m.renderHint("y", "Confirm") + "  " + m.renderHint("n", "Cancel"))
+
+	modalWidth := m.width / 2
+	if modalWidth < 44 {
+		modalWidth = 44
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.theme.Warning).
 		Padding(1, 2).
 		Width(modalWidth)
 

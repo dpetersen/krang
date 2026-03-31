@@ -669,6 +669,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmQuitKey(msg)
 	case ModeConfirmComplete:
 		return m.handleConfirmCompleteKey(msg)
+	case ModeConfirmFreeze:
+		return m.handleConfirmFreezeKey(msg)
 	case ModeDetail:
 		return m.handleDetailKey(msg)
 	case ModeHelp:
@@ -1347,6 +1349,31 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleConfirmFreezeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		t := m.selectedTask()
+		if t == nil {
+			m.mode = ModeNormal
+			return m, nil
+		}
+		m.mode = ModeNormal
+		tick := m.startPendingOp(t.ID, "freezing...")
+		return m, tea.Batch(m.dormifySelected(), tick)
+	default:
+		m.mode = ModeNormal
+		return m, nil
+	}
+}
+
+func (m Model) taskHasCompanions(t *db.Task) bool {
+	session := m.activeSession
+	if t.State == db.StateParked {
+		session = m.parkedSession
+	}
+	return len(tmux.FindCompanions(session, t.Name)) > 0
+}
+
 func (m Model) handleConfirmQuitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
@@ -1408,6 +1435,10 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "f":
 		switch t.State {
 		case db.StateActive, db.StateParked:
+			if m.taskHasCompanions(t) {
+				m.mode = ModeConfirmFreeze
+				return m, nil
+			}
 			m.mode = ModeNormal
 			tick := m.startPendingOp(t.ID, "freezing...")
 			return m, tea.Batch(m.dormifySelected(), tick)

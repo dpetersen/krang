@@ -24,7 +24,6 @@ Scrollable help with j/k navigation is implemented. Remaining work:
 
 ## Discoverability & Feedback
 
-- **Freeze confirmation** — warn about companion window destruction before freezing a task that has companions
 - **In-app config editor** — a TUI form (via `huh`) for editing both project-level (`krang.yaml`) and user-level (`config.yaml`) configuration. Avoids requiring users to hand-edit JSON/YAML files. Could be a modal accessible from the main screen or from the help overlay.
 
 ## Integration
