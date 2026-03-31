@@ -511,7 +511,6 @@ func (m Model) renderActionBar() string {
 		hints = append(hints,
 			m.renderHint("enter", "focus"),
 			m.renderHint("tab", "detail"),
-			m.renderHint("c", "complete"),
 		)
 	}
 	return " " + strings.Join(hints, "  ")
@@ -685,7 +684,7 @@ func (m Model) buildHelpContent() string {
 	for _, item := range []hint{
 		{"active", "Running in krang's tmux session. Claude is working or waiting for input."},
 		{"parked", "Moved to a background tmux session. Claude keeps running but is out of sight."},
-		{"frozen", "Tmux window destroyed, session ID saved. No resources used. Resume later with --resume."},
+		{"frozen", "Tmux window destroyed, session ID saved. No processes running. Unfreeze to resume."},
 	} {
 		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
 	}

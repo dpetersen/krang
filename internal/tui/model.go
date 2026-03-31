@@ -758,11 +758,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "c":
-		if m.selectedTask() != nil {
-			m.mode = ModeConfirmComplete
-		}
-		return m, nil
 
 	case "s":
 		m.sortByPriority = !m.sortByPriority
