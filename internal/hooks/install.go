@@ -35,7 +35,7 @@ PORT=$(jq -r .port "$KRANG_STATEFILE" 2>/dev/null)
 [ -z "$PORT" ] && { dbg "empty port from $KRANG_STATEFILE"; exit 0; }
 INPUT=$(cat)
 dbg "port=$PORT payload=$INPUT"
-RESP=$(echo "$INPUT" | curl -s -o /dev/null -w '%{http_code}' \
+RESP=$(echo "$INPUT" | curl -s --max-time 5 -o /dev/null -w '%{http_code}' \
   -X POST -H 'Content-Type: application/json' \
   -d @- "http://127.0.0.1:$PORT/hooks/event")
 dbg "http_status=$RESP"

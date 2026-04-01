@@ -26,10 +26,6 @@ Scrollable help with j/k navigation is implemented. Remaining work:
 
 - **In-app config editor** — a TUI form (via `huh`) for editing both project-level (`krang.yaml`) and user-level (`config.yaml`) configuration. Avoids requiring users to hand-edit JSON/YAML files. Could be a modal accessible from the main screen or from the help overlay.
 
-## Integration
-
-- **Obsidian Kanban sync** — create tasks from Kanban cards, mark cards done when tasks complete
-
 ## MCP Read API
 
 Expose krang's task state to external agents (e.g. a workload manager Claude that reads a Kanban/JIRA board) via read-only MCP resources or tools. The goal is not to build project management into krang, but to let agents query krang for situational awareness.
@@ -55,11 +51,6 @@ Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templat
 
 - **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI. All mutations go through the HTTP server for serialization. See `docs/workspaces.md` for the original design sketch.
 
-- **GitHub repo discovery enhancements** — core search/clone flow is implemented. Remaining ideas:
-  - Shallow clones (`--depth 1`) as a configurable option for speed
-  - Clone from a specific URL (not just org search) for repos outside discovered orgs
-  - Auto-discover orgs via `gh api /user/orgs` instead of manual configuration
-
 ## Sandbox Configuration
 
 Named sandbox profiles with a `type` discriminator are implemented (currently only `command` type). Remaining work:
@@ -70,13 +61,6 @@ Named sandbox profiles with a `type` discriminator are implemented (currently on
 ## Task Forking
 
 Fork an existing task to branch off a new task with the same conversation history but an independent workspace. See [forking.md](forking.md) for the full design sketch covering Claude's `--fork-session` flag, the jj-vs-git workspace story, and open questions.
-
-## Technical
-
-- **Relay script curl timeout** — the relay script (`relay.sh`) runs `curl` with no `--max-time`, so if krang's HTTP server becomes unresponsive (crash, deadlock, heavy load), every hook invocation hangs indefinitely. Since hooks are synchronous `type: "command"`, this blocks Claude completely — indistinguishable from "Claude thinking forever." Adding `--max-time 5` to the curl would make it fail fast; the script already exits 0 regardless, so Claude would continue unaffected.
-- **Proper migration system** — versioned migrations with a schema_version table instead of idempotent DDL
-- **Better error surfacing** — some operations fail silently; consider a dedicated error log file
-- **Configurable models** — allow changing the summary (haiku) and sit rep (sonnet) models
 
 ## Discarded / Deferred Ideas
 
