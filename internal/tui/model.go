@@ -1122,14 +1122,29 @@ func (m Model) handleWSProgressKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if ws.Done {
-		// Any key dismisses when done.
-		m.mode = ModeNormal
-		m.wsProgress = nil
-		if ws.Err != nil {
-			m.appendDebugLog(fmt.Sprintf("[%s] workspace error: %v",
-				time.Now().Format("15:04:05"), ws.Err))
+		switch msg.String() {
+		case "esc":
+			m.mode = ModeNormal
+			m.wsProgress = nil
+			if ws.Err != nil {
+				m.appendDebugLog(fmt.Sprintf("[%s] workspace error: %v",
+					time.Now().Format("15:04:05"), ws.Err))
+			}
+			return m, m.refreshTasks
+		case "k", "up":
+			maxOffset := len(ws.LogLines) - wsProgressMaxLogLines
+			if maxOffset < 0 {
+				maxOffset = 0
+			}
+			if ws.LogOffset < maxOffset {
+				ws.LogOffset++
+			}
+		case "j", "down":
+			if ws.LogOffset > 0 {
+				ws.LogOffset--
+			}
 		}
-		return m, m.refreshTasks
+		return m, nil
 	}
 	if msg.String() == "esc" && !ws.Destroying {
 		ws.Cancelled = true

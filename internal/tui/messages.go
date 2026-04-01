@@ -102,6 +102,7 @@ type wsProgressState struct {
 	Title        string
 	Repos        []repoCloneEntry
 	LogLines     []string // scrollable log output
+	LogOffset    int      // scroll offset from bottom (0 = pinned to bottom)
 	Done         bool
 	Cancelled    bool
 	Err          error

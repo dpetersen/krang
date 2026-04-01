@@ -1370,10 +1370,17 @@ func (m Model) renderWorkspaceProgress() string {
 		content.WriteString("\n")
 
 		logStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
-		maxLogLines := 8
 		logLines := ws.LogLines
-		if len(logLines) > maxLogLines {
-			logLines = logLines[len(logLines)-maxLogLines:]
+		if len(logLines) > wsProgressMaxLogLines {
+			end := len(logLines) - ws.LogOffset
+			start := end - wsProgressMaxLogLines
+			if start < 0 {
+				start = 0
+			}
+			if end < start {
+				end = start
+			}
+			logLines = logLines[start:end]
 		}
 		for _, line := range logLines {
 			// Truncate long lines.
@@ -1393,7 +1400,7 @@ func (m Model) renderWorkspaceProgress() string {
 				Render(fmt.Sprintf("Error: %v", ws.Err)))
 			content.WriteString("\n\n")
 		}
-		content.WriteString(m.renderHint("any key", "dismiss"))
+		content.WriteString(m.renderHint("esc", "dismiss") + "  " + m.renderHint("j/k", "scroll"))
 	} else if ws.Destroying {
 		// No cancel for destroy — just wait.
 	} else if ws.Cancelled {
@@ -1411,6 +1418,8 @@ func (m Model) renderWorkspaceProgress() string {
 
 	return box.Render(content.String())
 }
+
+const wsProgressMaxLogLines = 8
 
 const maxVisibleLogLines = 10
 
