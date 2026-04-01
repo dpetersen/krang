@@ -89,6 +89,17 @@ type Model struct {
 	usageLoading map[string]bool
 
 	paletteCursor int
+
+	// Fork dialog state.
+	forkNameInput textinput.Model
+	forkMode      int    // 0=independent, 1=shared
+	forkSourceTask *db.Task // task being forked
+
+	// Contested sessions: source session ID → fork workspace cwd.
+	// Set BEFORE the fork launches so early events from the forked
+	// Claude (which use the source session ID) don't corrupt the
+	// original task's state.
+	contestedSessions map[string]string
 }
 
 
@@ -139,6 +150,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		sparklineData:   make(map[string][]sparklineBucket),
 		usageCache:      make(map[string]*usage.UsageSummary),
 		usageLoading:    make(map[string]bool),
+		contestedSessions: make(map[string]string),
 		spinner:         s,
 	}
 }
@@ -176,6 +188,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case HookEventMsg:
 		t, _ := m.taskStore.GetBySessionID(msg.Event.SessionID)
+
+		// When a fork is pending, the forked Claude sends events with
+		// the source session ID before SessionStart assigns a new one.
+		// If this session is contested and the event cwd matches the
+		// fork's workspace, route the event to the fork task instead.
+		if t != nil {
+			if forkCwd, contested := m.contestedSessions[msg.Event.SessionID]; contested {
+				if msg.Event.Cwd != "" && msg.Event.Cwd != t.Cwd {
+					// This event is from the forked Claude. Find the fork
+					// task by matching cwd and empty session ID.
+					tasks, _ := m.taskStore.List()
+					for _, ft := range tasks {
+						if ft.SessionID == "" && ft.State == db.StateActive && ft.Cwd == forkCwd {
+							t = &ft
+							break
+						}
+					}
+				}
+			}
+		}
 
 		// On SessionStart with unknown ID, try to adopt it for a
 		// recently woken task whose old session ID no longer matches.
@@ -229,7 +261,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.Event.LastAssistantMessage != ""
 
 		cmds := []tea.Cmd{
-			m.handleHookEvent(msg.Event, classifying),
+			m.handleHookEvent(msg.Event, classifying, t.ID),
 			m.waitForHookEvent(),
 		}
 		if msg.Event.HookEventName == "Stop" {
@@ -360,6 +392,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 			fmt.Sprintf("Created workspace directory: %s", msg.WorkspaceDir))
 		if len(m.wsProgress.Repos) == 0 {
+			if m.wsProgress.Forking {
+				m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Copying session files...")
+				return m, m.wsForkCopySessionCmd()
+			}
 			// No repos — launch task immediately.
 			if m.wsProgress.LaunchTask {
 				m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Launching Claude...")
@@ -367,6 +403,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.wsProgress.Done = true
 			return m, nil
+		}
+		if m.wsProgress.Forking {
+			// Start the first repo fork.
+			m.wsProgress.Repos[0].Status = cloneStatusCloning
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Forking %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
+			return m, m.wsForkRepoCmd(0, m.repoSets)
 		}
 		// Start the first clone.
 		m.wsProgress.Repos[0].Status = cloneStatusCloning
@@ -532,6 +575,93 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wsProgress.Done = true
 		return m, nil
 
+	case wsForkRepoDoneMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		// Handle initial error (e.g. workspace dir creation failure).
+		if msg.Index < 0 {
+			m.wsProgress.Err = msg.Err
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Error: %v", msg.Err))
+			m.wsProgress.Done = true
+			return m, nil
+		}
+		if msg.Index >= len(m.wsProgress.Repos) {
+			return m, nil
+		}
+		entry := &m.wsProgress.Repos[msg.Index]
+		if msg.Err != nil {
+			entry.Status = cloneStatusFailed
+			entry.Err = msg.Err
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Failed: %s — %v", entry.Repo, msg.Err))
+		} else {
+			entry.Status = cloneStatusDone
+			entry.VCS = msg.VCS
+			if output := strings.TrimSpace(msg.Output); output != "" {
+				for _, line := range strings.Split(output, "\n") {
+					m.wsProgress.LogLines = append(m.wsProgress.LogLines, line)
+				}
+			}
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Forked: %s (%s)", entry.Repo, entry.VCS))
+		}
+		entry.Output = msg.Output
+
+		if m.wsProgress.Cancelled {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Cancelled. Cleaning up...")
+			_ = os.RemoveAll(m.wsProgress.WorkspaceDir)
+			m.wsProgress.Done = true
+			return m, nil
+		}
+
+		// Next repo or move to session copy.
+		nextIdx := msg.Index + 1
+		if nextIdx < len(m.wsProgress.Repos) {
+			m.wsProgress.Repos[nextIdx].Status = cloneStatusCloning
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Forking %s (%s)...", m.wsProgress.Repos[nextIdx].Repo, m.wsProgress.Repos[nextIdx].VCS))
+			return m, m.wsForkRepoCmd(nextIdx, m.repoSets)
+		}
+
+		// All repos forked — copy session files.
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Copying session files...")
+		return m, m.wsForkCopySessionCmd()
+
+	case wsForkSessionCopiedMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Warning copying session: %v", msg.Err))
+		}
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Launching Claude...")
+		return m, m.wsForkLaunchCmd()
+
+	case wsForkLaunchDoneMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.wsProgress.Err = msg.Err
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Error: %v", msg.Err))
+		} else {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Done!")
+		}
+		m.wsProgress.Done = true
+		return m, nil
+
+	case forkSharedDoneMsg:
+		delete(m.pendingOps, msg.PendingOpKey)
+		if msg.Err != nil {
+			m.appendDebugLog(fmt.Sprintf("[%s] fork error: %v",
+				time.Now().Format("15:04:05"), msg.Err))
+		}
+		return m, m.refreshTasks
+
 	case remoteSearchDebounceMsg:
 		picker := m.activeRepoPicker
 		if picker == nil && m.activeWizard != nil {
@@ -693,6 +823,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmFreezeKey(msg)
 	case ModeDetail:
 		return m.handleDetailKey(msg)
+	case ModeForkDialog:
+		return m.handleForkDialogKey(msg)
 	case ModeHelp:
 		return m.handleHelpKey(msg)
 	case ModeSitRepLoading:
@@ -1425,6 +1557,21 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.completeSelected(), tick)
 		}
 
+		// Check if other tasks share this workspace.
+		shared, _ := m.taskStore.TasksSharingWorkspace(t.WorkspaceDir, t.ID)
+		if len(shared) > 0 {
+			// Shared workspace — complete the task but skip workspace cleanup.
+			var names []string
+			for _, s := range shared {
+				names = append(names, s.Name)
+			}
+			m.mode = ModeNormal
+			tick := m.startPendingOp(t.ID, "completing...")
+			m.appendDebugLog(fmt.Sprintf("[%s] workspace cleanup skipped: shared with %s",
+				time.Now().Format("15:04:05"), strings.Join(names, ", ")))
+			return m, tea.Batch(m.completeSelected(), tick)
+		}
+
 		// Workspace task — use the rich progress modal.
 		m.mode = ModeWorkspaceProgress
 		rs := m.repoSets
@@ -1567,6 +1714,16 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "d":
+		// Fork: available for tasks with a session ID that aren't completed/failed.
+		if t.SessionID == "" {
+			return m, nil
+		}
+		if t.State == db.StateCompleted || t.State == db.StateFailed {
+			return m, nil
+		}
+		return m.initForkDialog(t)
+
 	case "e":
 		if t.State == db.StateCompleted || t.State == db.StateFailed {
 			return m, nil
@@ -1597,6 +1754,262 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// Fork dialog and progress functions.
+
+const (
+	forkModeIndependent = iota
+	forkModeShared
+)
+
+func (m Model) initForkDialog(t *db.Task) (tea.Model, tea.Cmd) {
+	input := textinput.New()
+	input.Placeholder = "fork name"
+	input.CharLimit = 40
+	input.Focus()
+	input.SetValue(m.generateForkName(t.Name))
+
+	m.forkNameInput = input
+	m.forkMode = forkModeIndependent
+	source := *t
+	m.forkSourceTask = &source
+	m.mode = ModeForkDialog
+	return m, input.Focus()
+}
+
+func (m Model) generateForkName(sourceName string) string {
+	// Try <source>-fork, then <source>-fork-2, etc.
+	base := sourceName
+	maxBase := 40 - len("-fork")
+	if len(base) > maxBase {
+		base = base[:maxBase]
+	}
+
+	candidate := base + "-fork"
+	if !m.taskStore.NameInUse(candidate) {
+		return candidate
+	}
+
+	for i := 2; i <= 99; i++ {
+		suffix := fmt.Sprintf("-fork-%d", i)
+		maxB := 40 - len(suffix)
+		b := base
+		if len(b) > maxB {
+			b = b[:maxB]
+		}
+		candidate = b + suffix
+		if !m.taskStore.NameInUse(candidate) {
+			return candidate
+		}
+	}
+	return base + "-fork"
+}
+
+func (m Model) forkHasWorkspace() bool {
+	return m.forkSourceTask != nil && m.forkSourceTask.WorkspaceDir != ""
+}
+
+func (m Model) handleForkDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = ModeNormal
+		m.forkSourceTask = nil
+		return m, nil
+
+	case "tab":
+		// Toggle fork mode if workspace task.
+		if m.forkHasWorkspace() {
+			if m.forkMode == forkModeIndependent {
+				m.forkMode = forkModeShared
+			} else {
+				m.forkMode = forkModeIndependent
+			}
+		}
+		return m, nil
+
+	case "enter":
+		name := strings.TrimSpace(m.forkNameInput.Value())
+		if name == "" {
+			return m, nil
+		}
+		if m.taskStore.NameInUse(name) {
+			return m, nil
+		}
+		return m.startFork(name)
+	}
+
+	// Forward other keys to the text input.
+	var cmd tea.Cmd
+	m.forkNameInput, cmd = m.forkNameInput.Update(msg)
+	return m, cmd
+}
+
+func (m Model) startFork(name string) (tea.Model, tea.Cmd) {
+	src := m.forkSourceTask
+	if src == nil {
+		m.mode = ModeNormal
+		return m, nil
+	}
+
+	modeName := "independent"
+	if m.forkMode == forkModeShared {
+		modeName = "shared"
+	}
+
+	if m.forkMode == forkModeShared || src.WorkspaceDir == "" {
+		// Shared mode or no workspace: launch directly, no workspace duplication.
+		// No contested session needed — both tasks share the same cwd.
+		m.mode = ModeNormal
+		tick := m.startPendingOp("fork-"+name, "forking...")
+
+		return m, tea.Batch(m.forkSharedCmd(name, src), tick)
+	}
+
+	// Independent mode: workspace duplication via progress modal.
+	rs := m.repoSets
+	if rs == nil {
+		m.mode = ModeNormal
+		return m, nil
+	}
+
+	// Mark the source session as contested BEFORE launching the fork.
+	// The fork workspace path is deterministic.
+	forkWorkspaceDir := filepath.Join(rs.WorkspacesDir, name)
+	m.contestedSessions[src.SessionID] = forkWorkspaceDir
+
+	var repos []string
+	if rs.WorkspaceStrategy == workspace.StrategySingleRepo {
+		// Single repo: find which source repo this workspace belongs to.
+		// Check the workspace VCS and match against known repos.
+		wsIsJJ := workspace.AllReposJJ(rs, src.WorkspaceDir)
+		allRepos, _ := rs.ListRepos()
+		for _, r := range allRepos {
+			if wsIsJJ && rs.DetectVCS(r) == "jj" {
+				repos = []string{r}
+				break
+			}
+			if !wsIsJJ && rs.DetectVCS(r) != "jj" {
+				repos = []string{r}
+				break
+			}
+		}
+		if len(repos) == 0 && len(allRepos) > 0 {
+			repos = []string{allRepos[0]}
+		}
+	} else {
+		repos = workspace.PresentRepos(src.WorkspaceDir)
+	}
+
+	entries := make([]repoCloneEntry, len(repos))
+	for i, repo := range repos {
+		entries[i] = repoCloneEntry{Repo: repo, VCS: rs.DetectVCS(repo)}
+	}
+
+	m.mode = ModeWorkspaceProgress
+	m.wsProgress = &wsProgressState{
+		Title:           fmt.Sprintf("Forking %q → %q", src.Name, name),
+		Repos:           entries,
+		Forking:         true,
+		ForkMode:        modeName,
+		SourceTaskID:    src.ID,
+		SourceSessionID: src.SessionID,
+		SourceCwd:       src.Cwd,
+		TaskName:        name,
+		TaskFlags:       src.Flags,
+		TaskSandboxProfile: src.SandboxProfile,
+	}
+
+	return m, tea.Batch(m.wsForkCreateDirCmd(rs, name), m.spinner.Tick)
+}
+
+// forkSharedCmd launches a forked task that shares the source workspace.
+func (m Model) forkSharedCmd(name string, src *db.Task) tea.Cmd {
+	srcID := src.ID
+	srcCwd := src.Cwd
+	srcSessionID := src.SessionID
+	srcFlags := src.Flags
+	srcSandboxProfile := src.SandboxProfile
+	srcWorkspaceDir := src.WorkspaceDir
+
+	return func() tea.Msg {
+		cwd := srcCwd
+		workspaceDir := srcWorkspaceDir
+		if workspaceDir != "" {
+			cwd = workspaceDir
+		}
+
+		_, err := m.manager.ForkTask(name, srcSessionID, srcID, cwd, srcFlags, srcSandboxProfile, workspaceDir)
+		return forkSharedDoneMsg{PendingOpKey: "fork-" + name, Err: err}
+	}
+}
+
+// wsForkCreateDirCmd creates the workspace directory for a fork.
+func (m Model) wsForkCreateDirCmd(rs *workspace.RepoSets, forkTaskName string) tea.Cmd {
+	return func() tea.Msg {
+		workspaceDir, err := workspace.CreateWorkspaceDir(rs, forkTaskName)
+		if err != nil {
+			return wsForkRepoDoneMsg{Index: -1, Err: err}
+		}
+		return wsDirCreatedMsg{WorkspaceDir: workspaceDir}
+	}
+}
+
+// wsForkRepoCmd forks a single repo at the given index.
+func (m Model) wsForkRepoCmd(index int, rs *workspace.RepoSets) tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil || index >= len(ws.Repos) {
+		return nil
+	}
+	entry := ws.Repos[index]
+
+	srcWorkspaceDir := ws.SourceCwd
+	if m.forkSourceTask != nil && m.forkSourceTask.WorkspaceDir != "" {
+		srcWorkspaceDir = m.forkSourceTask.WorkspaceDir
+	}
+
+	dstPath := workspace.RepoDst(rs, ws.WorkspaceDir, entry.Repo)
+
+	return func() tea.Msg {
+		result := workspace.ForkRepo(rs, srcWorkspaceDir, dstPath, entry.Repo, ws.TaskName)
+		return wsForkRepoDoneMsg{
+			Index:  index,
+			Output: result.Output,
+			VCS:    result.VCS,
+			Err:    result.Err,
+		}
+	}
+}
+
+// wsForkCopySessionCmd copies session files for the fork.
+func (m Model) wsForkCopySessionCmd() tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		err := task.CopySessionFiles(ws.SourceSessionID, ws.SourceCwd, ws.WorkspaceDir)
+		return wsForkSessionCopiedMsg{Err: err}
+	}
+}
+
+// wsForkLaunchCmd creates and launches the forked task.
+func (m Model) wsForkLaunchCmd() tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil {
+		return nil
+	}
+	taskName := ws.TaskName
+	sourceTaskID := ws.SourceTaskID
+	sourceSessionID := ws.SourceSessionID
+	workspaceDir := ws.WorkspaceDir
+	flags := ws.TaskFlags
+	sandboxProfile := ws.TaskSandboxProfile
+
+	return func() tea.Msg {
+		_, err := m.manager.ForkTask(taskName, sourceSessionID, sourceTaskID, workspaceDir, flags, sandboxProfile, workspaceDir)
+		return wsForkLaunchDoneMsg{Err: err}
+	}
+}
+
 const maxDebugLines = 20
 
 func (m *Model) appendDebugLog(line string) {
@@ -1608,13 +2021,42 @@ func (m *Model) appendDebugLog(line string) {
 
 // tryAdoptSession matches an unknown SessionStart to an active task
 // whose cwd matches the event's cwd. This handles resumed sessions
-// which get a new session ID.
+// which get a new session ID. Prefers tasks with empty session IDs
+// (pending forks) over tasks that already have a session.
 func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 	tasks, err := m.taskStore.List()
 	if err != nil {
 		return nil
 	}
 
+	// First pass: prefer tasks with empty session ID (pending forks).
+	for _, t := range tasks {
+		if t.State != db.StateActive {
+			continue
+		}
+		if t.TmuxWindow == "" {
+			continue
+		}
+		if t.SessionID == "" && t.Cwd == event.Cwd {
+			_ = m.taskStore.UpdateSessionID(t.ID, event.SessionID)
+			m.appendDebugLog(fmt.Sprintf("[%s] adopted forked session for task=%s",
+				time.Now().Format("15:04:05"), t.Name))
+
+			// Clean up contested session marker and copied session files.
+			if t.SourceTaskID != "" {
+				if srcTask, err := m.taskStore.Get(t.SourceTaskID); err == nil && srcTask != nil {
+					_ = task.CleanupCopiedSession(srcTask.SessionID, t.Cwd)
+					delete(m.contestedSessions, srcTask.SessionID)
+				}
+			}
+
+			updated := t
+			updated.SessionID = event.SessionID
+			return &updated
+		}
+	}
+
+	// Second pass: tasks with existing session ID (cwd-based match for resumes).
 	for _, t := range tasks {
 		if t.State != db.StateActive {
 			continue
@@ -2032,10 +2474,12 @@ func (m Model) waitForHookEvent() tea.Cmd {
 	}
 }
 
-func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool) tea.Cmd {
+func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool, taskID string) tea.Cmd {
 	return func() tea.Msg {
-		// Task lookup already done in Update — safe to look up again for the DB writes.
-		t, err := m.taskStore.GetBySessionID(event.SessionID)
+		// Use the task ID resolved by the Update handler, which accounts
+		// for contested sessions from forks. Do NOT re-lookup by session
+		// ID here — that would bypass fork event routing.
+		t, err := m.taskStore.Get(taskID)
 		if err != nil || t == nil {
 			return m.refreshTasks()
 		}

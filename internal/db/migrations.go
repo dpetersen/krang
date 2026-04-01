@@ -75,3 +75,7 @@ ALTER TABLE tasks ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
 const schemaV6 = `
 ALTER TABLE tasks ADD COLUMN sandbox_profile TEXT NOT NULL DEFAULT '';
 `
+
+const schemaV7 = `
+ALTER TABLE tasks ADD COLUMN source_task_id TEXT NOT NULL DEFAULT '';
+`

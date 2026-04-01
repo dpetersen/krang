@@ -378,3 +378,131 @@ func cloneGitRepo(repoSrc, repoDst string) (string, error) {
 	}
 	return string(output), nil
 }
+
+// ForkRepoResult holds the outcome of forking a single repo.
+type ForkRepoResult struct {
+	Repo   string
+	VCS    string
+	Output string
+	Err    error
+}
+
+// ForkRepo forks a single repo from srcWorkspaceDir into dstPath.
+// For jj repos, creates an independent duplicate (sibling commits).
+// For git repos, creates a physical copy with a new branch.
+func ForkRepo(rs *RepoSets, srcWorkspaceDir, dstPath, repo, forkTaskName string) ForkRepoResult {
+	vcs := rs.DetectVCS(repo)
+
+	// Resolve source path: single_repo = workspace dir, multi_repo = subdir.
+	srcPath := srcWorkspaceDir
+	if rs.WorkspaceStrategy == StrategyMultiRepo {
+		srcPath = filepath.Join(srcWorkspaceDir, repo)
+	}
+
+	var output string
+	var err error
+	switch vcs {
+	case "jj":
+		repoSrc := filepath.Join(rs.ReposDir, repo)
+		output, err = forkJJRepoIndependent(repoSrc, srcPath, dstPath, forkTaskName)
+	default:
+		output, err = forkGitRepo(srcPath, dstPath, forkTaskName)
+	}
+
+	return ForkRepoResult{Repo: repo, VCS: vcs, Output: output, Err: err}
+}
+
+// AllReposJJ returns true if every repo in the workspace uses jj.
+func AllReposJJ(rs *RepoSets, workspaceDir string) bool {
+	if rs.WorkspaceStrategy == StrategySingleRepo {
+		// Single repo: workspace dir IS the repo. Check for .jj directly.
+		_, err := os.Stat(filepath.Join(workspaceDir, ".jj"))
+		return err == nil
+	}
+	repos := PresentRepos(workspaceDir)
+	for _, repo := range repos {
+		if rs.DetectVCS(repo) != "jj" {
+			return false
+		}
+	}
+	return len(repos) > 0
+}
+
+func forkJJRepoIndependent(repoSrc, srcWorkspace, dstPath, forkTaskName string) (string, error) {
+	var allOutput strings.Builder
+
+	// Ensure source working copy is fresh.
+	updateCmd := exec.Command("jj", "workspace", "update-stale")
+	updateCmd.Dir = srcWorkspace
+	_ = updateCmd.Run()
+
+	// Duplicate the current working-copy commit to create an independent copy.
+	// Output format: "Duplicated <old> as <change_id> <commit_id> <desc>"
+	dupCmd := exec.Command("jj", "duplicate", "@")
+	dupCmd.Dir = srcWorkspace
+	dupOut, err := dupCmd.CombinedOutput()
+	allOutput.WriteString(string(dupOut))
+	if err != nil {
+		return allOutput.String(), fmt.Errorf("jj duplicate: %w: %s", err, dupOut)
+	}
+	dupChangeID := parseDuplicateChangeID(string(dupOut))
+	if dupChangeID == "" {
+		return allOutput.String(), fmt.Errorf("could not parse change ID from jj duplicate output: %s", dupOut)
+	}
+
+	// Create workspace from the source repo (not the workspace).
+	wsCmd := exec.Command("jj", "workspace", "add", dstPath, "--name", forkTaskName)
+	wsCmd.Dir = repoSrc
+	wsOut, err := wsCmd.CombinedOutput()
+	allOutput.WriteString(string(wsOut))
+	if err != nil {
+		return allOutput.String(), fmt.Errorf("jj workspace add: %w: %s", err, wsOut)
+	}
+
+	// Switch the new workspace to edit the duplicated commit.
+	editCmd := exec.Command("jj", "edit", dupChangeID)
+	editCmd.Dir = dstPath
+	editOut, err := editCmd.CombinedOutput()
+	allOutput.WriteString(string(editOut))
+	if err != nil {
+		return allOutput.String(), fmt.Errorf("jj edit: %w: %s", err, editOut)
+	}
+
+	return allOutput.String(), nil
+}
+
+// parseDuplicateChangeID extracts the change ID from jj duplicate output.
+// Expected format: "Duplicated <old> as <change_id> <commit_id> <desc>"
+func parseDuplicateChangeID(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 4 && fields[0] == "Duplicated" && fields[2] == "as" {
+			return fields[3]
+		}
+	}
+	return ""
+}
+
+func forkGitRepo(srcDir, dstDir, forkTaskName string) (string, error) {
+	var allOutput strings.Builder
+
+	// Physical copy preserves everything: committed, staged, unstaged, untracked.
+	cpCmd := exec.Command("cp", "-a", srcDir, dstDir)
+	cpOut, err := cpCmd.CombinedOutput()
+	allOutput.WriteString(string(cpOut))
+	if err != nil {
+		return allOutput.String(), fmt.Errorf("cp -a: %w: %s", err, cpOut)
+	}
+
+	// Create a new branch so pushes don't collide with the original.
+	branchName := forkTaskName
+	gitCmd := exec.Command("git", "checkout", "-b", branchName)
+	gitCmd.Dir = dstDir
+	gitOut, err := gitCmd.CombinedOutput()
+	allOutput.WriteString(string(gitOut))
+	if err != nil {
+		return allOutput.String(), fmt.Errorf("git checkout -b: %w: %s", err, gitOut)
+	}
+
+	return allOutput.String(), nil
+}

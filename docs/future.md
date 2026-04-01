@@ -60,7 +60,10 @@ Named sandbox profiles with a `type` discriminator are implemented (currently on
 
 ## Task Forking
 
-Fork an existing task to branch off a new task with the same conversation history but an independent workspace. See [forking.md](forking.md) for the full design sketch covering Claude's `--fork-session` flag, the jj-vs-git workspace story, and open questions.
+Task forking is implemented with two workspace modes (independent and shared). See [forking.md](forking.md) for details. Remaining ideas:
+
+- **Linked mode** — jj parent-child workspace (`workspace add -r @`) for auto-rebase from source. Currently blocked by jj's stale workspace handling losing working copy changes on concurrent edits (jj-vcs/jj#1310). Worth revisiting if jj improves this.
+- **Fork from completed tasks** — conversation-only fork (no workspace to copy). Would need session files to still be available.
 
 ## Discarded / Deferred Ideas
 

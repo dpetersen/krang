@@ -63,6 +63,8 @@ func (m Model) View() string {
 		if m.activeWizard != nil {
 			modalContent = m.renderTaskWizardModal()
 		}
+	case ModeForkDialog:
+		modalContent = m.renderForkDialog()
 	case ModeWorkspaceProgress:
 		modalContent = m.renderWorkspaceProgress()
 	case ModeFilter:
@@ -79,7 +81,7 @@ func (m Model) View() string {
 	showHints := m.mode == ModeNormal || m.mode == ModeDetail ||
 		m.mode == ModeConfirmComplete || m.mode == ModeCommandPalette ||
 		m.mode == ModeConfirmQuit || m.mode == ModeConfirmFreeze || m.mode == ModeForm ||
-		m.mode == ModeRepoSelect || m.mode == ModeWorkspaceProgress
+		m.mode == ModeRepoSelect || m.mode == ModeWorkspaceProgress || m.mode == ModeForkDialog
 	if showHints {
 		if m.filterText != "" {
 			top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
@@ -701,6 +703,7 @@ func (m Model) buildHelpContent() string {
 		{"f", "Freeze / unfreeze (toggles based on state)"},
 		{"c", "Complete task"},
 		{"+", "Create companion window"},
+		{"d", "Fork task (duplicate conversation + workspace)"},
 		{"e", "Edit task (repos, sandbox, flags)"},
 		{"enter", "Focus task window"},
 		{"esc/tab", "Close modal"},
@@ -747,9 +750,20 @@ func (m Model) renderConfirmComplete(t *db.Task) string {
 	content.WriteString("\n\n")
 	content.WriteString(m.styles.ModalContent.Render("  • Claude process will be stopped"))
 	if t.WorkspaceDir != "" {
-		content.WriteString("\n")
-		wsPath := tildeify(t.WorkspaceDir)
-		content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  • Workspace at %s will be deleted", wsPath)))
+		shared, _ := m.taskStore.TasksSharingWorkspace(t.WorkspaceDir, t.ID)
+		if len(shared) > 0 {
+			var names []string
+			for _, s := range shared {
+				names = append(names, s.Name)
+			}
+			content.WriteString("\n")
+			content.WriteString(m.styles.ModalContent.Render(
+				fmt.Sprintf("  • Workspace shared with %s — will NOT be deleted", strings.Join(names, ", "))))
+		} else {
+			content.WriteString("\n")
+			wsPath := tildeify(t.WorkspaceDir)
+			content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  • Workspace at %s will be deleted", wsPath)))
+		}
 	}
 	content.WriteString("\n\n")
 	content.WriteString("          " + m.renderHint("y", "Confirm") + "  " + m.renderHint("n", "Cancel"))
@@ -914,6 +928,28 @@ func (m Model) renderDetailModal(t *db.Task) string {
 		content.WriteString(m.styles.ModalContent.Render("  flags: " + strings.Join(flags, ", ")))
 		content.WriteString("\n")
 	}
+	if t.SourceTaskID != "" {
+		sourceName := t.SourceTaskID
+		for _, st := range m.tasks {
+			if st.ID == t.SourceTaskID {
+				sourceName = st.Name
+				break
+			}
+		}
+		content.WriteString(m.styles.ModalContent.Render("  forked from: " + sourceName))
+		content.WriteString("\n")
+	}
+	if t.WorkspaceDir != "" {
+		shared, _ := m.taskStore.TasksSharingWorkspace(t.WorkspaceDir, t.ID)
+		if len(shared) > 0 {
+			var names []string
+			for _, s := range shared {
+				names = append(names, s.Name)
+			}
+			content.WriteString(m.styles.ModalContent.Render("  workspace shared with: " + strings.Join(names, ", ")))
+			content.WriteString("\n")
+		}
+	}
 	if t.Summary != "" {
 		content.WriteString(m.styles.ModalContent.Render("  summary: " + t.Summary))
 		content.WriteString("\n")
@@ -980,6 +1016,9 @@ func (m Model) renderDetailModal(t *db.Task) string {
 	if t.State != db.StateCompleted && t.State != db.StateFailed {
 		actions = append(actions, action{"e", "Edit task"})
 	}
+	if t.SessionID != "" && t.State != db.StateCompleted && t.State != db.StateFailed {
+		actions = append(actions, action{"d", "Fork task"})
+	}
 
 	for _, a := range actions {
 		content.WriteString("  " + m.renderHint(fmt.Sprintf("%-6s", a.key), a.desc))
@@ -998,6 +1037,81 @@ func (m Model) renderDetailModal(t *db.Task) string {
 	return box.Render(content.String())
 }
 
+
+func (m Model) renderForkDialog() string {
+	src := m.forkSourceTask
+	if src == nil {
+		return ""
+	}
+
+	var content strings.Builder
+	modalWidth := m.width / 3
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	if modalWidth > m.width-4 {
+		modalWidth = m.width - 4
+	}
+
+	content.WriteString(m.styles.ModalTitle.Render(fmt.Sprintf("Fork %q", src.Name)))
+	content.WriteString("\n\n")
+
+	content.WriteString(m.styles.ModalContent.Render("  Name: "))
+	content.WriteString(m.forkNameInput.View())
+	content.WriteString("\n")
+
+	if m.forkHasWorkspace() {
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render("  Mode:"))
+		content.WriteString("\n")
+
+		accentStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
+
+		modes := []struct {
+			id   int
+			name string
+			desc string
+		}{
+			{forkModeIndependent, "Independent", "New workspace, fully separate"},
+			{forkModeShared, "Shared", "Same workspace, concurrent edits may conflict"},
+		}
+
+		for _, mode := range modes {
+			marker := "  "
+			if m.forkMode == mode.id {
+				marker = accentStyle.Render("> ")
+			}
+			label := mode.name
+			if m.forkMode == mode.id {
+				label = accentStyle.Render(label)
+			}
+			content.WriteString(fmt.Sprintf("  %s%-14s %s", marker, label,
+				m.styles.ModalContent.Render(mode.desc)))
+			content.WriteString("\n")
+		}
+
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render("  tab to cycle mode"))
+		content.WriteString("\n")
+	} else {
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render("  Both tasks will share the same working directory."))
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render("  Concurrent edits may conflict."))
+		content.WriteString("\n")
+	}
+
+	content.WriteString("\n")
+	content.WriteString("  " + m.renderHint("enter", "Fork") + "  " + m.renderHint("esc", "Cancel"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(content.String())
+}
 
 func (m Model) renderUsageSection(t *db.Task, modalWidth int) string {
 	if t.TranscriptPath == "" {

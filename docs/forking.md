@@ -1,125 +1,87 @@
 # Task Forking
 
 Fork an existing task to create a new task with the same conversation
-history but an independent workspace. The new Claude session starts
-with full context of what was discussed and built, but diverges from
-that point forward. Useful for "let me try a different approach"
-without losing the current one.
+history but divergent from that point forward. Useful for "let me try
+a different approach" without losing the current one.
 
-## Claude Side
+## How It Works
 
-Claude Code supports `--resume <name> --fork-session`, which creates
-a new session seeded with the original's history. Krang would create a
-new task, spawn Claude with this flag combo, and adopt the new session
-via the normal `SessionStart` hook flow.
+Press `d` in the detail modal on any task with a session ID (active,
+parked, or dormant). A fork dialog lets you name the fork and choose
+a workspace mode.
 
-### Session-directory binding
+Claude Code's `--resume <session-id> --fork-session` creates a new
+session seeded with the original's history. Krang creates the new
+task, copies session files if needed, and launches Claude with this
+flag. The forked session gets a new session ID via the normal
+`SessionStart` hook flow.
 
-Claude resolves sessions relative to the project directory: it looks
-for `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (plus an
-optional companion directory with subagent logs and tool results).
-Krang already works around this for thaw/relaunch (see
-`findSessionCwd` in manager.go).
+## Workspace Modes
 
-For forking into a new workspace, the session file won't exist under
-the new directory's project path. The fix: **copy** the session JSONL
-and its companion directory from the old project path to the new one
-before launching `--resume --fork-session`.
+### Independent (default)
 
-The session files contain `cwd` fields in event payloads, but these
-are conversation metadata, not lookup keys — Claude locates the
-session by filename under the current project directory. No
-modification of the original files is needed or allowed; the copy is
-disposable (Claude creates a new session ID on fork anyway).
+Creates a new workspace, fully separate from the original. Both tasks
+can work concurrently without interference.
 
-This is inherently fragile — it depends on Claude's internal storage
-format, which could add checksums or directory validation at any time.
-Acceptable because forking is non-core functionality and read-only
-copies can't corrupt the original session.
+**jj repos:** `jj duplicate @` creates a sibling commit (same content,
+same parent, no link), then `jj workspace add` + `jj edit` puts the
+new workspace on the duplicate. Changes to either workspace don't
+affect the other — no auto-rebase.
 
-## Combined Fork Flow
+**git repos:** `cp -a` copies the entire directory (preserving all
+committed, staged, unstaged, and untracked changes), then
+`git checkout -b <fork-name>` creates a new branch so pushes don't
+collide.
 
-1. Create new workspace (see Workspace Side below)
-2. Compute encoded project paths for both old and new cwd
-3. Copy `<session-id>.jsonl` and `<session-id>/` from
-   `~/.claude/projects/<encoded-old-cwd>/` to
-   `~/.claude/projects/<encoded-new-cwd>/`
-4. Create the new krang task (new name, new cwd, no session ID yet)
-5. Launch `claude --resume <old-name> --fork-session` from the new
-   workspace cwd
-6. Claude finds the copied session, forks it with a new session ID,
-   and sends `SessionStart` — krang adopts via the normal hook flow
-7. On completion, clean up the copied session files (the forked
-   session lives under the new project directory independently)
+### Shared
 
-## Workspace Side
+Both tasks share the same workspace directory. Only the conversation
+forks — no workspace duplication. A warning is shown in the fork
+dialog about concurrent edit risk.
 
-The interesting complexity is workspace handling. A forked task needs
-its own workspace so the two tasks don't step on each other. The
-approach depends on the VCS.
+Useful for quick tasks where dealing with getting changes between
+disconnected workspaces is painful, especially with git.
 
-### Jujutsu (straightforward)
+**Cleanup behavior:** When completing a task with a shared workspace,
+krang checks if other active/parked/dormant tasks use the same
+directory. If so, cleanup is skipped and a message is shown. The
+workspace is only destroyed when the last task using it completes.
 
-jj automatically commits all working-copy changes, so at fork time
-the source workspace's state is already captured in a commit. The fork
-flow:
+### Non-workspace tasks
 
-1. Read the current jj commit from the source workspace
-   (`jj log --limit 1` or similar)
-2. Create a new workspace for the forked task via `jj workspace add`
-3. Edit the new workspace to the same commit (`jj edit <commit>` from
-   the new workspace)
-4. The new workspace now has identical code, fully independent. Both
-   tasks can diverge freely.
+Tasks without managed workspaces always fork in shared mode (same
+cwd). A warning about concurrent edits is shown.
 
-This works for both single-repo and multi-repo strategies — repeat for
-each repo in the workspace.
+## Session File Handling
 
-### Git (hard)
+Claude resolves sessions relative to the project directory
+(`~/.claude/projects/<encoded-cwd>/`). When forking into a new
+workspace (different cwd), the session file won't exist under the new
+path. Krang copies the session JSONL and companion directory to the
+new project path before launching. After `SessionStart` confirms the
+fork, the copies are cleaned up.
 
-Git doesn't auto-commit, so uncommitted changes are the problem.
-Options, none great:
+### Contested sessions
 
-- **`git worktree add`** only works from a commit, so uncommitted
-  changes are lost.
-- **Stash dance:** `git stash` → `git worktree add` → apply stash in
-  the new worktree. Fragile — stash apply in a different worktree is
-  not straightforward and can conflict.
-- **Filesystem copy:** Copy the entire repo directory. Works but it's
-  not a proper worktree (no shared object store, cleanup is messier,
-  pushes from the copy may surprise the user).
-- **Temporary commit:** Force a temp commit, worktree from that, then
-  soft-reset in the original. Fragile and surprising to the user.
+Between fork launch and `SessionStart`, the forked Claude sends
+events using the source session ID. Without mitigation, these events
+would corrupt the original task's state (particularly cwd). Krang
+tracks "contested sessions" — source session IDs with an active fork
+in flight — and routes events to the correct task based on cwd
+matching. The resolved task ID is passed directly to the event
+handler to avoid re-lookup races.
 
-For now, git workspace forking could be limited to repos with a clean
-working tree, or documented as a jj-only feature.
+## Lineage Tracking
 
-## UX
+Forked tasks store `source_task_id` in the database. The detail modal
+shows "forked from: <name>" and "workspace shared with: <names>" when
+applicable. The completion confirmation modal also shows shared
+workspace status.
 
-- Keybinding in the detail modal (e.g. `d` for duplicate/diverge, or
-  exposed via the command palette)
-- Task name auto-generated as `<original>-fork` or `<original>-2`
-  (user can rename)
-- The original task's flags and companion state do not carry over —
-  it's a fresh task with old conversation context
+## Why Not Linked Mode?
 
-## Safety Constraints
-
-- **Never modify original session files.** Only copy. The copied files
-  are disposable — Claude creates a fresh session on fork, and krang
-  can clean up the copies afterward.
-- If the copy or launch fails, the original task and session are
-  completely unaffected.
-
-## Open Questions
-
-- Should the forked task's name reference the original? Helpful for
-  tracking lineage but could get long with multiple forks.
-- Should there be a way to fork without a workspace (just fork the
-  conversation, user picks a new cwd)? Simpler and covers the
-  no-workspace case.
-- Multi-repo workspaces: fork all repos or let the user pick a
-  subset? Probably all, to match the conversation context.
-- Does Claude validate anything beyond file presence when resuming?
-  If it starts checking embedded cwd fields or adding checksums,
-  the copy approach breaks. Worth a periodic smoke test.
+A "linked" mode (`jj workspace add -r @`, creating a child commit
+that auto-rebases from the source) was considered and dropped. jj's
+stale workspace handling loses working copy changes when both
+workspaces are edited concurrently (jj-vcs/jj#1310). Since concurrent
+editing is the primary fork use case, linked mode is unusable.

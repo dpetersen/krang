@@ -364,6 +364,48 @@ func TestDestroySingleRepoWorkspace(t *testing.T) {
 	}
 }
 
+func TestParseDuplicateChangeID(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name:   "standard output",
+			output: "Duplicated 4489ac14cefe as ppznuquv b0849571 (no description set)\n",
+			want:   "ppznuquv",
+		},
+		{
+			name:   "with description",
+			output: "Duplicated abc123 as xyzchange def456 Add feature X\n",
+			want:   "xyzchange",
+		},
+		{
+			name:   "with working copy snapshot prefix",
+			output: "Working copy changes were snapshotted.\nDuplicated 4489ac14cefe as ppznuquv b0849571 (no description set)\n",
+			want:   "ppznuquv",
+		},
+		{
+			name:   "empty output",
+			output: "",
+			want:   "",
+		},
+		{
+			name:   "unexpected format",
+			output: "something unexpected\n",
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseDuplicateChangeID(tt.output)
+			if got != tt.want {
+				t.Errorf("parseDuplicateChangeID(%q) = %q, want %q", tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

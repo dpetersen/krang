@@ -81,7 +81,9 @@ func expandSandboxCommand(sandboxCommand string, data sandboxTemplateData) strin
 	return buf.String()
 }
 
-func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool, sandboxCommand, stateFilePath string, tmplData sandboxTemplateData) string {
+// buildClaudeCommand constructs the shell command to launch Claude.
+// forkFrom is the source session ID when forking (not the name).
+func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool, sandboxCommand, stateFilePath string, tmplData sandboxTemplateData, forkFrom string) string {
 	var cmd string
 	if stateFilePath != "" {
 		cmd = "export KRANG_STATEFILE=" + shellQuote(stateFilePath) + "; "
@@ -94,7 +96,9 @@ func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool,
 		cmd += expanded + " claude"
 	}
 
-	if resume {
+	if forkFrom != "" {
+		cmd += " --resume " + shellQuote(forkFrom) + " --fork-session"
+	} else if resume {
 		cmd += " --resume " + shellQuote(name)
 	} else {
 		cmd += " --session-id " + sessionID
@@ -130,7 +134,7 @@ func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags, sandb
 	}
 
 	sandboxCmd := m.resolveSandboxCommand(sandboxProfile)
-	claudeCmd := buildClaudeCommand(sessionID, name, flags, false, sandboxCmd, m.stateFilePath, m.templateData(name, cwd))
+	claudeCmd := buildClaudeCommand(sessionID, name, flags, false, sandboxCmd, m.stateFilePath, m.templateData(name, cwd), "")
 
 	windowName := tmux.WindowName(name)
 	windowID, err := tmux.CreateWindow(m.activeSession, windowName, cwd, claudeCmd)
@@ -378,7 +382,7 @@ func (m *Manager) Wake(taskID string) error {
 	}
 
 	sandboxCmd := m.resolveSandboxCommand(task.SandboxProfile)
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, sandboxCmd, m.stateFilePath, m.templateData(task.Name, task.Cwd))
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, sandboxCmd, m.stateFilePath, m.templateData(task.Name, task.Cwd), "")
 
 	// Use the session's original project directory rather than the
 	// live cwd, which may have drifted as Claude cd'd around. Claude
@@ -432,7 +436,7 @@ func (m *Manager) Relaunch(taskID string) error {
 
 	// Build new command with --resume and current flags.
 	sandboxCmd := m.resolveSandboxCommand(task.SandboxProfile)
-	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, sandboxCmd, m.stateFilePath, m.templateData(task.Name, task.Cwd))
+	claudeCmd := buildClaudeCommand(task.SessionID, task.Name, task.Flags, true, sandboxCmd, m.stateFilePath, m.templateData(task.Name, task.Cwd), "")
 
 	// Use the session's original project directory (see Thaw for rationale).
 	launchCwd := task.Cwd
@@ -592,6 +596,110 @@ func findTask(tasks []db.Task, idOrName string) *db.Task {
 			return &tasks[i]
 		}
 	}
+	return nil
+}
+
+// ForkTask creates a new task that forks from an existing task's Claude
+// session. The new task starts with no session ID — Claude assigns one
+// via SessionStart when it launches with --fork-session.
+func (m *Manager) ForkTask(name, sourceSessionID, sourceTaskID, cwd string, flags db.TaskFlags, sandboxProfile, workspaceDir string) (*db.Task, error) {
+	taskID := ulid.Make().String()
+
+	task := &db.Task{
+		ID:             taskID,
+		Name:           name,
+		State:          db.StateActive,
+		Attention:      db.AttentionOK,
+		Cwd:            cwd,
+		Flags:          flags,
+		SandboxProfile: sandboxProfile,
+		WorkspaceDir:   workspaceDir,
+		SourceTaskID:   sourceTaskID,
+	}
+
+	sandboxCmd := m.resolveSandboxCommand(sandboxProfile)
+	claudeCmd := buildClaudeCommand("", name, flags, false, sandboxCmd, m.stateFilePath, m.templateData(name, cwd), sourceSessionID)
+
+	windowName := tmux.WindowName(name)
+	windowID, err := tmux.CreateWindow(m.activeSession, windowName, cwd, claudeCmd)
+	if err != nil {
+		return nil, fmt.Errorf("creating tmux window for fork: %w", err)
+	}
+	_ = tmux.SetWindowOption(windowID, "krang-task", name)
+	task.TmuxWindow = windowID
+
+	if err := m.tasks.Create(task); err != nil {
+		tmux.KillWindow(windowID)
+		return nil, fmt.Errorf("saving forked task: %w", err)
+	}
+
+	return task, nil
+}
+
+// CopySessionFiles copies a Claude session's JSONL file and optional
+// companion directory from one project directory to another. This is
+// needed when forking into a new workspace (different cwd) so Claude
+// can find the session to fork from.
+func CopySessionFiles(sessionID, oldCwd, newCwd string) error {
+	if oldCwd == newCwd {
+		return nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	projectsDir := filepath.Join(home, ".claude", "projects")
+	oldDir := filepath.Join(projectsDir, pathutil.EncodePath(oldCwd))
+	newDir := filepath.Join(projectsDir, pathutil.EncodePath(newCwd))
+
+	if err := os.MkdirAll(newDir, 0o755); err != nil {
+		return fmt.Errorf("creating new project dir: %w", err)
+	}
+
+	// Copy the session JSONL file.
+	sessionFile := sessionID + ".jsonl"
+	srcFile := filepath.Join(oldDir, sessionFile)
+	dstFile := filepath.Join(newDir, sessionFile)
+
+	data, err := os.ReadFile(srcFile)
+	if err != nil {
+		return fmt.Errorf("reading session file: %w", err)
+	}
+	if err := os.WriteFile(dstFile, data, 0o644); err != nil {
+		return fmt.Errorf("writing session file: %w", err)
+	}
+
+	// Copy the companion directory if it exists.
+	companionSrc := filepath.Join(oldDir, sessionID)
+	if info, err := os.Stat(companionSrc); err == nil && info.IsDir() {
+		companionDst := filepath.Join(newDir, sessionID)
+		cpCmd := exec.Command("cp", "-a", companionSrc, companionDst)
+		if output, err := cpCmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("copying companion dir: %w: %s", err, output)
+		}
+	}
+
+	return nil
+}
+
+// CleanupCopiedSession removes session files that were copied for
+// forking. Called after the forked session has been adopted.
+func CleanupCopiedSession(sessionID, cwd string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Join(home, ".claude", "projects", pathutil.EncodePath(cwd))
+
+	// Remove the JSONL file.
+	_ = os.Remove(filepath.Join(dir, sessionID+".jsonl"))
+
+	// Remove the companion directory.
+	_ = os.RemoveAll(filepath.Join(dir, sessionID))
+
 	return nil
 }
 

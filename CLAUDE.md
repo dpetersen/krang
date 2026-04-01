@@ -47,9 +47,14 @@ Hints are placed in three zones below the table:
 
 **Command palette** (`:`): modal overlay listing rare commands (sit rep, import, compact windows). Navigate with `j/k`, run with `enter`, close with `esc`.
 
-**Detail modal** (`Tab` on a selected task): centered overlay showing task info (cwd, age, flags, background processes) and context-sensitive actions. Toggle keys: `f` freeze/unfreeze, `p` park/unpark. Also: `c` complete, `+` companion, `F` flags, `W` add repos, `Enter` focus. Closes with `Esc`/`Tab`.
+**Detail modal** (`Tab` on a selected task): centered overlay showing task info (cwd, age, flags, fork lineage, shared workspace info, background processes) and context-sensitive actions. Toggle keys: `f` freeze/unfreeze, `p` park/unpark. Also: `c` complete, `d` fork, `+` companion, `F` flags, `W` add repos, `Enter` focus. Closes with `Esc`/`Tab`.
 
-**Complete** (`c`): unified action replacing the former separate kill/complete. Shows consequence-aware confirmation modal stating what will happen (process stop, workspace deletion). Sets `StateCompleted` + `AttentionDone`. `StateFailed` is only set by the reconciler when windows vanish unexpectedly.
+**Complete** (`c`): unified action replacing the former separate kill/complete. Shows consequence-aware confirmation modal stating what will happen (process stop, workspace deletion). For shared workspaces, the confirmation shows which other tasks share the workspace and that it will NOT be deleted. Sets `StateCompleted` + `AttentionDone`. `StateFailed` is only set by the reconciler when windows vanish unexpectedly.
+
+**Fork** (`d` in detail modal): creates a new task that forks from the selected task's Claude conversation. Two workspace modes:
+- **Independent** (default): new workspace via `jj duplicate` + `jj workspace add` (jj) or `cp -a` (git). Fully separate — sibling commits, no rebase interaction.
+- **Shared**: same workspace, just forks the conversation. Warning shown about concurrent edit risk. Workspace cleanup deferred until last task using it completes.
+Session files are copied to the new workspace's Claude project directory so `--resume --fork-session` can find them. Forked tasks track lineage via `source_task_id` (shown as "forked from" in detail modal).
 
 ## Modal Overlays
 

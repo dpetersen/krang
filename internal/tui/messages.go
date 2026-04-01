@@ -57,6 +57,7 @@ const (
 	ModeConfirmQuit
 	ModeConfirmFreeze
 	ModeTaskWizard
+	ModeForkDialog
 )
 
 type formType int
@@ -112,6 +113,13 @@ type wsProgressState struct {
 	TaskFlags          db.TaskFlags
 	TaskSandboxProfile string
 	WorkspaceDir       string
+
+	// Fork-specific fields.
+	Forking        bool   // true if this is a fork operation
+	ForkMode       string // "independent" or "shared"
+	SourceTaskID   string // source task's ID (for lineage tracking)
+	SourceSessionID string // source task's session ID (for file copy)
+	SourceCwd      string // source task's cwd (for session file copy)
 }
 
 // wsDirCreatedMsg signals that the workspace directory was created.
@@ -147,6 +155,30 @@ type wsForgetDoneMsg struct {
 // wsRemoveDoneMsg signals that the workspace dir removal is done.
 type wsRemoveDoneMsg struct {
 	Err error
+}
+
+// wsForkRepoDoneMsg signals that a single repo fork has completed.
+type wsForkRepoDoneMsg struct {
+	Index  int
+	Output string
+	VCS    string
+	Err    error
+}
+
+// wsForkSessionCopiedMsg signals that session files were copied.
+type wsForkSessionCopiedMsg struct {
+	Err error
+}
+
+// wsForkLaunchDoneMsg signals that the forked task was launched.
+type wsForkLaunchDoneMsg struct {
+	Err error
+}
+
+// forkSharedDoneMsg signals that a shared-mode fork completed.
+type forkSharedDoneMsg struct {
+	PendingOpKey string
+	Err          error
 }
 
 type pendingOpDoneMsg struct {
