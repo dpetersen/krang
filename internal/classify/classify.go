@@ -18,9 +18,11 @@ func Classify(taskName, lastAssistantMessage, processContext string) (*Result, e
 
 Determine whether Claude is asking the user a question or waiting for human input (needs_attention=true), or whether Claude has finished its work and is idle (needs_attention=false).
 
-Signs of needing attention: asking a question, requesting confirmation, presenting options to choose from, asking for clarification, suggesting next steps and asking which to pursue.
+Signs of needing attention: Claude is BLOCKED and cannot proceed without user input. Examples: requesting confirmation before a destructive action, presenting numbered/lettered options where the user must pick one, asking for clarification on ambiguous requirements, "which would you prefer" when a decision is required.
 
-Signs of being done: summarizing completed work, reporting results, no question or request for input in the final sentences, purely informational output.
+Signs of being done: summarizing completed work, reporting results, bullet-point lists of what was changed, purely informational output. IMPORTANTLY: if Claude completed the requested work and then speculatively offers to do more ("Would you like me to also...", "I can also...", "Let me know if you'd like me to..."), that is DONE — the work was finished and the offer is just conversational. The test is whether Claude is blocked without input, not whether the message ends with a question.
+
+When ambiguous, prefer needs_attention=false. Only classify as needs_attention=true if Claude genuinely cannot continue without a decision from the user.
 
 Last assistant message:
 ---
