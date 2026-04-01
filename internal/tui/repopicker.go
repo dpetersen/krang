@@ -635,6 +635,24 @@ func (tp *tabbedRepoPicker) view() string {
 	return b.String()
 }
 
+// viewEmbedded renders the picker without its own title or hints,
+// for use when embedded inside another component (like the wizard).
+func (tp *tabbedRepoPicker) viewEmbedded() string {
+	var b strings.Builder
+
+	b.WriteString(tp.renderTabBar())
+	b.WriteString("\n\n")
+
+	switch tp.activeTab {
+	case pickerTabLocal:
+		b.WriteString(tp.local.viewBody())
+	case pickerTabRemote:
+		b.WriteString(tp.renderRemoteBody())
+	}
+
+	return b.String()
+}
+
 func (tp *tabbedRepoPicker) renderTabBar() string {
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).

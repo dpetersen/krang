@@ -59,10 +59,8 @@ type Model struct {
 	repoSets *workspace.RepoSets
 
 	activeForm              *huh.Form
-	taskCreationResult      *taskCreationResult
-	workspaceTaskResult     *workspaceTaskResult
 	importFormResult        *importResult
-	flagEditFormResult      *flagEditResult
+	activeWizard            *taskWizard
 	activeRepoPicker        *tabbedRepoPicker
 	remoteSearchGen         uint64
 	returnToPickerOnClone   bool
@@ -93,30 +91,6 @@ type Model struct {
 	paletteCursor int
 }
 
-type flagDefinition struct {
-	Label             string
-	Description       string
-	Get               func(db.TaskFlags) bool
-	Set               func(*db.TaskFlags, bool)
-	RequiresRelaunch  bool
-}
-
-var flagDefinitions = []flagDefinition{
-	{
-		Label:            "Skip Permissions",
-		Description:      "Pass --dangerously-skip-permissions",
-		Get:              func(f db.TaskFlags) bool { return f.DangerouslySkipPermissions },
-		Set:              func(f *db.TaskFlags, v bool) { f.DangerouslySkipPermissions = v },
-		RequiresRelaunch: true,
-	},
-	{
-		Label:            "Debug",
-		Description:      "Export KRANG_DEBUG=1 for hook relay logging",
-		Get:              func(f db.TaskFlags) bool { return f.Debug },
-		Set:              func(f *db.TaskFlags, v bool) { f.Debug = v },
-		RequiresRelaunch: true,
-	},
-}
 
 func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
 	filterInput := textinput.New()
@@ -356,6 +330,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeForm = nil
 		return m, nil
 
+	case wizardCancelMsg:
+		m.activeWizard = nil
+		m.mode = ModeNormal
+		return m, nil
+	case wizardSubmitMsg:
+		return m.handleWizardSubmit(msg)
+	case wizardEditSubmitMsg:
+		return m.handleWizardEditSubmit(msg)
+
 	case workspaceProgressMsg:
 		m.workspaceProgressLines = msg.Lines
 		if msg.Done {
@@ -550,10 +533,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case remoteSearchDebounceMsg:
-		if m.activeRepoPicker == nil || msg.Generation != m.remoteSearchGen {
+		picker := m.activeRepoPicker
+		if picker == nil && m.activeWizard != nil {
+			picker = m.activeWizard.repoPicker
+		}
+		if picker == nil || msg.Generation != m.remoteSearchGen {
 			return m, nil
 		}
-		r := &m.activeRepoPicker.remote
+		r := &picker.remote
 		r.searching = true
 		org := r.activeOrg
 		query := strings.TrimSpace(r.searchInput.Value())
@@ -564,10 +551,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case remoteSearchResultMsg:
-		if m.activeRepoPicker == nil || msg.Generation != m.remoteSearchGen {
+		picker := m.activeRepoPicker
+		if picker == nil && m.activeWizard != nil {
+			picker = m.activeWizard.repoPicker
+		}
+		if picker == nil || msg.Generation != m.remoteSearchGen {
 			return m, nil
 		}
-		r := &m.activeRepoPicker.remote
+		r := &picker.remote
 		r.searching = false
 		if msg.Err != nil {
 			r.err = msg.Err
@@ -594,6 +585,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tp.switchToLocal()
 			m.workspaceProgressLines = nil
 			m.mode = ModeRepoSelect
+			return m, nil
+		}
+		if m.returnToPickerOnClone && m.activeWizard != nil && m.activeWizard.repoPicker != nil {
+			m.returnToPickerOnClone = false
+			tp := m.activeWizard.repoPicker
+			tp.remote.cloning = false
+			if msg.Err != nil {
+				tp.remote.err = msg.Err
+				m.workspaceProgressLines = nil
+				m.mode = ModeTaskWizard
+				return m, nil
+			}
+			tp.refreshLocalRepos()
+			tp.switchToLocal()
+			m.workspaceProgressLines = nil
+			m.mode = ModeTaskWizard
 			return m, nil
 		}
 		// Fallthrough: treat as workspace progress done.
@@ -654,6 +661,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleFormUpdate(msg)
 	}
 
+	if m.mode == ModeTaskWizard && m.activeWizard != nil {
+		cmd, resultMsg := m.activeWizard.Update(msg)
+		if resultMsg != nil {
+			switch r := resultMsg.(type) {
+			case wizardCancelMsg:
+				m.activeWizard = nil
+				m.mode = ModeNormal
+				return m, nil
+			case wizardSubmitMsg:
+				return m.handleWizardSubmit(r)
+			case wizardEditSubmitMsg:
+				return m.handleWizardEditSubmit(r)
+			case wizardCloneRemoteMsg:
+				return m.handleWizardCloneRemote(r)
+			}
+		}
+		return m, cmd
+	}
+
 	return m, nil
 }
 
@@ -681,6 +707,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFormUpdate(msg)
 	case ModeRepoSelect:
 		return m.handleRepoSelectKey(msg)
+	case ModeTaskWizard:
+		return m.handleTaskWizardKey(msg)
 	case ModeConfirmRelaunch:
 		return m.handleConfirmRelaunchKey(msg)
 	case ModeCommandPalette:
@@ -719,28 +747,23 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
-		if m.repoSets != nil && m.repoSets.WorkspaceStrategy != "" {
-			repos, _ := m.repoSets.ListRepos()
-			singleRepo := m.repoSets.WorkspaceStrategy == workspace.StrategySingleRepo
-			// For single_repo with no local repos, skip the inline
-			// select and go through the tabbed picker after the form
-			// (same path as multi_repo) so the user can clone from Remote.
-			showInlineSelect := singleRepo && len(repos) > 0
-			form, result := newWorkspaceTaskForm(m.taskStore.NameInUse, repos, showInlineSelect, m.cfg.SandboxProfileNames(), m.cfg.DefaultSandbox, m.huhTheme())
-			m.activeForm = form
-			m.workspaceTaskResult = result
-			m.mode = ModeForm
-			return m, m.activeForm.Init()
-		}
 		baseDir, err := os.Getwd()
 		if err != nil {
 			return m, func() tea.Msg { return ErrorMsg{Err: err} }
 		}
-		form, result := newTaskCreationForm(m.taskStore.NameInUse, baseDir, m.cfg.SandboxProfileNames(), m.cfg.DefaultSandbox, m.huhTheme())
-		m.activeForm = form
-		m.taskCreationResult = result
-		m.mode = ModeForm
-		return m, m.activeForm.Init()
+		w := newTaskWizard(
+			m.taskStore.NameInUse,
+			m.repoSets,
+			m.cfg.SandboxProfileNames(),
+			m.cfg.DefaultSandbox,
+			baseDir,
+			m.styles,
+			m.styles.theme,
+			m.huhTheme(),
+		)
+		m.activeWizard = w
+		m.mode = ModeTaskWizard
+		return m, w.Init()
 
 	case "enter":
 		return m, m.focusSelected()
@@ -978,6 +1001,158 @@ func (m Model) handleWSProgressKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleTaskWizardKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	w := m.activeWizard
+	if w == nil {
+		m.mode = ModeNormal
+		return m, nil
+	}
+
+	cmd, resultMsg := w.Update(msg)
+
+	// Handle wizard-produced messages.
+	switch r := resultMsg.(type) {
+	case wizardCancelMsg:
+		m.activeWizard = nil
+		m.mode = ModeNormal
+		return m, nil
+	case wizardSubmitMsg:
+		return m.handleWizardSubmit(r)
+	case wizardEditSubmitMsg:
+		return m.handleWizardEditSubmit(r)
+	case wizardCloneRemoteMsg:
+		return m.handleWizardCloneRemote(r)
+	}
+
+	// After remote search input changes, trigger debounced search.
+	if w.repoPicker != nil && w.activeTab == wizardTabRepos {
+		r := &w.repoPicker.remote
+		if r.phase == remotePhaseSearch {
+			query := strings.TrimSpace(r.searchInput.Value())
+			lastQuery := strings.TrimSpace(w.lastSearchQuery)
+			w.lastSearchQuery = query
+			if query != lastQuery {
+				if query != "" {
+					m.remoteSearchGen++
+					gen := m.remoteSearchGen
+					r.searchGen = gen
+					return m, tea.Batch(cmd, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+						return remoteSearchDebounceMsg{Generation: gen}
+					}))
+				}
+				// Empty query — clear results.
+				r.results = nil
+				r.cursor = 0
+				r.err = nil
+				r.searching = false
+			}
+		}
+	}
+
+	return m, cmd
+}
+
+func (m Model) handleWizardSubmit(result wizardSubmitMsg) (tea.Model, tea.Cmd) {
+	m.activeWizard = nil
+	m.mode = ModeNormal
+
+	rs := m.repoSets
+
+	// Non-workspace flow: create task directly.
+	if rs == nil || rs.WorkspaceStrategy == "" {
+		return m, m.createTask(result.Name, "", result.Cwd, result.Flags, result.SandboxProfile)
+	}
+
+	// Workspace flow: create workspace then launch task.
+	title := fmt.Sprintf("Creating workspace %q", result.Name)
+	m.mode = ModeWorkspaceProgress
+	m.initWSProgress(title, result.SelectedRepos, rs, true, result.Name, result.Flags, result.SandboxProfile)
+	return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
+}
+
+func (m Model) handleWizardEditSubmit(result wizardEditSubmitMsg) (tea.Model, tea.Cmd) {
+	m.activeWizard = nil
+	m.mode = ModeNormal
+
+	taskID := result.TaskID
+
+	var originalTask *db.Task
+	for i := range m.tasks {
+		if m.tasks[i].ID == taskID {
+			originalTask = &m.tasks[i]
+			break
+		}
+	}
+	if originalTask == nil {
+		return m, nil
+	}
+
+	// Check what changed.
+	flagsChanged := result.Flags != originalTask.Flags
+
+	originalProfile := originalTask.SandboxProfile
+	if originalProfile == "" {
+		originalProfile = m.cfg.DefaultSandbox
+	}
+	if originalProfile == "" {
+		originalProfile = "none"
+	}
+	sandboxChanged := result.SandboxProfile != originalProfile
+
+	hasRepos := len(result.SelectedRepos) > 0
+
+	// If repos were selected, kick off the add-repos workspace flow.
+	if hasRepos {
+		rs := m.repoSets
+		workspaceDir := originalTask.WorkspaceDir
+		title := fmt.Sprintf("Adding repos to %q", originalTask.Name)
+		m.mode = ModeWorkspaceProgress
+		m.initWSProgress(title, result.SelectedRepos, rs, false, originalTask.Name, db.TaskFlags{}, "")
+		m.wsProgress.WorkspaceDir = workspaceDir
+		m.wsProgress.Repos[0].Status = cloneStatusCloning
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+			fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
+
+		// Save flags/sandbox changes before starting clone.
+		if flagsChanged {
+			_ = m.taskStore.UpdateFlags(taskID, result.Flags)
+		}
+		if sandboxChanged {
+			_ = m.taskStore.UpdateSandboxProfile(taskID, result.SandboxProfile)
+		}
+		return m, tea.Batch(m.wsCloneRepoCmd(0, rs), m.spinner.Tick)
+	}
+
+	// No repos — just flags/sandbox changes.
+	if !flagsChanged && !sandboxChanged {
+		return m, nil
+	}
+
+	// For dormant tasks, save directly.
+	if originalTask.State == db.StateDormant {
+		return m, func() tea.Msg {
+			if flagsChanged {
+				if err := m.taskStore.UpdateFlags(taskID, result.Flags); err != nil {
+					return ErrorMsg{Err: err}
+				}
+			}
+			if sandboxChanged {
+				if err := m.taskStore.UpdateSandboxProfile(taskID, result.SandboxProfile); err != nil {
+					return ErrorMsg{Err: err}
+				}
+			}
+			return m.refreshTasks()
+		}
+	}
+
+	// Active/parked: needs relaunch confirmation.
+	m.pendingFlags = result.Flags
+	m.pendingSandboxProfile = result.SandboxProfile
+	m.flagEditTaskID = taskID
+	m.mode = ModeConfirmRelaunch
+	return m, nil
+}
+
 func (m Model) handleRepoSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	tp := m.activeRepoPicker
 
@@ -1058,15 +1233,11 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// New workspace task flow.
-		result := m.workspaceTaskResult
-		rs := m.repoSets
-		m.workspaceTaskResult = nil
+		// Repo select is now only used for the add-repos flow.
+		// Task creation uses the wizard instead.
 		m.activeRepoPicker = nil
-		m.mode = ModeWorkspaceProgress
-		title := fmt.Sprintf("Creating workspace %q", result.Name)
-		m.initWSProgress(title, selected, rs, true, result.Name, result.Flags, result.SandboxProfile)
-		return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
+		m.mode = ModeNormal
+		return m, nil
 	case "esc":
 		// If there's filter text, clear it first.
 		if strings.TrimSpace(p.filter.Value()) != "" {
@@ -1074,7 +1245,6 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			p.refilter()
 			return m, nil
 		}
-		m.workspaceTaskResult = nil
 		m.activeRepoPicker = nil
 		m.addReposTaskID = ""
 		m.addReposWorkspaceDir = ""
@@ -1130,7 +1300,6 @@ func (m Model) handleRepoSelectRemoteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				r.orgInput.Reset()
 				return m, nil
 			}
-			m.workspaceTaskResult = nil
 			m.activeRepoPicker = nil
 			m.addReposTaskID = ""
 			m.addReposWorkspaceDir = ""
@@ -1165,6 +1334,40 @@ func (m Model) handleRepoSelectRemoteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) handleWizardCloneRemote(msg wizardCloneRemoteMsg) (tea.Model, tea.Cmd) {
+	w := m.activeWizard
+	if w == nil || w.repoPicker == nil {
+		return m, nil
+	}
+	r := &w.repoPicker.remote
+	rs := w.repoSets
+
+	// Check if already exists locally.
+	if rs != nil {
+		localRepos, _ := rs.ListRepos()
+		for _, lr := range localRepos {
+			if lr == msg.Repo {
+				r.err = fmt.Errorf("%q already exists locally", msg.Repo)
+				return m, nil
+			}
+		}
+	}
+
+	r.cloning = true
+	m.returnToPickerOnClone = true
+	m.mode = ModeWorkspaceProgress
+	vcs := "git"
+	if rs != nil && rs.DefaultVCS != "" {
+		vcs = rs.DefaultVCS
+	}
+	m.workspaceProgressLines = []string{fmt.Sprintf("Cloning %s/%s (%s)...", msg.Org, msg.Repo, vcs)}
+	destDir := ""
+	if rs != nil {
+		destDir = rs.ReposDir
+	}
+	return m, m.cloneRemoteRepo(msg.Org, msg.Repo, destDir, vcs)
+}
+
 func (m Model) cloneRemoteRepo(org, repo, destDir, vcs string) tea.Cmd {
 	return func() tea.Msg {
 		err := github.CloneRepo(org, repo, destDir, vcs)
@@ -1189,48 +1392,6 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 	m.activeForm = nil
 
 	switch msg.formType {
-	case formTypeNewTask:
-		if m.taskCreationResult == nil {
-			return m, nil
-		}
-		result := m.taskCreationResult
-		m.taskCreationResult = nil
-		return m, m.createTask(result.Name, "", result.Cwd, result.Flags, result.SandboxProfile)
-
-	case formTypeWorkspaceTask:
-		if m.workspaceTaskResult == nil {
-			return m, nil
-		}
-		result := m.workspaceTaskResult
-		rs := m.repoSets
-
-		// single_repo with repos already selected inline in the form.
-		if rs.WorkspaceStrategy == workspace.StrategySingleRepo && len(result.SelectedRepos) > 0 {
-			m.workspaceTaskResult = nil
-			m.mode = ModeWorkspaceProgress
-			title := fmt.Sprintf("Creating workspace %q", result.Name)
-			m.initWSProgress(title, result.SelectedRepos, rs, true, result.Name, result.Flags, result.SandboxProfile)
-			return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
-		}
-
-		// single_repo with "(none)" selected — create empty workspace.
-		if rs.WorkspaceStrategy == workspace.StrategySingleRepo && len(result.SelectedRepos) == 0 {
-			m.workspaceTaskResult = nil
-			m.mode = ModeWorkspaceProgress
-			title := fmt.Sprintf("Creating workspace %q", result.Name)
-			m.initWSProgress(title, nil, rs, true, result.Name, result.Flags, result.SandboxProfile)
-			return m, tea.Batch(m.wsCreateDirAndStart(rs), m.spinner.Tick)
-		}
-
-		// Show the repo picker (multi_repo, or single_repo with no local repos).
-		repos, _ := rs.ListRepos()
-		title := fmt.Sprintf("Select repos for %q:", result.Name)
-		ghAvail := github.IsAvailable()
-		picker := newTabbedRepoPicker(title, rs.Sets, repos, m.styles, rs, ghAvail)
-		m.activeRepoPicker = &picker
-		m.mode = ModeRepoSelect
-		return m, nil
-
 	case formTypeImport:
 		if m.importFormResult == nil {
 			return m, nil
@@ -1239,77 +1400,6 @@ func (m Model) handleFormCompleted(msg formCompletedMsg) (tea.Model, tea.Cmd) {
 		m.importFormResult = nil
 		return m, m.importTask(result.Name, result.SessionID)
 
-	case formTypeFlagEdit:
-		if m.flagEditFormResult == nil {
-			return m, nil
-		}
-		result := m.flagEditFormResult
-		taskID := m.flagEditTaskID
-		m.flagEditFormResult = nil
-
-		var originalTask *db.Task
-		for i := range m.tasks {
-			if m.tasks[i].ID == taskID {
-				originalTask = &m.tasks[i]
-				break
-			}
-		}
-		if originalTask == nil {
-			return m, nil
-		}
-
-		// Determine effective original sandbox profile for comparison.
-		originalProfile := originalTask.SandboxProfile
-		if originalProfile == "" {
-			originalProfile = m.cfg.DefaultSandbox
-		}
-		if originalProfile == "" {
-			originalProfile = "none"
-		}
-		sandboxChanged := result.SandboxProfile != originalProfile
-
-		// For dormant tasks, just save directly.
-		if originalTask.State == db.StateDormant {
-			newProfile := result.SandboxProfile
-			return m, func() tea.Msg {
-				if err := m.taskStore.UpdateFlags(taskID, result.Flags); err != nil {
-					return ErrorMsg{Err: err}
-				}
-				if sandboxChanged {
-					if err := m.taskStore.UpdateSandboxProfile(taskID, newProfile); err != nil {
-						return ErrorMsg{Err: err}
-					}
-				}
-				return m.refreshTasks()
-			}
-		}
-
-		// Check if any relaunch-requiring flag changed.
-		relaunchNeeded := false
-		for _, fd := range flagDefinitions {
-			if fd.RequiresRelaunch && fd.Get(result.Flags) != fd.Get(originalTask.Flags) {
-				relaunchNeeded = true
-				break
-			}
-		}
-		if sandboxChanged {
-			relaunchNeeded = true
-		}
-
-		if !relaunchNeeded {
-			return m, func() tea.Msg {
-				if err := m.taskStore.UpdateFlags(taskID, result.Flags); err != nil {
-					return ErrorMsg{Err: err}
-				}
-				return m.refreshTasks()
-			}
-		}
-
-		// Need confirmation for relaunch.
-		m.pendingFlags = result.Flags
-		m.pendingSandboxProfile = result.SandboxProfile
-		m.mode = ModeConfirmRelaunch
-		return m, nil
 	}
 
 	return m, nil
@@ -1477,45 +1567,31 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "F":
-		if t.State != db.StateCompleted && t.State != db.StateFailed {
-			m.flagEditTaskID = t.ID
-			form, result := newFlagEditForm(t.Flags, t.SandboxProfile, m.cfg.SandboxProfileNames(), m.cfg.DefaultSandbox, t.Name, m.huhTheme())
-			m.activeForm = form
-			m.flagEditFormResult = result
-			m.mode = ModeForm
-			return m, m.activeForm.Init()
-		}
-		return m, nil
-
-	case "W":
-		if t.WorkspaceDir == "" || m.repoSets == nil {
+	case "e":
+		if t.State == db.StateCompleted || t.State == db.StateFailed {
 			return m, nil
 		}
-		if m.repoSets.WorkspaceStrategy != workspace.StrategyMultiRepo {
-			return m, nil
-		}
-		allRepos, _ := m.repoSets.ListRepos()
-		present := workspace.PresentRepos(t.WorkspaceDir)
-		presentSet := make(map[string]bool)
-		for _, r := range present {
-			presentSet[r] = true
-		}
-		var available []string
-		for _, r := range allRepos {
-			if !presentSet[r] {
-				available = append(available, r)
+		var excludeRepos map[string]bool
+		if t.WorkspaceDir != "" {
+			present := workspace.PresentRepos(t.WorkspaceDir)
+			excludeRepos = make(map[string]bool)
+			for _, r := range present {
+				excludeRepos[r] = true
 			}
 		}
-		title := fmt.Sprintf("Add repos to %q:", t.Name)
-		ghAvail := github.IsAvailable()
-		picker := newTabbedRepoPicker(title, m.repoSets.Sets, available, m.styles, m.repoSets, ghAvail)
-		picker.excludeRepos = presentSet
-		m.activeRepoPicker = &picker
-		m.addReposTaskID = t.ID
-		m.addReposWorkspaceDir = t.WorkspaceDir
-		m.mode = ModeRepoSelect
-		return m, nil
+		w := newEditWizard(
+			t,
+			m.repoSets,
+			m.cfg.SandboxProfileNames(),
+			m.cfg.DefaultSandbox,
+			m.styles,
+			m.styles.theme,
+			m.huhTheme(),
+			excludeRepos,
+		)
+		m.activeWizard = w
+		m.mode = ModeTaskWizard
+		return m, w.Init()
 	}
 
 	return m, nil

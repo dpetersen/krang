@@ -348,6 +348,12 @@ func createJJWorkspace(repoSrc, repoDst, workspaceName string) error {
 }
 
 func cloneJJWorkspace(repoSrc, repoDst, workspaceName string) (string, error) {
+	// Ensure the source repo's working copy is up to date — a stale
+	// working copy causes "jj workspace add" to fail.
+	updateCmd := exec.Command("jj", "workspace", "update-stale")
+	updateCmd.Dir = repoSrc
+	_ = updateCmd.Run() // safe no-op if not stale
+
 	// jj workspace add must be run from the source repo.
 	cmd := exec.Command("jj", "workspace", "add", repoDst, "--name", workspaceName)
 	cmd.Dir = repoSrc

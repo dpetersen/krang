@@ -11,7 +11,6 @@ import (
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/tmux"
 	"github.com/dpetersen/krang/internal/usage"
-	"github.com/dpetersen/krang/internal/workspace"
 )
 
 func (m Model) View() string {
@@ -59,6 +58,10 @@ func (m Model) View() string {
 	case ModeRepoSelect:
 		if m.activeRepoPicker != nil {
 			modalContent = m.renderRepoSelectModal()
+		}
+	case ModeTaskWizard:
+		if m.activeWizard != nil {
+			modalContent = m.renderTaskWizardModal()
 		}
 	case ModeWorkspaceProgress:
 		modalContent = m.renderWorkspaceProgress()
@@ -674,8 +677,7 @@ func (m Model) buildHelpContent() string {
 		{"f", "Freeze / unfreeze (toggles based on state)"},
 		{"c", "Complete task"},
 		{"+", "Create companion window"},
-		{"F", "Edit task flags (sandbox, permissions)"},
-		{"W", "Add repos to workspace task"},
+		{"e", "Edit task (repos, sandbox, flags)"},
 		{"enter", "Focus task window"},
 		{"esc/tab", "Close modal"},
 	}))
@@ -952,11 +954,7 @@ func (m Model) renderDetailModal(t *db.Task) string {
 	}
 
 	if t.State != db.StateCompleted && t.State != db.StateFailed {
-		actions = append(actions, action{"F", "Edit flags"})
-	}
-	if t.WorkspaceDir != "" && m.repoSets != nil &&
-		m.repoSets.WorkspaceStrategy == workspace.StrategyMultiRepo {
-		actions = append(actions, action{"W", "Add repos"})
+		actions = append(actions, action{"e", "Edit task"})
 	}
 
 	for _, a := range actions {
@@ -1090,6 +1088,18 @@ func (m Model) renderRepoSelectModal() string {
 		Width(modalWidth)
 
 	return box.Render(m.activeRepoPicker.view())
+}
+
+func (m Model) renderTaskWizardModal() string {
+	modalWidth := m.wideModalWidth()
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.styles.ModalBorder).
+		Padding(1, 2).
+		Width(modalWidth)
+
+	return box.Render(m.activeWizard.View(modalWidth))
 }
 
 func (m Model) renderWorkspaceProgress() string {

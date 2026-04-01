@@ -56,15 +56,13 @@ const (
 	ModeCommandPalette
 	ModeConfirmQuit
 	ModeConfirmFreeze
+	ModeTaskWizard
 )
 
 type formType int
 
 const (
-	formTypeNewTask formType = iota
-	formTypeImport
-	formTypeFlagEdit
-	formTypeWorkspaceTask
+	formTypeImport formType = iota
 )
 
 type formCompletedMsg struct {
