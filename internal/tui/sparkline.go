@@ -210,12 +210,13 @@ func phaseColor(p activityPhase, theme Theme) lipgloss.Color {
 	}
 }
 
-func renderSparkline(buckets []sparklineBucket, theme Theme) string {
+func renderSparkline(buckets []sparklineBucket, theme Theme, rowBg *lipgloss.Color) string {
 	if len(buckets) == 0 {
-		return strings.Repeat(
-			lipgloss.NewStyle().Foreground(theme.Dormant).Render("▁"),
-			sparklineWidth,
-		)
+		style := lipgloss.NewStyle().Foreground(theme.Dormant)
+		if rowBg != nil {
+			style = style.Background(*rowBg)
+		}
+		return strings.Repeat(style.Render("▁"), sparklineWidth)
 	}
 
 	// Find max event count for normalization.
@@ -234,15 +235,16 @@ func renderSparkline(buckets []sparklineBucket, theme Theme) string {
 		if total == 0 {
 			// No events — use sticky state at minimum height.
 			sticky := buckets[i].stickyPhase
+			var style lipgloss.Style
 			if sticky == phaseIdle || sticky == phaseWorking {
-				b.WriteString(lipgloss.NewStyle().
-					Foreground(theme.Dormant).
-					Render("▁"))
+				style = lipgloss.NewStyle().Foreground(theme.Dormant)
 			} else {
-				b.WriteString(lipgloss.NewStyle().
-					Foreground(phaseColor(sticky, theme)).
-					Render("▁"))
+				style = lipgloss.NewStyle().Foreground(phaseColor(sticky, theme))
 			}
+			if rowBg != nil {
+				style = style.Background(*rowBg)
+			}
+			b.WriteString(style.Render("▁"))
 			continue
 		}
 
@@ -263,6 +265,8 @@ func renderSparkline(buckets []sparklineBucket, theme Theme) string {
 			// Stacked: background = secondary (lower priority),
 			// foreground = primary (higher priority).
 			style = style.Background(phaseColor(secondary, theme))
+		} else if rowBg != nil {
+			style = style.Background(*rowBg)
 		}
 
 		b.WriteString(style.Render(string(char)))

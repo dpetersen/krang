@@ -312,7 +312,14 @@ func (m Model) renderTable() string {
 			windowIdx = m.windowIndexes[t.TmuxWindow]
 		}
 
-		sparkline := renderSparkline(m.sparklineData[t.ID], m.styles.theme)
+		var selBg *lipgloss.Color
+		if i == m.cursor {
+			bg := m.styles.SelectedRow.GetBackground()
+			if c, ok := bg.(lipgloss.Color); ok {
+				selBg = &c
+			}
+		}
+		sparkline := renderSparkline(m.sparklineData[t.ID], m.styles.theme, selBg)
 
 		rows[i] = []string{
 			cursor,
@@ -321,7 +328,7 @@ func (m Model) renderTable() string {
 			stateLabel(t.State),
 			attn,
 			sparkline,
-			relativeCwd(t.Cwd),
+			m.displayCwd(t.Cwd),
 			t.Summary,
 		}
 	}
@@ -595,10 +602,27 @@ func tildeify(path string) string {
 	return path
 }
 
-func relativeCwd(taskCwd string) string {
+func (m Model) displayCwd(taskCwd string) string {
+	var wsDir string
+	if m.repoSets != nil {
+		wsDir = m.repoSets.WorkspacesDir
+	}
+	return relativeCwd(taskCwd, wsDir)
+}
+
+func relativeCwd(taskCwd, workspacesDir string) string {
 	krangCwd := krangWorkingDir()
 	if krangCwd != "" && strings.HasPrefix(taskCwd, krangCwd+"/") {
 		rel := taskCwd[len(krangCwd)+1:]
+		if workspacesDir != "" {
+			wsRel := workspacesDir
+			if strings.HasPrefix(workspacesDir, krangCwd+"/") {
+				wsRel = workspacesDir[len(krangCwd)+1:]
+			}
+			if strings.HasPrefix(rel, wsRel+"/") {
+				return "📂" + rel[len(wsRel):]
+			}
+		}
 		return rel
 	}
 	if taskCwd == krangCwd {
@@ -845,7 +869,7 @@ func (m Model) renderDetailModal(t *db.Task) string {
 
 	// Info section
 	if t.Cwd != "" {
-		content.WriteString(m.styles.ModalContent.Render("  cwd: " + relativeCwd(t.Cwd)))
+		content.WriteString(m.styles.ModalContent.Render("  cwd: " + m.displayCwd(t.Cwd)))
 		content.WriteString("\n")
 	}
 	if !t.CreatedAt.IsZero() {

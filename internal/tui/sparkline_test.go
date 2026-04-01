@@ -133,7 +133,7 @@ func TestBucketTopTwoEmpty(t *testing.T) {
 }
 
 func TestRenderSparklineEmpty(t *testing.T) {
-	result := renderSparkline(nil, Theme{})
+	result := renderSparkline(nil, Theme{}, nil)
 	if len(result) == 0 {
 		t.Error("expected non-empty string for nil buckets")
 	}
@@ -145,7 +145,7 @@ func TestRenderSparklineProducesOutput(t *testing.T) {
 	buckets[10].counts[phasePermission] = 1
 	buckets[10].counts[phaseToolCalls] = 2
 
-	result := renderSparkline(buckets, Theme{})
+	result := renderSparkline(buckets, Theme{}, nil)
 	if len(result) == 0 {
 		t.Error("expected non-empty sparkline")
 	}

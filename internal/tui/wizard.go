@@ -307,6 +307,10 @@ func (w *taskWizard) Update(msg tea.Msg) (tea.Cmd, tea.Msg) {
 		case "[":
 			return w.prevTab(), nil
 		case "]":
+			if !w.editMode && w.activeTab == wizardTabName && w.validateName(w.nameValue) != nil {
+				// Forward as enter so huh shows the validation error.
+				return w.updateActiveForm(tea.KeyMsg(tea.Key{Type: tea.KeyEnter}))
+			}
 			return w.nextTab(), nil
 		}
 	}

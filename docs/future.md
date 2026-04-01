@@ -49,10 +49,6 @@ Expose krang's task state to external agents (e.g. a workload manager Claude tha
 - The existing hook HTTP server could host MCP endpoints, or this could be a separate MCP server process that reads the same DB.
 - Start with tools (`get_tasks`, `get_task_detail`) rather than resources, since the data changes frequently.
 
-## CWD Column: Compact Workspace Paths
-
-When a task's CWD is under the configured workspaces directory, the table shows `./workspaces/<task-name>` which wastes horizontal space. Instead, truncate the `./workspaces` prefix and show `📂/<task-name>` (or similar) to keep the column narrow while still indicating it's a workspace path.
-
 ## Workspace Enhancements
 
 Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented. Remaining ideas:
