@@ -1,7 +1,10 @@
 package workspace
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,7 +57,7 @@ func createSingleRepo(rs *RepoSets, taskName, workspaceDir, repo string) (*Creat
 	case "jj":
 		err = createJJWorkspace(repoSrc, workspaceDir, taskName)
 	default:
-		err = createGitClone(repoSrc, workspaceDir)
+		err = createGitWorktree(repoSrc, workspaceDir, taskName)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s (%s): %w", repo, vcs, err)
@@ -86,7 +89,7 @@ func createMultiRepo(rs *RepoSets, taskName, workspaceDir string, repos []string
 		case "jj":
 			err = createJJWorkspace(repoSrc, repoDst, taskName)
 		default:
-			err = createGitClone(repoSrc, repoDst)
+			err = createGitWorktree(repoSrc, repoDst, taskName)
 		}
 
 		if err != nil {
@@ -122,7 +125,7 @@ func AddRepos(rs *RepoSets, workspaceDir, taskName string, repos []string) (*Cre
 		case "jj":
 			err = createJJWorkspace(repoSrc, repoDst, taskName)
 		default:
-			err = createGitClone(repoSrc, repoDst)
+			err = createGitWorktree(repoSrc, repoDst, taskName)
 		}
 
 		if err != nil {
@@ -160,30 +163,44 @@ type DestroyRepoResult struct {
 	Err    error
 }
 
-// ForgetRepo runs jj workspace forget for a single repo. Returns
-// immediately with a no-op result for git repos.
+// ForgetRepo cleans up a single repo's workspace. For jj repos, runs
+// jj workspace forget. For git repos, removes the worktree and branch.
 func ForgetRepo(rs *RepoSets, workspaceDir, repoName string) DestroyRepoResult {
 	vcs := rs.DetectVCS(repoName)
-	if vcs != "jj" {
-		return DestroyRepoResult{Repo: repoName, VCS: vcs}
-	}
 	repoSrc := filepath.Join(rs.ReposDir, repoName)
 	workspaceName := filepath.Base(workspaceDir)
-	output, err := forgetJJWorkspaceOutput(repoSrc, workspaceName)
-	return DestroyRepoResult{Repo: repoName, VCS: vcs, Output: output, Err: err}
+
+	switch vcs {
+	case "jj":
+		output, err := forgetJJWorkspaceOutput(repoSrc, workspaceName)
+		return DestroyRepoResult{Repo: repoName, VCS: vcs, Output: output, Err: err}
+	default:
+		worktreePath := filepath.Join(workspaceDir, repoName)
+		if rs.WorkspaceStrategy == StrategySingleRepo {
+			worktreePath = workspaceDir
+		}
+		output, err := removeGitWorktree(repoSrc, worktreePath, workspaceName)
+		return DestroyRepoResult{Repo: repoName, VCS: vcs, Output: output, Err: err}
+	}
 }
 
-// ForgetSingleRepoWorkspace tries to forget jj workspaces for a
-// single_repo workspace by checking all known repos.
+// ForgetSingleRepoWorkspace cleans up a single_repo workspace by
+// trying all known repos until one succeeds.
 func ForgetSingleRepoWorkspace(rs *RepoSets, workspaceDir string) DestroyRepoResult {
 	repos, _ := rs.ListRepos()
 	workspaceName := filepath.Base(workspaceDir)
 	for _, repo := range repos {
-		if rs.DetectVCS(repo) == "jj" {
-			repoSrc := filepath.Join(rs.ReposDir, repo)
+		repoSrc := filepath.Join(rs.ReposDir, repo)
+		switch rs.DetectVCS(repo) {
+		case "jj":
 			output, err := forgetJJWorkspaceOutput(repoSrc, workspaceName)
 			if err == nil {
 				return DestroyRepoResult{Repo: repo, VCS: "jj", Output: output}
+			}
+		default:
+			output, err := removeGitWorktree(repoSrc, workspaceDir, workspaceName)
+			if err == nil {
+				return DestroyRepoResult{Repo: repo, VCS: "git", Output: output}
 			}
 		}
 	}
@@ -227,11 +244,14 @@ func isRepoDir(dir string) bool {
 }
 
 // Destroy removes a workspace directory. For jj repos, it forgets
-// the workspace first. The RepoSets parameter is needed to find the
-// source repos for jj workspace forget; pass nil to skip jj cleanup.
+// the workspace first. For git repos, it removes the worktree and
+// branch. The RepoSets parameter is needed to find source repos;
+// pass nil to skip VCS cleanup.
 func Destroy(rs *RepoSets, workspaceDir string) error {
 	if rs != nil {
-		// Try to forget jj workspaces for any repos that were jj-linked.
+		workspaceName := filepath.Base(workspaceDir)
+
+		// Multi-repo: clean up each repo subdirectory.
 		entries, err := os.ReadDir(workspaceDir)
 		if err == nil {
 			for _, entry := range entries {
@@ -239,23 +259,27 @@ func Destroy(rs *RepoSets, workspaceDir string) error {
 					continue
 				}
 				repoName := entry.Name()
-				if rs.DetectVCS(repoName) == "jj" {
-					repoSrc := filepath.Join(rs.ReposDir, repoName)
-					workspaceName := filepath.Base(workspaceDir)
+				repoSrc := filepath.Join(rs.ReposDir, repoName)
+				switch rs.DetectVCS(repoName) {
+				case "jj":
 					_ = forgetJJWorkspace(repoSrc, workspaceName)
+				default:
+					worktreePath := filepath.Join(workspaceDir, repoName)
+					_, _ = removeGitWorktree(repoSrc, worktreePath, workspaceName)
 				}
 			}
 		}
 
 		// For single_repo mode, the workspace dir itself is the repo.
 		if rs.WorkspaceStrategy == StrategySingleRepo {
-			// Try to detect which repo this was by checking all known repos.
 			repos, _ := rs.ListRepos()
-			workspaceName := filepath.Base(workspaceDir)
 			for _, repo := range repos {
-				if rs.DetectVCS(repo) == "jj" {
-					repoSrc := filepath.Join(rs.ReposDir, repo)
+				repoSrc := filepath.Join(rs.ReposDir, repo)
+				switch rs.DetectVCS(repo) {
+				case "jj":
 					_ = forgetJJWorkspace(repoSrc, workspaceName)
+				default:
+					_, _ = removeGitWorktree(repoSrc, workspaceDir, workspaceName)
 				}
 			}
 		}
@@ -323,7 +347,7 @@ func CloneRepo(rs *RepoSets, taskName, dst, repo string) CloneRepoResult {
 	case "jj":
 		output, err = cloneJJWorkspace(repoSrc, dst, taskName)
 	default:
-		output, err = cloneGitRepo(repoSrc, dst)
+		output, err = addGitWorktree(repoSrc, dst, taskName)
 	}
 
 	return CloneRepoResult{
@@ -364,18 +388,71 @@ func cloneJJWorkspace(repoSrc, repoDst, workspaceName string) (string, error) {
 	return string(output), nil
 }
 
-func createGitClone(repoSrc, repoDst string) error {
-	_, err := cloneGitRepo(repoSrc, repoDst)
+func createGitWorktree(repoSrc, repoDst, taskName string) error {
+	_, err := addGitWorktree(repoSrc, repoDst, taskName)
 	return err
 }
 
-func cloneGitRepo(repoSrc, repoDst string) (string, error) {
-	// Local clone uses hardlinks for objects — fast and space-efficient.
-	cmd := exec.Command("git", "clone", repoSrc, repoDst)
+// addGitWorktree creates a git worktree at repoDst branching from repoSrc.
+// The branch is named krang/<taskName> to make it identifiable for cleanup.
+func addGitWorktree(repoSrc, repoDst, taskName string) (string, error) {
+	branchName := "krang/" + taskName
+
+	// Prune stale worktree entries that might block creation.
+	pruneCmd := exec.Command("git", "worktree", "prune")
+	pruneCmd.Dir = repoSrc
+	_ = pruneCmd.Run()
+
+	// Clean up stale branch from a previous crashed task with the same name.
+	checkCmd := exec.Command("git", "rev-parse", "--verify", branchName)
+	checkCmd.Dir = repoSrc
+	if checkCmd.Run() == nil {
+		delCmd := exec.Command("git", "branch", "-D", branchName)
+		delCmd.Dir = repoSrc
+		_ = delCmd.Run()
+	}
+
+	cmd := exec.Command("git", "worktree", "add", "-b", branchName, repoDst)
+	cmd.Dir = repoSrc
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("git clone: %w: %s", err, output)
+		return string(output), fmt.Errorf("git worktree add: %w: %s", err, output)
 	}
+
+	result := string(output)
+
+	// Copy files listed in .worktreeinclude (e.g., .env).
+	if inclErr := processWorktreeInclude(repoSrc, repoDst); inclErr != nil {
+		// Non-fatal: log but don't fail workspace creation.
+		result += "\nworktreeinclude warning: " + inclErr.Error()
+	}
+
+	return result, nil
+}
+
+// addGitWorktreeAt creates a git worktree at a specific commit.
+func addGitWorktreeAt(repoSrc, repoDst, taskName, commitish string) (string, error) {
+	branchName := "krang/" + taskName
+
+	pruneCmd := exec.Command("git", "worktree", "prune")
+	pruneCmd.Dir = repoSrc
+	_ = pruneCmd.Run()
+
+	checkCmd := exec.Command("git", "rev-parse", "--verify", branchName)
+	checkCmd.Dir = repoSrc
+	if checkCmd.Run() == nil {
+		delCmd := exec.Command("git", "branch", "-D", branchName)
+		delCmd.Dir = repoSrc
+		_ = delCmd.Run()
+	}
+
+	cmd := exec.Command("git", "worktree", "add", "-b", branchName, repoDst, commitish)
+	cmd.Dir = repoSrc
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(output), fmt.Errorf("git worktree add: %w: %s", err, output)
+	}
+
 	return string(output), nil
 }
 
@@ -486,23 +563,266 @@ func parseDuplicateChangeID(output string) string {
 func forkGitRepo(srcDir, dstDir, forkTaskName string) (string, error) {
 	var allOutput strings.Builder
 
-	// Physical copy preserves everything: committed, staged, unstaged, untracked.
-	cpCmd := exec.Command("cp", "-a", srcDir, dstDir)
-	cpOut, err := cpCmd.CombinedOutput()
-	allOutput.WriteString(string(cpOut))
+	// Resolve the source repo from the worktree's .git file.
+	repoSrc, err := resolveGitWorktreeSource(srcDir)
 	if err != nil {
-		return allOutput.String(), fmt.Errorf("cp -a: %w: %s", err, cpOut)
+		return "", fmt.Errorf("resolving source repo: %w", err)
 	}
 
-	// Create a new branch so pushes don't collide with the original.
-	branchName := forkTaskName
-	gitCmd := exec.Command("git", "checkout", "-b", branchName)
-	gitCmd.Dir = dstDir
-	gitOut, err := gitCmd.CombinedOutput()
-	allOutput.WriteString(string(gitOut))
+	// Get the current HEAD of the source worktree.
+	headCmd := exec.Command("git", "rev-parse", "HEAD")
+	headCmd.Dir = srcDir
+	headOut, err := headCmd.CombinedOutput()
+	allOutput.WriteString(string(headOut))
 	if err != nil {
-		return allOutput.String(), fmt.Errorf("git checkout -b: %w: %s", err, gitOut)
+		return allOutput.String(), fmt.Errorf("git rev-parse HEAD: %w: %s", err, headOut)
+	}
+	commitish := strings.TrimSpace(string(headOut))
+
+	// Create a new worktree at the same commit.
+	wtOut, err := addGitWorktreeAt(repoSrc, dstDir, forkTaskName, commitish)
+	allOutput.WriteString(wtOut)
+	if err != nil {
+		return allOutput.String(), err
+	}
+
+	// Overlay working tree state from the source, preserving the
+	// fork's .git pointer file.
+	if err := copyTreeExcluding(srcDir, dstDir, []string{".git"}); err != nil {
+		return allOutput.String(), fmt.Errorf("copying working tree: %w", err)
 	}
 
 	return allOutput.String(), nil
+}
+
+// resolveGitWorktreeSource finds the main repository directory from a
+// worktree's .git file. Worktrees have a .git file (not directory)
+// containing "gitdir: /path/to/.git/worktrees/<name>". We walk up
+// from there to find the repo root. Falls back to srcDir itself if
+// .git is a directory (regular repo, not a worktree).
+func resolveGitWorktreeSource(worktreeDir string) (string, error) {
+	gitPath := filepath.Join(worktreeDir, ".git")
+	info, err := os.Lstat(gitPath)
+	if err != nil {
+		return "", fmt.Errorf("stat .git: %w", err)
+	}
+
+	// Regular git repo (not a worktree) — .git is a directory.
+	if info.IsDir() {
+		return worktreeDir, nil
+	}
+
+	// Worktree — .git is a file with "gitdir: <path>".
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return "", fmt.Errorf("reading .git file: %w", err)
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, "gitdir: ") {
+		return "", fmt.Errorf("unexpected .git file content: %s", line)
+	}
+	gitdir := strings.TrimPrefix(line, "gitdir: ")
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(worktreeDir, gitdir)
+	}
+
+	// gitdir points to .git/worktrees/<name>. The repo root's .git
+	// is two levels up.
+	dotGit := filepath.Dir(filepath.Dir(gitdir))
+	return filepath.Dir(dotGit), nil
+}
+
+// removeGitWorktree removes a git worktree and attempts to delete its
+// branch. Uses git branch -d (not -D) so unpushed branches are kept.
+func removeGitWorktree(repoSrc, worktreePath, taskName string) (string, error) {
+	var allOutput strings.Builder
+	branchName := "krang/" + taskName
+
+	// If the worktree directory is already gone, prune stale entries.
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		pruneCmd := exec.Command("git", "worktree", "prune")
+		pruneCmd.Dir = repoSrc
+		_ = pruneCmd.Run()
+	} else {
+		rmCmd := exec.Command("git", "worktree", "remove", "--force", worktreePath)
+		rmCmd.Dir = repoSrc
+		rmOut, err := rmCmd.CombinedOutput()
+		allOutput.WriteString(string(rmOut))
+		if err != nil {
+			// If removal fails, try pruning then force remove.
+			pruneCmd := exec.Command("git", "worktree", "prune")
+			pruneCmd.Dir = repoSrc
+			_ = pruneCmd.Run()
+		}
+	}
+
+	// Try to delete the branch. Use -d (not -D) so git refuses to
+	// delete branches with unpushed commits.
+	delCmd := exec.Command("git", "branch", "-d", branchName)
+	delCmd.Dir = repoSrc
+	delOut, err := delCmd.CombinedOutput()
+	allOutput.WriteString(string(delOut))
+	if err != nil {
+		// Branch has unpushed commits or doesn't exist — not fatal.
+		allOutput.WriteString(fmt.Sprintf("(branch %s kept: %s)", branchName, strings.TrimSpace(string(delOut))))
+	}
+
+	return allOutput.String(), nil
+}
+
+// HasUncommittedChanges checks whether a git worktree has modified,
+// staged, or untracked files.
+func HasUncommittedChanges(worktreeDir string) bool {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = worktreeDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
+// HasUnpushedCommits checks whether a git worktree has commits that
+// don't exist on any remote-tracking branch.
+func HasUnpushedCommits(worktreeDir string) bool {
+	// Show commits on HEAD that aren't reachable from any remote ref.
+	// This works regardless of whether the branch has an upstream.
+	cmd := exec.Command("git", "log", "--oneline", "HEAD", "--not", "--remotes")
+	cmd.Dir = worktreeDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(out))) > 0
+}
+
+// copyTreeExcluding copies all files and directories from src to dst,
+// skipping any top-level entries whose names appear in the exclude list.
+// Existing files in dst are overwritten.
+func copyTreeExcluding(src, dst string, exclude []string) error {
+	excludeSet := make(map[string]bool, len(exclude))
+	for _, name := range exclude {
+		excludeSet[name] = true
+	}
+
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+
+		// Skip excluded top-level entries.
+		topLevel := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+		if excludeSet[topLevel] {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		dstPath := filepath.Join(dst, rel)
+
+		if d.IsDir() {
+			return os.MkdirAll(dstPath, 0o755)
+		}
+
+		// Handle symlinks.
+		if d.Type()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			_ = os.Remove(dstPath)
+			return os.Symlink(target, dstPath)
+		}
+
+		return copyFile(path, dstPath)
+	})
+}
+
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	info, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
+
+// processWorktreeInclude reads a .worktreeinclude file from the source
+// repo and copies matching gitignored files into the worktree. The file
+// uses gitignore-style glob patterns (one per line).
+func processWorktreeInclude(repoSrc, worktreeDst string) error {
+	includePath := filepath.Join(repoSrc, ".worktreeinclude")
+	f, err := os.Open(includePath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		pattern := strings.TrimSpace(scanner.Text())
+		if pattern == "" || strings.HasPrefix(pattern, "#") {
+			continue
+		}
+
+		matches, err := filepath.Glob(filepath.Join(repoSrc, pattern))
+		if err != nil {
+			continue
+		}
+
+		for _, match := range matches {
+			rel, err := filepath.Rel(repoSrc, match)
+			if err != nil {
+				continue
+			}
+			dst := filepath.Join(worktreeDst, rel)
+
+			// Skip if already exists in the worktree (tracked file).
+			if _, err := os.Stat(dst); err == nil {
+				continue
+			}
+
+			info, err := os.Stat(match)
+			if err != nil {
+				continue
+			}
+
+			if info.IsDir() {
+				if err := copyTreeExcluding(match, dst, nil); err != nil {
+					continue
+				}
+			} else {
+				if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+					continue
+				}
+				if err := copyFile(match, dst); err != nil {
+					continue
+				}
+			}
+		}
+	}
+
+	return scanner.Err()
 }

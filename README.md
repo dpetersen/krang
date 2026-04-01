@@ -252,18 +252,99 @@ sets:
     - gonfalon-priv
 ```
 
-### VCS Operations
+### VCS Behaviors
 
-- **jj repos**: `jj workspace add` — linked working copy, shared
-  object store, space-efficient
-- **git repos**: local `git clone` — uses hardlinks for the object
-  store, nearly instant and space-efficient
+Krang auto-detects whether each repo uses jj or git (by looking
+for `.jj/` or `.git`) and uses the appropriate workspace strategy.
+Both create lightweight linked working copies that share the source
+repo's object store.
+
+#### jj Repos
+
+**Creation:** `jj workspace add` creates a linked working copy in
+the workspace directory. The workspace name matches the task name.
+
+**Cleanup:** `jj workspace forget` deregisters the workspace from
+the source repo, then the directory is removed. jj workspaces don't
+create branches, so there's nothing else to clean up.
+
+**Forking:** `jj duplicate` creates an independent copy of the
+current commit, then `jj workspace add` + `jj edit` points the
+fork at the duplicate. The source and fork are sibling commits
+with no rebase interaction.
+
+#### git Repos
+
+**Creation:** `git worktree add -b krang/<task-name>` creates a
+worktree with a branch namespaced under `krang/` so it's clearly
+identifiable as krang-managed. The worktree shares the source
+repo's object store — no file copying, nearly instant.
+
+**Cleanup on task completion:**
+
+1. `git worktree remove` deregisters the worktree from the source
+   repo.
+2. `git branch -d krang/<task-name>` deletes the branch. The
+   lowercase `-d` is intentional — git refuses to delete branches
+   that have commits not present on any remote. If the branch has
+   unpushed commits, it's preserved in the local source repo as a
+   safety net.
+3. The workspace directory is removed.
+
+The completion confirmation modal warns about both conditions
+before you confirm:
+
+- **Uncommitted changes** — modified, staged, or untracked files
+  in the worktree that will be lost when the directory is deleted.
+- **Unpushed commits** — commits on the `krang/<task-name>` branch
+  that don't exist on any remote-tracking branch. The branch will
+  be preserved in the local source repo so the work isn't lost.
+  You can find surviving branches with
+  `git branch | grep krang/`.
+
+**Forking:** Creates a new worktree at the source's current HEAD,
+then copies the working tree state (including uncommitted and
+untracked files) into the fork. The fork gets its own
+`krang/<fork-name>` branch.
+
+**Crash recovery:** If krang exits without cleaning up, stale
+worktree entries and branches may be left behind. On the next
+workspace creation for a task with the same name, krang
+automatically prunes stale worktree entries and cleans up the
+old branch. You can also clean up manually:
+
+```
+cd repos/my-repo
+git worktree prune
+git branch -D krang/stale-task-name
+```
+
+### .worktreeinclude
+
+Git worktrees start as clean checkouts — gitignored files like
+`.env` aren't present. To automatically copy specific gitignored
+files into new worktrees, create a `.worktreeinclude` file in
+your source repo root using gitignore-style patterns:
+
+```
+.env
+.env.local
+config/secrets.json
+```
+
+This matches the behavior of Claude Code's built-in
+`.worktreeinclude` support.
 
 ### Workspace Lifecycle
 
-Workspaces are created when a task is created and destroyed when a
-task is completed or killed. For jj repos, `jj workspace forget` is
-called before removal. Frozen tasks keep their workspace intact.
+| Action | What happens |
+|--------|-------------|
+| Create | Workspace directory created, repos cloned/linked |
+| Park | No change (workspace preserved) |
+| Freeze | No change (workspace preserved for resume) |
+| Complete | Claude stopped, VCS cleanup, directory removed |
+| Fork (independent) | New workspace with copied working tree state |
+| Fork (shared) | New task in same workspace directory |
 
 ### Sandbox Template Variables
 
@@ -288,9 +369,8 @@ sandboxes:
 default_sandbox: default
 ```
 
-The `{{.ReposDir}}` write access is needed because jj workspaces and
-git worktrees reference the source repo's object store. Plain git
-clones are self-contained and don't need it. See
+The `{{.ReposDir}}` write access is needed because both jj workspaces
+and git worktrees reference the source repo's object store. See
 [docs/workspaces.md](docs/workspaces.md#sandbox-integration) for
 details.
 

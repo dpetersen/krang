@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -403,6 +404,210 @@ func TestParseDuplicateChangeID(t *testing.T) {
 				t.Errorf("parseDuplicateChangeID(%q) = %q, want %q", tt.output, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestGitWorktreeCreation(t *testing.T) {
+	dir := t.TempDir()
+
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	mkdirs(t, reposDir)
+
+	initGitRepo(t, filepath.Join(reposDir, "myrepo"))
+
+	rs := &RepoSets{
+		MetarepoDir:       dir,
+		WorkspaceStrategy: StrategySingleRepo,
+		ReposDir:          reposDir,
+		WorkspacesDir:     workspacesDir,
+		Repos:             map[string]RepoConfig{},
+		Sets:              map[string][]string{},
+	}
+
+	result, err := Create(rs, "test-task", []string{"myrepo"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// .git should be a file (worktree pointer), not a directory.
+	gitPath := filepath.Join(result.WorkspaceDir, ".git")
+	info, err := os.Lstat(gitPath)
+	if err != nil {
+		t.Fatalf("expected .git at %s: %v", gitPath, err)
+	}
+	if info.IsDir() {
+		t.Error(".git should be a file (worktree), not a directory (clone)")
+	}
+
+	// Branch krang/test-task should exist in the source repo.
+	cmd := exec.Command("git", "rev-parse", "--verify", "krang/test-task")
+	cmd.Dir = filepath.Join(reposDir, "myrepo")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("branch krang/test-task should exist in source repo: %v: %s", err, output)
+	}
+}
+
+func TestGitWorktreeDestroy(t *testing.T) {
+	dir := t.TempDir()
+
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	mkdirs(t, reposDir)
+
+	repoDir := filepath.Join(reposDir, "myrepo")
+	initGitRepo(t, repoDir)
+
+	rs := &RepoSets{
+		MetarepoDir:       dir,
+		WorkspaceStrategy: StrategySingleRepo,
+		ReposDir:          reposDir,
+		WorkspacesDir:     workspacesDir,
+		Repos:             map[string]RepoConfig{},
+		Sets:              map[string][]string{},
+	}
+
+	result, err := Create(rs, "destroy-test", []string{"myrepo"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := Destroy(rs, result.WorkspaceDir); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+
+	// Workspace dir should be gone.
+	if _, err := os.Stat(result.WorkspaceDir); !os.IsNotExist(err) {
+		t.Error("workspace dir should be removed")
+	}
+
+	// Worktree should be deregistered.
+	listCmd := exec.Command("git", "worktree", "list", "--porcelain")
+	listCmd.Dir = repoDir
+	listOut, _ := listCmd.CombinedOutput()
+	if strings.Contains(string(listOut), "destroy-test") {
+		t.Error("worktree should be deregistered from source repo")
+	}
+
+	// Branch should be deleted (no commits = safe to delete).
+	checkCmd := exec.Command("git", "rev-parse", "--verify", "krang/destroy-test")
+	checkCmd.Dir = repoDir
+	if checkCmd.Run() == nil {
+		t.Error("branch krang/destroy-test should be deleted after destroy")
+	}
+}
+
+func TestGitWorktreeFork(t *testing.T) {
+	dir := t.TempDir()
+
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	mkdirs(t, reposDir)
+
+	repoDir := filepath.Join(reposDir, "myrepo")
+	initGitRepo(t, repoDir)
+
+	rs := &RepoSets{
+		MetarepoDir:       dir,
+		WorkspaceStrategy: StrategySingleRepo,
+		ReposDir:          reposDir,
+		WorkspacesDir:     workspacesDir,
+		Repos:             map[string]RepoConfig{},
+		Sets:              map[string][]string{},
+	}
+
+	// Create source workspace.
+	srcResult, err := Create(rs, "source-task", []string{"myrepo"})
+	if err != nil {
+		t.Fatalf("Create source: %v", err)
+	}
+
+	// Add an uncommitted file to the source workspace.
+	if err := os.WriteFile(filepath.Join(srcResult.WorkspaceDir, "dirty.txt"), []byte("uncommitted"), 0o644); err != nil {
+		t.Fatalf("writing dirty file: %v", err)
+	}
+
+	// Fork it.
+	forkDir := filepath.Join(workspacesDir, "fork-task")
+	forkResult := ForkRepo(rs, srcResult.WorkspaceDir, forkDir, "myrepo", "fork-task")
+	if forkResult.Err != nil {
+		t.Fatalf("ForkRepo: %v", forkResult.Err)
+	}
+
+	// Fork should have the uncommitted file.
+	data, err := os.ReadFile(filepath.Join(forkDir, "dirty.txt"))
+	if err != nil {
+		t.Fatalf("reading dirty file in fork: %v", err)
+	}
+	if string(data) != "uncommitted" {
+		t.Errorf("fork dirty.txt = %q, want %q", string(data), "uncommitted")
+	}
+
+	// Fork should be a worktree with its own branch.
+	forkGitPath := filepath.Join(forkDir, ".git")
+	info, err := os.Lstat(forkGitPath)
+	if err != nil {
+		t.Fatalf("expected .git at fork: %v", err)
+	}
+	if info.IsDir() {
+		t.Error("fork .git should be a file (worktree)")
+	}
+
+	checkCmd := exec.Command("git", "rev-parse", "--verify", "krang/fork-task")
+	checkCmd.Dir = repoDir
+	if output, err := checkCmd.CombinedOutput(); err != nil {
+		t.Errorf("branch krang/fork-task should exist: %v: %s", err, output)
+	}
+
+	// Source should be unaffected.
+	srcData, err := os.ReadFile(filepath.Join(srcResult.WorkspaceDir, "dirty.txt"))
+	if err != nil {
+		t.Fatalf("reading dirty file in source: %v", err)
+	}
+	if string(srcData) != "uncommitted" {
+		t.Errorf("source dirty.txt = %q, want %q", string(srcData), "uncommitted")
+	}
+}
+
+func TestWorktreeInclude(t *testing.T) {
+	dir := t.TempDir()
+
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	mkdirs(t, reposDir)
+
+	repoDir := filepath.Join(reposDir, "myrepo")
+	initGitRepo(t, repoDir)
+
+	// Create .worktreeinclude and a .env file in the source repo.
+	if err := os.WriteFile(filepath.Join(repoDir, ".worktreeinclude"), []byte(".env\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".env"), []byte("SECRET=hunter2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := &RepoSets{
+		MetarepoDir:       dir,
+		WorkspaceStrategy: StrategySingleRepo,
+		ReposDir:          reposDir,
+		WorkspacesDir:     workspacesDir,
+		Repos:             map[string]RepoConfig{},
+		Sets:              map[string][]string{},
+	}
+
+	result, err := Create(rs, "include-test", []string{"myrepo"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// .env should be copied to the worktree.
+	data, err := os.ReadFile(filepath.Join(result.WorkspaceDir, ".env"))
+	if err != nil {
+		t.Fatalf("expected .env in worktree: %v", err)
+	}
+	if string(data) != "SECRET=hunter2\n" {
+		t.Errorf(".env content = %q, want %q", string(data), "SECRET=hunter2\n")
 	}
 }
 

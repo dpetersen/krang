@@ -110,15 +110,30 @@ jj workspace add ../../workspaces/auth-refactor/gonfalon --name auth-refactor
 
 Creates a linked working copy. Shared object store, space-efficient.
 
-### git (local clone)
+### git (worktree add)
 
 ```
-git clone ~/code/launchdarkly/repos/gonfalon ~/code/launchdarkly/workspaces/auth-refactor/gonfalon
+cd ~/code/launchdarkly/repos/gonfalon
+git worktree add ../../workspaces/auth-refactor/gonfalon -b krang/auth-refactor
 ```
 
-Local clone uses hardlinks for the object store — nearly instant
-and space-efficient. The working tree and branches are fully
-independent.
+Creates a git worktree (lightweight linked working copy). Shared
+object store, no file copying. The branch is namespaced under
+`krang/` so it's clearly identifiable for cleanup.
+
+### .worktreeinclude
+
+Git worktrees don't include gitignored files (like `.env`). Create
+a `.worktreeinclude` file in your source repo root listing patterns
+(gitignore syntax) of gitignored files to copy into new worktrees:
+
+```
+.env
+.env.local
+config/secrets.json
+```
+
+This matches Claude Code's built-in `.worktreeinclude` behavior.
 
 ## TUI Flow
 
@@ -217,13 +232,20 @@ forget is a separate `tea.Cmd`, so the UI updates between operations.
 1. Claude is stopped via SIGINT with a 5-second graceful shutdown
    timeout (falls back to tmux kill-window).
 2. For multi_repo: enumerate subdirectories that contain `.git` or
-   `.jj` (skipping non-repo dirs like `.claude`); for each jj repo,
-   run `jj workspace forget <workspace-name>` from the source repo.
-   For single_repo: try `jj workspace forget` against all known
-   jj repos.
+   `.jj`; for each jj repo, run `jj workspace forget` from the
+   source repo; for each git repo, run `git worktree remove` then
+   `git branch -d krang/<task-name>` from the source repo.
+   For single_repo: try the appropriate cleanup against all known
+   repos.
 3. `rm -rf` the workspace directory (unconditional, removes
    everything including non-repo files).
 4. Errors are logged but don't block the state transition.
+
+**Branch safety:** `git branch -d` (not `-D`) refuses to delete
+branches with unpushed commits. If a branch has unpushed work,
+it's kept as a safety net and the completion confirmation modal
+warns about it. Surviving branches are findable via
+`git branch | grep krang/`.
 
 ## Sandbox Integration
 
@@ -235,14 +257,12 @@ which breaks two things:
    `.mcp.json`, `CLAUDE.md`, `.claude/` etc. Grant read access to
    these paths in the metarepo root via `{{.KrangDir}}`.
 
-2. **VCS back-references** — jj workspaces and git worktrees are
-   lightweight: they store a pointer back to the source repo's
+2. **VCS back-references** — both jj workspaces and git worktrees
+   are lightweight: they store a pointer back to the source repo's
    object store (`.jj/repo` or `.git/worktrees/`). Without access
    to the source repos directory, all VCS operations fail with
    "Operation not permitted". Grant read+write access to
    `{{.ReposDir}}` so tasks can read history and create commits.
-   Plain `git clone` workspaces are self-contained and don't need
-   this.
 
 Sandbox profiles of type `command` support Go template variables:
 
@@ -263,8 +283,8 @@ sandboxes:
 default_sandbox: default
 ```
 
-If your repos are all plain git clones (not jj workspaces or git
-worktrees), you can omit `--add-dirs={{.ReposDir}}`.
+Since both jj and git now use lightweight linked workspaces,
+`--add-dirs={{.ReposDir}}` is needed for all VCS types.
 
 Falls back to the raw string on template parse errors.
 

@@ -26,6 +26,7 @@ func TestBuildStylesClassicTheme(t *testing.T) {
 		{"StateDormant", styles.StateDormant, ClassicTheme.Dormant},
 		{"InputLabel", styles.InputLabel, ClassicTheme.Title},
 		{"ErrorText", styles.ErrorText, ClassicTheme.Error},
+		{"WarningText", styles.WarningText, ClassicTheme.Warning},
 		{"DebugLog", styles.DebugLog, ClassicTheme.Muted},
 		{"FlagSkull", styles.FlagSkull, ClassicTheme.Danger},
 		{"StatusBar", styles.StatusBar, ClassicTheme.Subtitle},

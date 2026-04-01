@@ -45,6 +45,7 @@ type Styles struct {
 	StatusBar    lipgloss.Style
 	InputLabel   lipgloss.Style
 	ErrorText    lipgloss.Style
+	WarningText  lipgloss.Style
 	DebugLog     lipgloss.Style
 	FlagSkull    lipgloss.Style
 	ModalBorder  lipgloss.Color
@@ -83,6 +84,8 @@ func BuildStyles(theme Theme) Styles {
 			Foreground(theme.Title),
 		ErrorText: lipgloss.NewStyle().
 			Foreground(theme.Error),
+		WarningText: lipgloss.NewStyle().
+			Foreground(theme.Warning),
 		DebugLog: lipgloss.NewStyle().
 			Foreground(theme.Muted),
 		FlagSkull: lipgloss.NewStyle().

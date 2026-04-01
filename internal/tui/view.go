@@ -765,6 +765,25 @@ func (m Model) renderConfirmComplete(t *db.Task) string {
 			content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  • Workspace at %s will be deleted", wsPath)))
 		}
 	}
+	branchName := "krang/" + t.Name
+	if len(m.confirmUncommittedRepos) > 0 {
+		content.WriteString("\n")
+		content.WriteString(m.styles.WarningText.Render(
+			"  • Uncommitted changes will be lost:"))
+		for _, repo := range m.confirmUncommittedRepos {
+			content.WriteString("\n")
+			content.WriteString(m.styles.WarningText.Render("      " + repo))
+		}
+	}
+	if len(m.confirmUnpushedRepos) > 0 {
+		content.WriteString("\n")
+		content.WriteString(m.styles.WarningText.Render(
+			fmt.Sprintf("  • Unpushed commits — %s branch preserved in local source repo:", branchName)))
+		for _, repo := range m.confirmUnpushedRepos {
+			content.WriteString("\n")
+			content.WriteString(m.styles.WarningText.Render("      " + repo))
+		}
+	}
 	content.WriteString("\n\n")
 	content.WriteString("          " + m.renderHint("y", "Confirm") + "  " + m.renderHint("n", "Cancel"))
 

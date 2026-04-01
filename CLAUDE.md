@@ -52,7 +52,7 @@ Hints are placed in three zones below the table:
 **Complete** (`c`): unified action replacing the former separate kill/complete. Shows consequence-aware confirmation modal stating what will happen (process stop, workspace deletion). For shared workspaces, the confirmation shows which other tasks share the workspace and that it will NOT be deleted. Sets `StateCompleted` + `AttentionDone`. `StateFailed` is only set by the reconciler when windows vanish unexpectedly.
 
 **Fork** (`d` in detail modal): creates a new task that forks from the selected task's Claude conversation. Two workspace modes:
-- **Independent** (default): new workspace via `jj duplicate` + `jj workspace add` (jj) or `cp -a` (git). Fully separate — sibling commits, no rebase interaction.
+- **Independent** (default): new workspace via `jj duplicate` + `jj workspace add` (jj) or `git worktree add` + file copy (git). Fully separate — sibling commits, no rebase interaction.
 - **Shared**: same workspace, just forks the conversation. Warning shown about concurrent edit risk. Workspace cleanup deferred until last task using it completes.
 Session files are copied to the new workspace's Claude project directory so `--resume --fork-session` can find them. Forked tasks track lineage via `source_task_id` (shown as "forked from" in detail modal).
 
@@ -83,7 +83,7 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 - `internal/classify/` — Haiku-based attention classification (done vs waiting) on Stop events
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
 - `internal/proctree/` — process tree walking, noise/age filtering, leaf-only display for background child process awareness
-- `internal/workspace/` — `krang.yaml` parsing, workspace creation/destruction, VCS operations (jj workspace add, local git clone)
+- `internal/workspace/` — `krang.yaml` parsing, workspace creation/destruction, VCS operations (jj workspace add, git worktree add)
 - `internal/github/` — GitHub repo discovery via `gh` CLI (search, clone)
 - `internal/tui/` — Bubble Tea model, view, keybindings, messages, theming
 
@@ -143,11 +143,13 @@ Task creation and import use `charmbracelet/huh` forms rendered as modal overlay
 
 Optional per-task isolated directories configured via `krang.yaml` at the metarepo root. See `docs/workspaces.md` for full details.
 
-- **`workspace_strategy: single_repo`** — pick one repo, workspace dir is a direct clone
-- **`workspace_strategy: multi_repo`** — pick multiple repos (with optional set grouping via a custom toggle-list component), workspace dir contains clones
+- **`workspace_strategy: single_repo`** — pick one repo, workspace dir is a worktree/workspace
+- **`workspace_strategy: multi_repo`** — pick multiple repos (with optional set grouping via a custom toggle-list component), workspace dir contains worktrees/workspaces
 - **No strategy** — CWD picker (original behavior)
-- Git clones use local hardlinks for speed; jj repos use `jj workspace add`
-- Workspaces destroyed on task complete (jj workspace forget + rm -rf)
+- Git repos use `git worktree add` with `krang/<task-name>` branches; jj repos use `jj workspace add`
+- `.worktreeinclude` files in source repos specify gitignored files to copy into new worktrees
+- Workspaces destroyed on task complete (git worktree remove + branch -d / jj workspace forget + rm -rf)
+- Unpushed branches are kept on cleanup; completion modal warns about them
 - `W` in the detail modal adds repos to existing multi_repo workspaces
 - Sandbox profiles of type `command` support Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files
 - **GitHub repo discovery** — the repo picker has a tabbed interface (`Tab` toggles Local / Remote). The Remote tab searches GitHub orgs via `gh` CLI and clones repos into the repos dir. Config orgs show as a selectable list; "Other..." allows manual entry. Search is debounced (300ms). After cloning, the Local tab refreshes to show the new repo.

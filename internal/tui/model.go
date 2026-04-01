@@ -100,6 +100,11 @@ type Model struct {
 	// Claude (which use the source session ID) don't corrupt the
 	// original task's state.
 	contestedSessions map[string]string
+
+	// Set when entering ModeConfirmComplete for a workspace task.
+	// Each entry is a repo name (multi_repo) or empty for single_repo.
+	confirmUncommittedRepos []string
+	confirmUnpushedRepos    []string
 }
 
 
@@ -1603,6 +1608,38 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// checkWorkspaceWarnings checks git worktrees in the workspace for
+// uncommitted changes and unpushed commits. Returns repo names that
+// have each condition.
+func checkWorkspaceWarnings(rs *workspace.RepoSets, t *db.Task) (uncommittedRepos, unpushedRepos []string) {
+	if rs == nil || t.WorkspaceDir == "" {
+		return nil, nil
+	}
+
+	checkRepo := func(worktreeDir, repoName string) {
+		if workspace.HasUncommittedChanges(worktreeDir) {
+			uncommittedRepos = append(uncommittedRepos, repoName)
+		}
+		if workspace.HasUnpushedCommits(worktreeDir) {
+			unpushedRepos = append(unpushedRepos, repoName)
+		}
+	}
+
+	switch rs.WorkspaceStrategy {
+	case workspace.StrategySingleRepo:
+		checkRepo(t.WorkspaceDir, t.Name)
+	case workspace.StrategyMultiRepo:
+		repos := workspace.PresentRepos(t.WorkspaceDir)
+		for _, repo := range repos {
+			if rs.DetectVCS(repo) != "jj" {
+				checkRepo(filepath.Join(t.WorkspaceDir, repo), repo)
+			}
+		}
+	}
+
+	return uncommittedRepos, unpushedRepos
+}
+
 func (m Model) handleConfirmFreezeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
@@ -1704,6 +1741,11 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "c":
+		m.confirmUncommittedRepos = nil
+		m.confirmUnpushedRepos = nil
+		if t.WorkspaceDir != "" {
+			m.confirmUncommittedRepos, m.confirmUnpushedRepos = checkWorkspaceWarnings(m.repoSets, t)
+		}
 		m.mode = ModeConfirmComplete
 		return m, nil
 
