@@ -1,11 +1,51 @@
 # Krang
 
-TUI task orchestrator for managing multiple Claude Code sessions via tmux.
+A tmux-native workspace manager for Claude Code.
 
-Krang gives you a single dashboard to create, monitor, park, freeze, and
-resume Claude Code tasks. Each task runs in its own tmux window, and krang
-tracks their state via Claude Code hooks. You can run multiple krang
-instances simultaneously for different working directories.
+## Philosophy
+
+Tmux and Claude Code are good together. Krang doesn't change that
+experience — you still interact with Claude in a terminal, you can
+still split panes and create windows however you like. Krang just
+makes it easier to manage many Claude sessions at once without
+losing track of what's happening.
+
+Your tmux workflow is yours. Krang manages its own windows and
+leaves everything else alone.
+
+## Features
+
+- **Dashboard** — a single TUI showing all your Claude tasks with
+  live status: working, waiting for input, blocked on permissions,
+  or done. Activity sparklines show what Claude has been up to at
+  a glance.
+
+- **Park and freeze** — park tasks to a background session when
+  you need focus, or freeze them to free resources entirely. Resume
+  later with full conversation history.
+
+- **Attention sorting** — sort by priority to see which tasks need
+  you right now. Krang classifies Claude's output to distinguish
+  "done" from "waiting for your input."
+
+- **Workspaces** — optional per-task isolated directories backed by
+  git worktrees or jj workspaces. Run experiments across multiple
+  repos without polluting your main working trees.
+
+- **Forking** — fork a running task to branch an experiment. The
+  fork gets its own workspace and conversation, starting from where
+  the original left off.
+
+- **Companion windows** — open a linked terminal window next to any
+  task for running tests, tailing logs, or anything else. Companions
+  follow their parent through park/unpark.
+
+- **Sandboxing** — named sandbox profiles restrict what each Claude
+  session can access. Different profiles for different trust levels.
+
+- **Non-invasive** — krang only manages windows it creates. Your
+  own tmux panes, windows, and splits are unaffected. Create
+  whatever you want in a krang-managed session and it stays put.
 
 ## Prerequisites
 
