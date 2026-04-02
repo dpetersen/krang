@@ -23,24 +23,24 @@ The feature has three tiers of adoption:
 ### multi_repo
 
 ```
-~/code/launchdarkly/               # metarepo root, krang runs here
+~/code/myproject/               # metarepo root, krang runs here
 ├── repos/                         # source repos (configurable name)
-│   ├── gonfalon/
-│   ├── gonfalon-priv/
-│   └── catfood/
+│   ├── api-server/
+│   ├── web-app/
+│   └── payments/
 ├── workspaces/                    # workspaces (configurable name)
 │   └── auth-refactor/             # named after task
-│       ├── gonfalon/              # jj workspace or git clone
-│       └── gonfalon-priv/
+│       ├── api-server/              # jj workspace or git clone
+│       └── web-app/
 └── krang.yaml
 ```
 
 ### single_repo
 
 ```
-~/code/launchdarkly/
+~/code/myproject/
 ├── repos/
-│   └── gonfalon/
+│   └── api-server/
 ├── workspaces/
 │   └── fix-auth/                  # IS the clone directly
 │       ├── .git/
@@ -72,14 +72,14 @@ repos:
 
 sets:
   backend:
-    - gonfalon
-    - gonfalon-priv
+    - api-server
+    - web-app
   terraform:
     - terraform-config
     - terraform-modules
   frontend:
-    - gonfalon
-    - catfood
+    - api-server
+    - payments
 ```
 
 **VCS auto-detection:** Checks per-repo config first, then probes the
@@ -104,8 +104,8 @@ is deduplicated.
 ### jj (workspace add)
 
 ```
-cd ~/code/launchdarkly/repos/gonfalon
-jj workspace add ../../workspaces/auth-refactor/gonfalon --name auth-refactor
+cd ~/code/myproject/repos/api-server
+jj workspace add ../../workspaces/auth-refactor/api-server --name auth-refactor
 ```
 
 Creates a linked working copy. Shared object store, space-efficient.
@@ -113,8 +113,8 @@ Creates a linked working copy. Shared object store, space-efficient.
 ### git (worktree add)
 
 ```
-cd ~/code/launchdarkly/repos/gonfalon
-git worktree add ../../workspaces/auth-refactor/gonfalon -b krang/auth-refactor
+cd ~/code/myproject/repos/api-server
+git worktree add ../../workspaces/auth-refactor/api-server -b krang/auth-refactor
 ```
 
 Creates a git worktree (lightweight linked working copy). Shared
@@ -160,11 +160,11 @@ Select repos for "auth-refactor":
 
   Local   Remote
 
-> [x] backend (gonfalon, gonfalon-priv)
-  [x] gonfalon
-  [x] gonfalon-priv
+> [x] backend (api-server, web-app)
+  [x] api-server
+  [x] web-app
   [ ] terraform-config
-  [x] catfood
+  [x] payments
 
 tab switch tab  j/k navigate  space toggle  enter create  esc cancel
 ```

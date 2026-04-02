@@ -60,7 +60,7 @@ func TestCreateSingleRepoWorkspace(t *testing.T) {
 	workspacesDir := filepath.Join(dir, "workspaces")
 	mkdirs(t, reposDir)
 
-	initGitRepo(t, filepath.Join(reposDir, "gonfalon"))
+	initGitRepo(t, filepath.Join(reposDir, "api-server"))
 
 	rs := &RepoSets{
 		MetarepoDir:       dir,
@@ -71,7 +71,7 @@ func TestCreateSingleRepoWorkspace(t *testing.T) {
 		Sets:              map[string][]string{},
 	}
 
-	result, err := Create(rs, "fix-auth", []string{"gonfalon"})
+	result, err := Create(rs, "fix-auth", []string{"api-server"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestCreateSingleRepoWorkspace(t *testing.T) {
 	}
 
 	// There should NOT be a subdirectory named after the repo.
-	nestedDir := filepath.Join(expectedDir, "gonfalon")
+	nestedDir := filepath.Join(expectedDir, "api-server")
 	if _, err := os.Stat(nestedDir); err == nil {
 		t.Error("single_repo mode should not create a nested repo directory")
 	}
@@ -340,7 +340,7 @@ func TestDestroySingleRepoWorkspace(t *testing.T) {
 	workspacesDir := filepath.Join(dir, "workspaces")
 	mkdirs(t, reposDir)
 
-	initGitRepo(t, filepath.Join(reposDir, "gonfalon"))
+	initGitRepo(t, filepath.Join(reposDir, "api-server"))
 
 	rs := &RepoSets{
 		MetarepoDir:       dir,
@@ -351,7 +351,7 @@ func TestDestroySingleRepoWorkspace(t *testing.T) {
 		Sets:              map[string][]string{},
 	}
 
-	result, err := Create(rs, "single-destroy", []string{"gonfalon"})
+	result, err := Create(rs, "single-destroy", []string{"api-server"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

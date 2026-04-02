@@ -8,9 +8,9 @@ import (
 
 func TestRepoPickerSetToggle(t *testing.T) {
 	sets := map[string][]string{
-		"backend": {"gonfalon", "gonfalon-priv"},
+		"backend": {"api-server", "web-app"},
 	}
-	allRepos := []string{"catfood", "gonfalon", "gonfalon-priv"}
+	allRepos := []string{"payments", "api-server", "web-app"}
 
 	p := newRepoPicker("test", sets, allRepos, Styles{})
 
@@ -30,16 +30,16 @@ func TestRepoPickerSetToggle(t *testing.T) {
 		t.Fatalf("expected 2 selected repos, got %v", selected)
 	}
 
-	// catfood should be unchecked.
+	// payments should be unchecked.
 	for _, item := range p.items {
-		if item.Name == "catfood" && item.Checked {
-			t.Error("catfood should not be checked")
+		if item.Name == "payments" && item.Checked {
+			t.Error("payments should not be checked")
 		}
 	}
 
-	// Now toggle catfood — set should remain checked.
+	// Now toggle payments — set should remain checked.
 	for i, item := range p.items {
-		if item.Name == "catfood" {
+		if item.Name == "payments" {
 			p.cursor = i
 			break
 		}
@@ -47,7 +47,7 @@ func TestRepoPickerSetToggle(t *testing.T) {
 	p.toggle()
 
 	if !p.items[0].Checked {
-		t.Error("backend set should still be checked after toggling catfood")
+		t.Error("backend set should still be checked after toggling payments")
 	}
 	selected = p.selectedRepos()
 	if len(selected) != 3 {

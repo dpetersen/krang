@@ -201,8 +201,8 @@ func TestResolveRepos(t *testing.T) {
 	writeYAML(t, dir, `
 sets:
   backend:
-    - gonfalon
-    - gonfalon-priv
+    - api-server
+    - web-app
   terraform:
     - tf-config
     - tf-modules
@@ -222,24 +222,24 @@ sets:
 		{
 			name: "single set",
 			sets: []string{"backend"},
-			want: []string{"gonfalon", "gonfalon-priv"},
+			want: []string{"api-server", "web-app"},
 		},
 		{
 			name:       "set plus individual",
 			sets:       []string{"backend"},
-			individual: []string{"catfood"},
-			want:       []string{"catfood", "gonfalon", "gonfalon-priv"},
+			individual: []string{"payments"},
+			want:       []string{"api-server", "payments", "web-app"},
 		},
 		{
 			name:       "deduplication",
 			sets:       []string{"backend"},
-			individual: []string{"gonfalon", "catfood"},
-			want:       []string{"catfood", "gonfalon", "gonfalon-priv"},
+			individual: []string{"api-server", "payments"},
+			want:       []string{"api-server", "payments", "web-app"},
 		},
 		{
 			name: "multiple sets",
 			sets: []string{"backend", "terraform"},
-			want: []string{"gonfalon", "gonfalon-priv", "tf-config", "tf-modules"},
+			want: []string{"api-server", "tf-config", "tf-modules", "web-app"},
 		},
 		{
 			name:       "individual only",

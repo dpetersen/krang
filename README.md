@@ -187,12 +187,12 @@ directory containing clones of the selected repos:
 ```
 ~/code/project/
 ├── repos/
-│   ├── gonfalon/
-│   └── gonfalon-priv/
+│   ├── api-server/
+│   └── web-app/
 ├── workspaces/
 │   └── auth-refactor/
-│       ├── gonfalon/
-│       └── gonfalon-priv/
+│       ├── api-server/
+│       └── web-app/
 └── krang.yaml
 ```
 
@@ -207,8 +207,8 @@ workspace_strategy: multi_repo
 
 sets:
   backend:
-    - gonfalon
-    - gonfalon-priv
+    - api-server
+    - web-app
   terraform:
     - terraform-config
     - terraform-modules
@@ -250,8 +250,8 @@ repos:
 # Named groups of repos (multi_repo only). Optional.
 sets:
   backend:
-    - gonfalon
-    - gonfalon-priv
+    - api-server
+    - web-app
 ```
 
 ### VCS Behaviors

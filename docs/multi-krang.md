@@ -6,7 +6,7 @@ Krang currently hardcodes a single HTTP hook endpoint (`127.0.0.1:19283`),
 a single parked session name, and defaults to a single
 shared DB (`~/.config/krang/krang.db`). This means only one krang instance
 can run at a time. Multi-krang support is a prerequisite for the workspace
-feature, where different metarepos (e.g. `~/code/launchdarkly`,
+feature, where different metarepos (e.g. `~/code/myproject`,
 `~/dev/krang`) each run their own krang.
 
 ## Design
@@ -91,7 +91,7 @@ don't collide.
   `"k-" + instanceID + "-parked"`
 - Instance ID = `<basename>-<short-hash>` where basename is the
   directory name and short hash is the first 4 hex chars of the
-  SHA-256 of the full absolute path (e.g. `launchdarkly-a3f2`)
+  SHA-256 of the full absolute path (e.g. `myproject-a3f2`)
 
 **`cmd/root.go`:**
 - Compute instance ID from `os.Getwd()`
