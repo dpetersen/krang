@@ -9,24 +9,37 @@ instances simultaneously for different working directories.
 
 ## Prerequisites
 
-- Go 1.26+
 - tmux
-- [mise](https://mise.jdx.dev/) (for build tasks)
 - Claude Code CLI (`claude`)
 
-## Quick Start
+## Installation
+
+### Homebrew
 
 ```
-go build -o krang .
-./krang setup   # installs hooks into ~/.claude/settings.json
-./krang         # launch the TUI (must be inside tmux)
+brew tap dpetersen/tap
+brew install krang
 ```
 
-Or with mise:
+### From Source
+
+Requires Go 1.26+:
 
 ```
-mise run run    # build, install hooks, launch TUI
+go install github.com/dpetersen/krang@latest
 ```
+
+### First Run
+
+```
+krang setup   # installs hooks into ~/.claude/settings.json
+krang         # launch the TUI (must be inside tmux)
+```
+
+`krang setup` writes a relay script to `~/.config/krang/hooks/relay.sh`
+and adds hook entries to `~/.claude/settings.json` so Claude Code
+reports events back to krang. It will show you exactly what it plans
+to change and ask for confirmation before writing anything.
 
 ## How It Works
 
@@ -440,3 +453,49 @@ Available themes: `catppuccin-mocha` (default), `catppuccin-latte`,
 `catppuccin-frappe`, `catppuccin-macchiato`, `classic`.
 
 Set via the `"theme"` field in config.yaml.
+
+## Development
+
+### Building Locally
+
+Install [mise](https://mise.jdx.dev/) for the dev build tasks:
+
+```
+mise run build   # build binary with version from git tags
+mise run test    # run tests
+mise run setup   # install hooks (uses dev config)
+mise run run     # build, install hooks, launch TUI (uses dev DB)
+```
+
+Development uses `KRANG_DB=.krang-dev.db` and
+`KRANG_CONFIG=.krang-dev-config.yaml` to isolate from production
+paths.
+
+Or build directly with Go:
+
+```
+go build -o krang .
+```
+
+### Cutting a Release
+
+Krang uses [jj](https://jj-vcs.github.io/jj/) for version control.
+Releases are distributed via a Homebrew tap at
+[dpetersen/homebrew-tap](https://github.com/dpetersen/homebrew-tap).
+
+1. Tag the release commit:
+
+   ```
+   jj tag set v0.1.0-alpha.2
+   jj git push
+   ```
+
+2. Get the SHA-256 of the GitHub tarball:
+
+   ```
+   curl -sL https://github.com/dpetersen/krang/archive/refs/tags/v0.1.0-alpha.2.tar.gz | shasum -a 256
+   ```
+
+3. Update `Formula/krang.rb` in the
+   [homebrew-tap](https://github.com/dpetersen/homebrew-tap) repo
+   with the new tag URL and SHA-256, then push.

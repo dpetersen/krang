@@ -1,6 +1,6 @@
 [tasks.build]
 description = "Build the krang binary"
-run = "go build -o krang ."
+run = "go build -ldflags \"-s -w -X github.com/dpetersen/krang/cmd.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)\" -o krang ."
 
 [tasks.test]
 description = "Run all tests"

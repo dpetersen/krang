@@ -17,9 +17,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var Version = "dev"
+
 var rootCmd = &cobra.Command{
 	Use:           "krang",
 	Short:         "Task orchestration for Claude Code sessions",
+	Version:       Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE:          runTUI,
