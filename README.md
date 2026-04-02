@@ -2,6 +2,10 @@
 
 A tmux-native workspace manager for Claude Code.
 
+> **Warning:** This project was written almost entirely by Claude Code
+> without significant human review of the implementation. It works
+> well for the author, but use at your own risk.
+
 ## Philosophy
 
 Tmux and Claude Code are good together. Krang doesn't change that
@@ -36,7 +40,7 @@ leaves everything else alone.
   fork gets its own workspace and conversation, starting from where
   the original left off.
 
-- **Companion windows** — open a linked terminal window next to any
+- **Companion windows** — open linked terminal windows next to any
   task for running tests, tailing logs, or anything else. Companions
   follow their parent through park/unpark.
 
@@ -112,7 +116,19 @@ require a relaunch to take effect):
 
 ## Configuration
 
-Config lives at `~/.config/krang/config.yaml`:
+Krang works without any configuration. All config is optional.
+
+There are two levels of configuration:
+
+- **User config** (`~/.config/krang/config.yaml`) — global
+  preferences like theme, sandbox profiles, and default VCS.
+- **Project config** (`krang.yaml` in your working directory) —
+  per-project workspace settings like repo layout, repo sets, and
+  VCS overrides. See the [Workspaces](#workspaces) section.
+
+### config.yaml
+
+All fields are optional:
 
 ```yaml
 theme: catppuccin-mocha
@@ -127,8 +143,8 @@ window_color_waiting: yellow
 | Field | Description |
 |-------|-------------|
 | `theme` | UI theme (see Themes section) |
-| `default_vcs` | Default VCS for remote clones: `"git"` (default) or `"jj"`. Overridden by per-repo config or `.jj/` auto-detection |
-| `github_orgs` | GitHub orgs for the Remote tab in the repo picker. Merged with `krang.yaml` orgs |
+| `default_vcs` | VCS used when cloning remote repos: `"git"` (default) or `"jj"`. For existing local repos, krang auto-detects from the repo itself |
+| `github_orgs` | GitHub orgs for the Remote tab in the repo picker. Merged with orgs from the project-level `krang.yaml` |
 | `sandboxes` | Named sandbox profiles (see [sandboxing](docs/sandboxing.md)) |
 | `default_sandbox` | Name of the sandbox profile to use by default |
 | `window_colors_enabled` | Enable tmux window color based on attention state |
@@ -152,8 +168,8 @@ copies of repos. There are three levels of adoption:
 
 Without a `krang.yaml`, task creation shows a directory picker
 listing immediate subdirectories of krang's working directory.
-Select `.` for the current directory (original behavior) or pick a
-subdirectory. The picker is skipped when no subdirectories exist.
+Select `.` to use the current directory or pick a subdirectory.
+The picker is skipped when no subdirectories exist.
 
 ### Level 2: Single Repo Workspaces
 
@@ -196,7 +212,8 @@ directory containing clones of the selected repos:
 └── krang.yaml
 ```
 
-Press `W` on an active or parked workspace task to add more repos.
+You can add more repos to a task after launch by editing it from
+the detail modal.
 
 ### Repo Sets (optional, multi_repo only)
 
@@ -256,10 +273,17 @@ sets:
 
 ### VCS Behaviors
 
-Krang auto-detects whether each repo uses jj or git (by looking
-for `.jj/` or `.git`) and uses the appropriate workspace strategy.
-Both create lightweight linked working copies that share the source
-repo's object store.
+For existing local repos, krang auto-detects whether each one uses
+jj or git by looking for `.jj/` or `.git`. It always uses whichever
+VCS the repo already has, regardless of your `default_vcs` setting.
+
+The `default_vcs` setting (in `config.yaml` or `krang.yaml`) only
+controls which VCS is used when cloning new repos from GitHub via
+the Remote tab. Once a repo is cloned, krang uses whatever is on
+disk.
+
+Both VCS backends create lightweight linked working copies that
+share the source repo's object store.
 
 #### jj Repos
 
@@ -354,43 +378,23 @@ access is needed for VCS operations and config file walking. See
 
 ## File Locations
 
-| Path | Purpose |
-|------|---------|
-| `~/.config/krang/config.yaml` | Sandbox, theme, window colors, default VCS, GitHub orgs |
-| `~/.config/krang/hooks/relay.sh` | Relay script (written by `krang setup`) |
-| `~/.local/share/krang/instances/<dir>/krang.db` | Per-instance SQLite database |
-| `~/.local/state/krang/instances/<dir>/krang-state.json` | Per-instance port file (ephemeral) |
+Krang follows XDG conventions for its files. `krang setup` creates
+the first two; the rest are managed automatically at runtime.
+
+| Path | Created by | Purpose |
+|------|-----------|---------|
+| `~/.config/krang/hooks/relay.sh` | `krang setup` | Relay script that forwards Claude hook events to krang |
+| `~/.claude/settings.json` | `krang setup` | Hook entries added to Claude Code's config (shared with other hooks) |
+| `~/.config/krang/config.yaml` | You (optional) | User configuration |
+| `~/.local/share/krang/instances/<dir>/krang.db` | krang | Per-instance SQLite database |
+| `~/.local/state/krang/instances/<dir>/krang-state.json` | krang | Per-instance port file (ephemeral, exists while running) |
 
 ## Keybindings
 
-### Global Keys
-
-| Key | Action |
-|-----|--------|
-| `n` | New task |
-| `Enter` | Focus task (switch to its tmux window) |
-| `Tab` | Open task detail modal |
-| `c` | Complete task (with confirmation) |
-| `j/k` | Navigate up/down |
-| `s` | Toggle sort mode (created / priority) |
-| `T` | Cycle sparkline window (1m / 10m / 60m) |
-| `/` | Filter tasks |
-| `:` | Command palette (sit rep, import, compact) |
-| `?` | Help |
-| `q` | Quit |
-
-### Detail Modal Keys
-
-| Key | Action |
-|-----|--------|
-| `p` | Park / unpark |
-| `f` | Freeze / unfreeze |
-| `c` | Complete task |
-| `+` | Create companion window |
-| `F` | Edit task flags |
-| `W` | Add repos to workspace task |
-| `Enter` | Focus task window |
-| `Esc/Tab` | Close modal |
+Every available action is shown on screen — there are no hidden
+keybindings. The hint bars at the bottom of each screen show what
+you can do in the current context. Press `?` for a full help
+overlay.
 
 ## Debugging
 
