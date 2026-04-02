@@ -920,7 +920,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		return m, nil
 
-	case "T":
+	case "t":
 		m.sparklineWindow = m.sparklineWindow.Next()
 		return m, m.fetchSparklineData
 

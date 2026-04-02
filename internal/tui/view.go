@@ -393,8 +393,7 @@ func (m Model) renderTable() string {
 	hints := []string{
 		m.renderHint("/", "filter"),
 		m.renderHint("s", "sort"),
-		m.renderHint("T", m.sparklineWindow.Label()),
-		m.renderHint("j/k", "nav"),
+		m.renderHint("t", m.sparklineWindow.Label()),
 	}
 
 	taskCount := len(tasks)
@@ -518,7 +517,10 @@ func (m Model) renderHint(key, label string) string {
 }
 
 func (m Model) renderActionBar() string {
-	hints := []string{m.renderHint("n", "new")}
+	hints := []string{
+		m.renderHint("j/k", "nav"),
+		m.renderHint("n", "new"),
+	}
 	if m.selectedTask() != nil {
 		hints = append(hints,
 			m.renderHint("enter", "focus"),
@@ -686,10 +688,9 @@ func (m Model) buildHelpContent() string {
 		{"n", "Create new task"},
 		{"enter", "Focus selected task window"},
 		{"tab", "Open task detail modal"},
-		{"c", "Complete task (with confirmation)"},
 		{"j/k", "Navigate up/down"},
 		{"s", "Toggle sort (created / priority)"},
-		{"T", "Cycle sparkline window (1m / 10m / 60m)"},
+		{"t", "Cycle sparkline window (1m / 10m / 60m)"},
 		{"/", "Filter tasks (esc to clear)"},
 		{":", "Command palette (sit rep, import, compact)"},
 		{"?", "Toggle this help"},
@@ -701,7 +702,7 @@ func (m Model) buildHelpContent() string {
 	sb.WriteString(renderSection([]hint{
 		{"p", "Park / unpark (toggles based on state)"},
 		{"f", "Freeze / unfreeze (toggles based on state)"},
-		{"c", "Complete task"},
+		{"c", "Complete task (with confirmation)"},
 		{"+", "Create companion window"},
 		{"d", "Fork task (duplicate conversation + workspace)"},
 		{"e", "Edit task (repos, sandbox, flags)"},
