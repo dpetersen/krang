@@ -89,11 +89,16 @@ func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool,
 		cmd = "export KRANG_STATEFILE=" + shellQuote(stateFilePath) + "; "
 	}
 
+	claudeBin := os.Getenv("KRANG_CLAUDE_CMD")
+	if claudeBin == "" {
+		claudeBin = "claude"
+	}
+
 	if sandboxCommand == "" {
-		cmd += "claude"
+		cmd += claudeBin
 	} else {
 		expanded := expandSandboxCommand(sandboxCommand, tmplData)
-		cmd += expanded + " claude"
+		cmd += expanded + " " + claudeBin
 	}
 
 	if forkFrom != "" {

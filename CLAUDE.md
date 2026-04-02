@@ -159,15 +159,26 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 ## Building and Running
 
 ```
-mise run run     # build, install hooks, launch TUI (uses dev DB)
-mise run test    # run tests
-mise run build   # build binary only
-mise run setup   # install Claude Code hooks only
+mise run run              # build, install hooks, launch TUI (uses dev DB)
+mise run test             # run unit tests
+mise run test:integration # run integration tests (requires tmux)
+mise run build            # build binary only
+mise run setup            # install Claude Code hooks only
 ```
 
 Must be run inside tmux. Uses `jj` for version control, not `git`.
 
 Development uses `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.yaml` (set in mise.toml) to isolate from production paths.
+
+## Testing
+
+Unit tests (`mise run test`) cover business logic, config, DB, workspace operations (including git worktree and jj workspace edge cases), and command building. They run fast and don't require tmux.
+
+Integration tests (`mise run test:integration`) exercise the full TUI lifecycle in real tmux with a fake Claude binary. They test task creation, hook event routing, park/unpark, freeze/unfreeze, complete, reconciliation, and forking. These must be run inside tmux and take ~30 seconds.
+
+**Run both unit and integration tests before considering a feature complete.** The integration tests catch bugs that unit tests can't (e.g., tmux version-specific behavior, key sequence regressions, session adoption races).
+
+The fake Claude binary (`internal/testutil/fakeclaude/`) accepts the same CLI flags as real Claude, writes a manifest file for test inspection, creates minimal session files, and blocks until SIGINT. The `KRANG_CLAUDE_CMD` env var overrides the Claude binary path for testing.
 
 ## Graceful Shutdown
 

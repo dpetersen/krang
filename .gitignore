@@ -1,5 +1,6 @@
-# Built binary
+# Built binaries
 /krang
+/fakeclaude
 # Dev database and config
 .krang-dev.db*
 .krang-dev-config.yaml

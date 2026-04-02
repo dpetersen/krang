@@ -36,7 +36,14 @@ func WindowExists(windowID string) bool {
 		"-t", windowID,
 		"-p", "#{window_id}",
 	)
-	return cmd.Run() == nil
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	// tmux 3.6+ returns exit 0 with empty output for non-existent
+	// targets instead of a non-zero exit code. Check that the
+	// output actually contains a window ID.
+	return strings.TrimSpace(string(out)) != ""
 }
 
 func PanePID(windowID string) (int, error) {

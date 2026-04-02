@@ -3,8 +3,12 @@ description = "Build the krang binary"
 run = "go build -ldflags \"-s -w -X github.com/dpetersen/krang/cmd.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)\" -o krang ."
 
 [tasks.test]
-description = "Run all tests"
+description = "Run unit tests"
 run = "go test ./..."
+
+[tasks."test:integration"]
+description = "Run integration tests (requires tmux)"
+run = "go test -v -count=1 -timeout 300s -tags=integration ./internal/integration/"
 
 [tasks.setup]
 description = "Install Claude Code hooks and configure krang (dev config)"

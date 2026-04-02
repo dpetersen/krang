@@ -1,0 +1,31 @@
+name: Tests
+on: [push, pull_request]
+
+jobs:
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install jj
+        run: |
+          curl -fsSL https://github.com/jj-vcs/jj/releases/latest/download/jj-x86_64-unknown-linux-musl.tar.gz | tar xz
+          sudo mv jj /usr/local/bin/
+        continue-on-error: true
+      - name: Start tmux server
+        run: tmux start-server
+      - name: Run integration tests
+        run: tmux new-session -d -s ci && go test -v -count=1 -timeout 300s -tags=integration ./internal/integration/

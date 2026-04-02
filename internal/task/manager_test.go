@@ -1,10 +1,13 @@
 package task
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/pathutil"
 )
 
 const testStateFile = "/tmp/krang-state.json"
@@ -198,6 +201,120 @@ func TestBuildClaudeCommandForkWithFlags(t *testing.T) {
 	}
 	if !contains(cmd, "KRANG_DEBUG=1") {
 		t.Errorf("fork command missing KRANG_DEBUG:\n  %s", cmd)
+	}
+}
+
+func TestBuildClaudeCommandCustomBinary(t *testing.T) {
+	t.Setenv("KRANG_CLAUDE_CMD", "/tmp/fakeclaude")
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "", testStateFile, sandboxTemplateData{}, "")
+	expected := statePrefix + "/tmp/fakeclaude --session-id sess-123 --name 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
+	if cmd != expected {
+		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
+	}
+}
+
+func TestBuildClaudeCommandCustomBinaryWithSandbox(t *testing.T) {
+	t.Setenv("KRANG_CLAUDE_CMD", "/tmp/fakeclaude")
+	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, false, "safehouse", testStateFile, sandboxTemplateData{}, "")
+	expected := statePrefix + "safehouse /tmp/fakeclaude --session-id sess-123 --name 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
+	if cmd != expected {
+		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
+	}
+}
+
+func TestCopySessionFiles(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	oldCwd := "/tmp/old-project"
+	newCwd := "/tmp/new-project"
+	sessionID := "test-session-abc"
+
+	// Create the source session file.
+	oldDir := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath(oldCwd))
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionContent := []byte(`{"type":"init"}` + "\n")
+	if err := os.WriteFile(filepath.Join(oldDir, sessionID+".jsonl"), sessionContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a companion directory.
+	companionDir := filepath.Join(oldDir, sessionID)
+	if err := os.MkdirAll(companionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(companionDir, "attachment.png"), []byte("fake-image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopySessionFiles(sessionID, oldCwd, newCwd); err != nil {
+		t.Fatalf("CopySessionFiles: %v", err)
+	}
+
+	// Verify session file was copied.
+	newDir := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath(newCwd))
+	data, err := os.ReadFile(filepath.Join(newDir, sessionID+".jsonl"))
+	if err != nil {
+		t.Fatalf("session file not copied: %v", err)
+	}
+	if string(data) != string(sessionContent) {
+		t.Errorf("session file content = %q, want %q", string(data), string(sessionContent))
+	}
+
+	// Verify companion directory was copied.
+	attachmentData, err := os.ReadFile(filepath.Join(newDir, sessionID, "attachment.png"))
+	if err != nil {
+		t.Fatalf("companion dir not copied: %v", err)
+	}
+	if string(attachmentData) != "fake-image" {
+		t.Error("companion file content mismatch")
+	}
+}
+
+func TestCopySessionFilesSameCwd(t *testing.T) {
+	// Copying to the same cwd should be a no-op.
+	if err := CopySessionFiles("session-id", "/same/path", "/same/path"); err != nil {
+		t.Fatalf("CopySessionFiles same cwd: %v", err)
+	}
+}
+
+func TestCleanupCopiedSession(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	cwd := "/tmp/fork-project"
+	sessionID := "cleanup-session-xyz"
+
+	// Set up files to clean.
+	dir := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath(cwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, sessionID+".jsonl"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	companionDir := filepath.Join(dir, sessionID)
+	if err := os.MkdirAll(companionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(companionDir, "file.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CleanupCopiedSession(sessionID, cwd); err != nil {
+		t.Fatalf("CleanupCopiedSession: %v", err)
+	}
+
+	// JSONL file should be gone.
+	if _, err := os.Stat(filepath.Join(dir, sessionID+".jsonl")); !os.IsNotExist(err) {
+		t.Error("session JSONL file should be removed")
+	}
+
+	// Companion directory should be gone.
+	if _, err := os.Stat(companionDir); !os.IsNotExist(err) {
+		t.Error("companion directory should be removed")
 	}
 }
 
