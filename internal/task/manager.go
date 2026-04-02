@@ -103,6 +103,7 @@ func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool,
 
 	if forkFrom != "" {
 		cmd += " --resume " + shellQuote(forkFrom) + " --fork-session"
+		cmd += " --name " + shellQuote(name)
 	} else if resume {
 		cmd += " --resume " + shellQuote(name)
 	} else {

@@ -176,7 +176,7 @@ func TestResolveSandboxCommandNoProfiles(t *testing.T) {
 
 func TestBuildClaudeCommandFork(t *testing.T) {
 	cmd := buildClaudeCommand("", "fork-task", db.TaskFlags{}, false, "safehouse", testStateFile, sandboxTemplateData{}, "source-sess-id")
-	expected := statePrefix + "safehouse claude --resume 'source-sess-id' --fork-session; echo ''; echo 'Claude exited. Press Enter to close.'; read"
+	expected := statePrefix + "safehouse claude --resume 'source-sess-id' --fork-session --name 'fork-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
 	}
@@ -184,7 +184,7 @@ func TestBuildClaudeCommandFork(t *testing.T) {
 
 func TestBuildClaudeCommandForkNoSandbox(t *testing.T) {
 	cmd := buildClaudeCommand("", "fork-task", db.TaskFlags{}, false, "", testStateFile, sandboxTemplateData{}, "source-sess-id")
-	expected := statePrefix + "claude --resume 'source-sess-id' --fork-session; echo ''; echo 'Claude exited. Press Enter to close.'; read"
+	expected := statePrefix + "claude --resume 'source-sess-id' --fork-session --name 'fork-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
 	}
@@ -193,8 +193,8 @@ func TestBuildClaudeCommandForkNoSandbox(t *testing.T) {
 func TestBuildClaudeCommandForkWithFlags(t *testing.T) {
 	flags := db.TaskFlags{DangerouslySkipPermissions: true, Debug: true}
 	cmd := buildClaudeCommand("", "fork-task", flags, false, "safehouse", testStateFile, sandboxTemplateData{}, "source-sess-id")
-	if !contains(cmd, "--resume 'source-sess-id' --fork-session") {
-		t.Errorf("fork command missing --resume --fork-session:\n  %s", cmd)
+	if !contains(cmd, "--resume 'source-sess-id' --fork-session --name 'fork-task'") {
+		t.Errorf("fork command missing --resume --fork-session --name:\n  %s", cmd)
 	}
 	if !contains(cmd, "--dangerously-skip-permissions") {
 		t.Errorf("fork command missing --dangerously-skip-permissions:\n  %s", cmd)
