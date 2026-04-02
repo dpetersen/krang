@@ -1482,8 +1482,5 @@ func (m Model) taskIsDangerous(t db.Task) bool {
 	if t.SandboxProfile == "none" {
 		return true
 	}
-	if t.SandboxProfile == "" && m.cfg.DefaultSandbox == "" && len(m.cfg.Sandboxes) == 0 {
-		return true
-	}
 	return false
 }

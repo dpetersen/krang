@@ -30,13 +30,26 @@ func init() {
 }
 
 func runSetup() error {
-	fmt.Println("Krang setup will:")
-	fmt.Println("  1. Add hook entries to ~/.claude/settings.json. These hooks only activate")
-	fmt.Println("     when KRANG_STATEFILE is set, which krang does automatically for Claude")
-	fmt.Println("     sessions it launches — standalone Claude sessions are unaffected.")
-	fmt.Println("  2. Write a relay script to ~/.config/krang/hooks/relay.sh")
-	fmt.Println("  3. Configure a sandbox command that krang uses when launching Claude tasks")
-	fmt.Println("     (does not affect Claude sessions started outside of krang)")
+	fmt.Println("Krang setup will create/update the following files:")
+	fmt.Println()
+	fmt.Println("  1. ~/.config/krang/hooks/relay.sh")
+	fmt.Println("     A small bash script that forwards Claude Code hook events to krang's")
+	fmt.Println("     local HTTP server. It reads the port from a state file and POSTs event")
+	fmt.Println("     JSON to localhost. Only runs when KRANG_STATEFILE is set, which krang")
+	fmt.Println("     does for sessions it launches — standalone Claude sessions are unaffected.")
+	fmt.Println()
+	fmt.Println("  2. ~/.claude/settings.json")
+	fmt.Println("     Adds global command hook entries for 13 Claude Code lifecycle events")
+	fmt.Println("     (SessionStart, Stop, PermissionRequest, tool use, etc.) that invoke the")
+	fmt.Println("     relay script above. These are global hooks, so they fire for all Claude")
+	fmt.Println("     sessions — but the relay script exits immediately when KRANG_STATEFILE is")
+	fmt.Println("     not set, so Claude sessions run outside of krang are not affected.")
+	fmt.Println("     Existing non-krang hooks are preserved. Re-running setup won't duplicate")
+	fmt.Println("     entries.")
+	fmt.Println()
+	fmt.Println("  3. ~/.config/krang/config.yaml (first run only)")
+	fmt.Println("     Krang configuration file for sandbox profiles, theme, and other settings.")
+	fmt.Println("     Skipped if this file already exists.")
 	fmt.Println()
 
 	reader := bufio.NewReader(os.Stdin)
@@ -49,62 +62,23 @@ func runSetup() error {
 		return nil
 	}
 
+	fmt.Println()
+
 	if err := hooks.Install(); err != nil {
 		return fmt.Errorf("installing hooks: %w", err)
 	}
-	fmt.Println("Hooks installed into ~/.claude/settings.json")
+	fmt.Println("  ✓ Relay script written to ~/.config/krang/hooks/relay.sh")
+	fmt.Println("  ✓ Hook entries added to ~/.claude/settings.json")
 
 	configPath := config.Path()
-	if cfg, err := config.Load(configPath); err == nil {
-		fmt.Printf("Config already exists at %s\n", configPath)
-		if len(cfg.Sandboxes) > 0 {
-			for name, profile := range cfg.Sandboxes {
-				fmt.Printf("  sandbox %q: %s\n", name, profile.Command)
-			}
-			if cfg.DefaultSandbox != "" {
-				fmt.Printf("  default_sandbox: %s\n", cfg.DefaultSandbox)
-			}
-		} else {
-			fmt.Println("  sandboxes: (none — no sandboxing)")
-		}
-		return nil
-	}
-
-	return configureSandbox(reader, configPath)
-}
-
-func configureSandbox(reader *bufio.Reader, configPath string) error {
-	fmt.Println()
-	fmt.Println("Krang wraps Claude with a sandbox command for security.")
-	fmt.Println("Enter the command that should prefix 'claude' when launching tasks.")
-	fmt.Println("Examples: safehouse, sandvault run, safehouse --append-profile foo.sb")
-	fmt.Println()
-	fmt.Print("Sandbox command (empty for no sandbox): ")
-
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("reading input: %w", err)
-	}
-	sandboxCommand := strings.TrimSpace(input)
-
-	var cfg config.Config
-	if sandboxCommand == "" {
-		fmt.Println("Warning: no sandbox configured. Claude will run without sandboxing.")
+	if _, err := config.Load(configPath); err == nil {
+		fmt.Printf("  ✓ Config already exists at %s (skipped)\n", configPath)
 	} else {
-		cfg = config.Config{
-			Sandboxes: map[string]config.SandboxProfile{
-				"default": {Type: "command", Command: sandboxCommand},
-			},
-			DefaultSandbox: "default",
+		var cfg config.Config
+		if err := config.Write(configPath, cfg); err != nil {
+			return fmt.Errorf("writing config: %w", err)
 		}
-	}
-	if err := config.Write(configPath, cfg); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-
-	fmt.Printf("Config written to %s\n", configPath)
-	if sandboxCommand != "" {
-		fmt.Printf("  sandbox_command: %s\n", sandboxCommand)
+		fmt.Printf("  ✓ Config written to %s\n", configPath)
 	}
 
 	return nil

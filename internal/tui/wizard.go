@@ -168,7 +168,10 @@ func newEditWizard(
 	if currentSandbox == "" {
 		currentSandbox = defaultSandbox
 	}
-	if currentSandbox == "none" || currentSandbox == "" {
+	// Only convert to the UI's "(none)" label when profiles exist and will
+	// be shown. When no profiles exist, the select field is hidden and the
+	// value passes through unchanged.
+	if len(sandboxProfiles) > 0 && (currentSandbox == "none" || currentSandbox == "") {
 		currentSandbox = sandboxNone
 	}
 	var currentFlags []string
@@ -641,6 +644,9 @@ func (w *taskWizard) handleRepoPickerRemoteKey(msg tea.KeyMsg) (tea.Cmd, tea.Msg
 }
 
 func (w *taskWizard) resolvedSandboxProfile() string {
+	if w.sandboxValue == "" {
+		return ""
+	}
 	if w.sandboxValue == sandboxNone {
 		return "none"
 	}
