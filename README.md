@@ -75,14 +75,6 @@ require a relaunch to take effect):
 Config lives at `~/.config/krang/config.yaml`:
 
 ```yaml
-sandboxes:
-  default:
-    type: command
-    command: safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
-  cloud-tools:
-    type: command
-    command: safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG --env-pass AWS_PROFILE
-default_sandbox: default
 theme: catppuccin-mocha
 default_vcs: jj
 github_orgs:
@@ -94,65 +86,22 @@ window_color_waiting: yellow
 
 | Field | Description |
 |-------|-------------|
-| `sandboxes` | Named sandbox profiles, each with a `type` and type-specific fields |
-| `default_sandbox` | Name of the sandbox profile to use by default |
 | `theme` | UI theme (see Themes section) |
 | `default_vcs` | Default VCS for remote clones: `"git"` (default) or `"jj"`. Overridden by per-repo config or `.jj/` auto-detection |
 | `github_orgs` | GitHub orgs for the Remote tab in the repo picker. Merged with `krang.yaml` orgs |
+| `sandboxes` | Named sandbox profiles (see [sandboxing](docs/sandboxing.md)) |
+| `default_sandbox` | Name of the sandbox profile to use by default |
 | `window_colors_enabled` | Enable tmux window color based on attention state |
 | `window_color_permission` | Color for permission-blocked windows |
 | `window_color_waiting` | Color for waiting windows |
 
-### Sandbox Setup
+### Sandboxing
 
-Krang supports named sandbox profiles configured via `sandboxes` in
-config.yaml. Each profile has a `type` field (currently only `command`
-is supported) and type-specific fields. Tasks can be assigned a
-specific sandbox profile at creation time or changed later via the
-flag edit form. Krang itself runs unsandboxed.
-
-If you use a sandbox, it must allow the following or hook events will
-silently fail:
-
-**Environment variables to pass through:**
-
-| Variable | Purpose |
-|----------|---------|
-| `KRANG_STATEFILE` | Required. Path to the port file the relay script reads |
-| `KRANG_DEBUG` | Optional. Enables relay script debug logging |
-
-**Filesystem access the sandboxed process needs:**
-
-| Path | Access | Purpose |
-|------|--------|---------|
-| `~/.local/state/krang/` | Read | Relay script reads the state file for the port |
-| `~/.config/krang/hooks/` | Read + Execute | Relay script lives here |
-
-Note: the sandboxed Claude does **not** need access to the SQLite
-database (`~/.local/share/krang/`) or write access to any krang paths.
-Krang handles all DB writes from outside the sandbox.
-
-**Example safehouse configuration** (`~/.config/safehouse/claude-overrides.sb`):
-
-```scheme
-;; Krang: relay script reads state file, executes from hooks dir
-(allow file-read* (subpath "~/.local/state/krang"))
-(allow file-write* (subpath "~/.config/krang"))
-(allow process-exec (subpath "~/.config/krang/hooks"))
-```
-
-And in your krang config, pass the env vars through:
-
-```yaml
-sandboxes:
-  default:
-    type: command
-    command: safehouse --append-profile ~/.config/safehouse/claude-overrides.sb --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
-default_sandbox: default
-```
-
-If hook events aren't showing up, the sandbox is the most likely cause.
-See the Debugging section below.
+Krang can run each Claude session inside a sandbox for restricted
+filesystem and network access. Named profiles let you define
+different access levels for different kinds of tasks. See
+[docs/sandboxing.md](docs/sandboxing.md) for setup, requirements,
+and a detailed safehouse walkthrough.
 
 ## Workspaces
 
@@ -359,33 +308,9 @@ This matches the behavior of Claude Code's built-in
 | Fork (independent) | New workspace with copied working tree state |
 | Fork (shared) | New task in same workspace directory |
 
-### Sandbox Template Variables
-
-Sandbox profiles of type `command` support Go template variables in
-the `command` field for granting workspace tasks access to metarepo-level
-config files:
-
-| Variable | Description |
-|----------|-------------|
-| `{{.KrangDir}}` | Krang's working directory (metarepo root) |
-| `{{.TaskCwd}}` | Task's original launch cwd (does not drift) |
-| `{{.TaskName}}` | Task name |
-| `{{.ReposDir}}` | Absolute path to repos directory (empty if no krang.yaml) |
-
-Example — grant config reads and VCS write access for jj/worktree repos:
-
-```yaml
-sandboxes:
-  default:
-    type: command
-    command: safehouse --add-dirs-ro={{.KrangDir}}/.mcp.json:{{.KrangDir}}/CLAUDE.md:{{.KrangDir}}/.claude --add-dirs={{.ReposDir}} --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG
-default_sandbox: default
-```
-
-The `{{.ReposDir}}` write access is needed because both jj workspaces
-and git worktrees reference the source repo's object store. See
-[docs/workspaces.md](docs/workspaces.md#sandbox-integration) for
-details.
+If you're using sandboxing with workspaces, additional filesystem
+access is needed for VCS operations and config file walking. See
+[docs/sandboxing.md](docs/sandboxing.md#workspace-setup) for details.
 
 ## File Locations
 
