@@ -330,7 +330,7 @@ func (m Model) renderTable() string {
 			stateLabel(t.State),
 			attn,
 			sparkline,
-			m.displayCwd(t.Cwd),
+			m.displayCwd(t.Cwd, t.WorkspaceDir),
 			t.Summary,
 		}
 	}
@@ -606,28 +606,25 @@ func tildeify(path string) string {
 	return path
 }
 
-func (m Model) displayCwd(taskCwd string) string {
-	var wsDir string
-	if m.repoSets != nil {
-		wsDir = m.repoSets.WorkspacesDir
-	}
-	return relativeCwd(taskCwd, wsDir)
+func (m Model) displayCwd(taskCwd, taskWorkspaceDir string) string {
+	return relativeCwd(taskCwd, taskWorkspaceDir)
 }
 
-func relativeCwd(taskCwd, workspacesDir string) string {
-	krangCwd := krangWorkingDir()
-	if krangCwd != "" && strings.HasPrefix(taskCwd, krangCwd+"/") {
-		rel := taskCwd[len(krangCwd)+1:]
-		if workspacesDir != "" {
-			wsRel := workspacesDir
-			if strings.HasPrefix(workspacesDir, krangCwd+"/") {
-				wsRel = workspacesDir[len(krangCwd)+1:]
-			}
-			if strings.HasPrefix(rel, wsRel+"/") {
-				return "📂" + rel[len(wsRel):]
-			}
+func relativeCwd(taskCwd, taskWorkspaceDir string) string {
+	return formatCwd(taskCwd, taskWorkspaceDir, krangWorkingDir())
+}
+
+func formatCwd(taskCwd, taskWorkspaceDir, krangCwd string) string {
+	if taskWorkspaceDir != "" {
+		if strings.HasPrefix(taskCwd, taskWorkspaceDir+"/") {
+			return "📂" + taskCwd[len(taskWorkspaceDir):]
 		}
-		return rel
+		if taskCwd == taskWorkspaceDir {
+			return "📂/"
+		}
+	}
+	if krangCwd != "" && strings.HasPrefix(taskCwd, krangCwd+"/") {
+		return taskCwd[len(krangCwd)+1:]
 	}
 	if taskCwd == krangCwd {
 		return "."
@@ -903,7 +900,7 @@ func (m Model) renderDetailModal(t *db.Task) string {
 
 	// Info section
 	if t.Cwd != "" {
-		content.WriteString(m.styles.ModalContent.Render("  cwd: " + m.displayCwd(t.Cwd)))
+		content.WriteString(m.styles.ModalContent.Render("  cwd: " + m.displayCwd(t.Cwd, t.WorkspaceDir)))
 		content.WriteString("\n")
 	}
 	if !t.CreatedAt.IsZero() {
