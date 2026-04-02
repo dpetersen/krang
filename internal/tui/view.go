@@ -1112,6 +1112,24 @@ func (m Model) renderForkDialog() string {
 		content.WriteString("\n")
 		content.WriteString(m.styles.ModalContent.Render("  tab to cycle mode"))
 		content.WriteString("\n")
+
+		if m.forkMode == forkModeIndependent {
+			warnStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Warning)
+			// Padding: 2 box padding + 2 indent each side.
+			wrapWidth := modalWidth - 4
+			if wrapWidth < 20 {
+				wrapWidth = 20
+			}
+			warnText := "Claude's --fork-session assumes the same file paths. " +
+				"An independent fork moves to a new location, but Claude will " +
+				"still try to use its original paths. You will need to explain " +
+				"to Claude that it has been moved to a new workspace."
+			wrapped := lipgloss.NewStyle().Width(wrapWidth).Render(warnText)
+			content.WriteString("\n")
+			content.WriteString(warnStyle.Render("  Note:") + "\n")
+			content.WriteString(m.styles.ModalContent.Render("  " + wrapped))
+			content.WriteString("\n")
+		}
 	} else {
 		content.WriteString("\n")
 		content.WriteString(m.styles.ModalContent.Render("  Both tasks will share the same working directory."))

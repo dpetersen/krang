@@ -214,9 +214,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// On SessionStart with unknown ID, try to adopt it for a
-		// recently woken task whose old session ID no longer matches.
-		if t == nil && msg.Event.HookEventName == "SessionStart" {
+		// Try to adopt unknown session IDs. This handles resumed
+		// sessions (new ID on SessionStart) and forked sessions
+		// (Claude assigns a new ID after --fork-session that may
+		// first appear on any event type, not just SessionStart).
+		if t == nil {
 			t = m.tryAdoptSession(msg.Event)
 		}
 
@@ -1969,7 +1971,7 @@ func (m Model) startFork(name string) (tea.Model, tea.Cmd) {
 		ForkMode:        modeName,
 		SourceTaskID:    src.ID,
 		SourceSessionID: src.SessionID,
-		SourceCwd:       src.Cwd,
+		SourceCwd:       sourceSessionCwd(src),
 		TaskName:        name,
 		TaskFlags:       src.Flags,
 		TaskSandboxProfile: src.SandboxProfile,
@@ -2036,6 +2038,16 @@ func (m Model) wsForkRepoCmd(index int, rs *workspace.RepoSets) tea.Cmd {
 	}
 }
 
+// sourceSessionCwd returns the directory Claude's session file is keyed
+// to. For workspace tasks the session was created from WorkspaceDir, but
+// Cwd may have drifted to a repo subdirectory via hook updates.
+func sourceSessionCwd(t *db.Task) string {
+	if t.WorkspaceDir != "" {
+		return t.WorkspaceDir
+	}
+	return t.Cwd
+}
+
 // wsForkCopySessionCmd copies session files for the fork.
 func (m Model) wsForkCopySessionCmd() tea.Cmd {
 	ws := m.wsProgress
@@ -2076,10 +2088,11 @@ func (m *Model) appendDebugLog(line string) {
 	}
 }
 
-// tryAdoptSession matches an unknown SessionStart to an active task
-// whose cwd matches the event's cwd. This handles resumed sessions
-// which get a new session ID. Prefers tasks with empty session IDs
-// (pending forks) over tasks that already have a session.
+// tryAdoptSession matches an unknown session ID to an active task.
+// This handles resumed sessions (new ID on SessionStart) and forked
+// sessions (Claude assigns a new ID after --fork-session). Prefers
+// tasks with empty session IDs (pending forks) over tasks that
+// already have a session.
 func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 	tasks, err := m.taskStore.List()
 	if err != nil {
@@ -2087,6 +2100,8 @@ func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 	}
 
 	// First pass: prefer tasks with empty session ID (pending forks).
+	// Match on cwd or workspace dir, since the event cwd may be
+	// a subdirectory of the workspace.
 	for _, t := range tasks {
 		if t.State != db.StateActive {
 			continue
@@ -2094,23 +2109,27 @@ func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 		if t.TmuxWindow == "" {
 			continue
 		}
-		if t.SessionID == "" && t.Cwd == event.Cwd {
-			_ = m.taskStore.UpdateSessionID(t.ID, event.SessionID)
-			m.appendDebugLog(fmt.Sprintf("[%s] adopted forked session for task=%s",
-				time.Now().Format("15:04:05"), t.Name))
-
-			// Clean up contested session marker and copied session files.
-			if t.SourceTaskID != "" {
-				if srcTask, err := m.taskStore.Get(t.SourceTaskID); err == nil && srcTask != nil {
-					_ = task.CleanupCopiedSession(srcTask.SessionID, t.Cwd)
-					delete(m.contestedSessions, srcTask.SessionID)
-				}
-			}
-
-			updated := t
-			updated.SessionID = event.SessionID
-			return &updated
+		if t.SessionID != "" {
+			continue
 		}
+		if !cwdMatchesTask(event.Cwd, t) {
+			continue
+		}
+		_ = m.taskStore.UpdateSessionID(t.ID, event.SessionID)
+		m.appendDebugLog(fmt.Sprintf("[%s] adopted forked session for task=%s",
+			time.Now().Format("15:04:05"), t.Name))
+
+		// Clean up contested session marker and copied session files.
+		if t.SourceTaskID != "" {
+			if srcTask, err := m.taskStore.Get(t.SourceTaskID); err == nil && srcTask != nil {
+				_ = task.CleanupCopiedSession(srcTask.SessionID, t.Cwd)
+				delete(m.contestedSessions, srcTask.SessionID)
+			}
+		}
+
+		updated := t
+		updated.SessionID = event.SessionID
+		return &updated
 	}
 
 	// Second pass: tasks with existing session ID (cwd-based match for resumes).
@@ -2131,6 +2150,22 @@ func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 		}
 	}
 	return nil
+}
+
+// cwdMatchesTask reports whether an event's cwd belongs to the given
+// task. For workspace tasks, the event cwd may be the workspace root
+// or any subdirectory (e.g. a repo worktree inside the workspace).
+func cwdMatchesTask(eventCwd string, t db.Task) bool {
+	if eventCwd == "" {
+		return false
+	}
+	if eventCwd == t.Cwd {
+		return true
+	}
+	if t.WorkspaceDir != "" {
+		return eventCwd == t.WorkspaceDir || strings.HasPrefix(eventCwd, t.WorkspaceDir+"/")
+	}
+	return false
 }
 
 func (m Model) filteredTasks() []db.Task {
