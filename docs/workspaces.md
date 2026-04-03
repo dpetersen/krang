@@ -65,11 +65,6 @@ github_orgs:                    # orgs for GitHub repo discovery (merged with co
   - myorg
   - other-org
 
-repos:
-  terraform-config:
-    vcs: git      # override auto-detection
-  # repos not listed here are auto-detected
-
 sets:
   backend:
     - api-server
@@ -82,14 +77,12 @@ sets:
     - payments
 ```
 
-**VCS auto-detection:** Checks per-repo config first, then probes the
-repo directory for `.jj/` (returns "jj") or `.git` (returns "git"),
-then falls back to `default_vcs`, then "git". The `.git` check handles
-both directories (normal clones) and files (worktrees/submodules).
-The `repos` map is only needed to override auto-detection. `default_vcs`
-and `github_orgs` can also be set in `config.yaml` (user-level); the
-workspace config takes precedence for `default_vcs`, and orgs are
-merged with dedup.
+**VCS auto-detection:** Probes the repo directory for `.jj/` (returns
+"jj") or `.git` (returns "git"), then falls back to `default_vcs`, then
+"git". The `.git` check handles both directories (normal clones) and
+files (worktrees/submodules). `default_vcs` and `github_orgs` can also
+be set in `config.yaml` (user-level); the workspace config takes
+precedence for `default_vcs`, and orgs are merged with dedup.
 
 **Repo sets** (multi_repo only): Named groups of repos shown in
 the repo picker as toggle-able headers. Toggling a set toggles all

@@ -48,7 +48,6 @@ func TestJJWorkspaceCreate(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{"myrepo": {VCS: "jj"}},
 		Sets:              map[string][]string{},
 	}
 
@@ -99,7 +98,6 @@ func TestJJWorkspaceDestroy(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{"myrepo": {VCS: "jj"}},
 		Sets:              map[string][]string{},
 	}
 
@@ -144,12 +142,8 @@ func TestJJWorkspaceCreateMultiRepo(t *testing.T) {
 		MetarepoDir:       dir,
 		WorkspaceStrategy: StrategyMultiRepo,
 		ReposDir:          reposDir,
-		WorkspacesDir:     workspacesDir,
-		Repos: map[string]RepoConfig{
-			"alpha": {VCS: "jj"},
-			"beta":  {VCS: "jj"},
-		},
-		Sets: map[string][]string{},
+		WorkspacesDir: workspacesDir,
+		Sets:          map[string][]string{},
 	}
 
 	result, err := Create(rs, "jj-multi", []string{"alpha", "beta"})
@@ -188,7 +182,6 @@ func TestJJWorkspaceForkIndependent(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{"myrepo": {VCS: "jj"}},
 		Sets:              map[string][]string{},
 	}
 

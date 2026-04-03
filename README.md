@@ -258,12 +258,6 @@ default_vcs: jj
 github_orgs:
   - myorg
 
-# VCS override per repo. Only needed when auto-detection (looks for
-# .jj/ directory) gives the wrong answer.
-repos:
-  some-repo:
-    vcs: git  # or jj
-
 # Named groups of repos (multi_repo only). Optional.
 sets:
   backend:

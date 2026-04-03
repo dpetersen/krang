@@ -23,7 +23,6 @@ func TestGitWorktreeDestroyWithUncommittedChanges(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -74,7 +73,6 @@ func TestGitWorktreeDestroyKeepsUnpushedBranch(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -126,7 +124,6 @@ func TestGitWorktreeCreateWithStaleBranch(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -163,7 +160,6 @@ func TestGitWorktreeForkWithCommits(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -233,7 +229,6 @@ func TestGitWorktreeForkFromFork(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 

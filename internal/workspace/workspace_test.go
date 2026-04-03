@@ -23,7 +23,6 @@ func TestCreateGitWorkspace(t *testing.T) {
 		WorkspaceStrategy: StrategyMultiRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -67,7 +66,6 @@ func TestCreateSingleRepoWorkspace(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -106,7 +104,6 @@ func TestCreateEmptyWorkspace(t *testing.T) {
 				WorkspaceStrategy: strategy,
 				ReposDir:          filepath.Join(dir, "repos"),
 				WorkspacesDir:     workspacesDir,
-				Repos:             map[string]RepoConfig{},
 				Sets:              map[string][]string{},
 			}
 
@@ -149,7 +146,6 @@ func TestDestroyEmptyWorkspace(t *testing.T) {
 				WorkspaceStrategy: strategy,
 				ReposDir:          filepath.Join(dir, "repos"),
 				WorkspacesDir:     workspacesDir,
-				Repos:             map[string]RepoConfig{},
 				Sets:              map[string][]string{},
 			}
 
@@ -179,7 +175,6 @@ func TestCreateAlreadyExists(t *testing.T) {
 		MetarepoDir:   dir,
 		ReposDir:      filepath.Join(dir, "repos"),
 		WorkspacesDir: workspacesDir,
-		Repos:         map[string]RepoConfig{},
 		Sets:          map[string][]string{},
 	}
 
@@ -205,7 +200,6 @@ func TestCreatePartialFailure(t *testing.T) {
 		WorkspaceStrategy: StrategyMultiRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -235,7 +229,6 @@ func TestCreateAllFail(t *testing.T) {
 		WorkspaceStrategy: StrategyMultiRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -266,7 +259,6 @@ func TestAddReposToWorkspace(t *testing.T) {
 		WorkspaceStrategy: StrategyMultiRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -310,7 +302,6 @@ func TestDestroyGitWorkspace(t *testing.T) {
 		WorkspaceStrategy: StrategyMultiRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -347,7 +338,6 @@ func TestDestroySingleRepoWorkspace(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -421,7 +411,6 @@ func TestGitWorktreeCreation(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -463,7 +452,6 @@ func TestGitWorktreeDestroy(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -512,7 +500,6 @@ func TestGitWorktreeFork(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 
@@ -592,7 +579,6 @@ func TestWorktreeInclude(t *testing.T) {
 		WorkspaceStrategy: StrategySingleRepo,
 		ReposDir:          reposDir,
 		WorkspacesDir:     workspacesDir,
-		Repos:             map[string]RepoConfig{},
 		Sets:              map[string][]string{},
 	}
 

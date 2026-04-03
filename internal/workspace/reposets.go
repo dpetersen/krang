@@ -9,10 +9,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type RepoConfig struct {
-	VCS string `yaml:"vcs"` // "jj", "git", or "" (auto-detect)
-}
-
 type WorkspaceStrategy string
 
 const (
@@ -21,13 +17,12 @@ const (
 )
 
 type Config struct {
-	WorkspaceStrategy WorkspaceStrategy     `yaml:"workspace_strategy"`
-	ReposDir          string                `yaml:"repos_dir"`
-	WorkspacesDir     string                `yaml:"workspaces_dir"`
-	DefaultVCS        string                `yaml:"default_vcs"`
-	GitHubOrgs        []string              `yaml:"github_orgs"`
-	Repos             map[string]RepoConfig `yaml:"repos"`
-	Sets              map[string][]string   `yaml:"sets"`
+	WorkspaceStrategy WorkspaceStrategy `yaml:"workspace_strategy"`
+	ReposDir          string            `yaml:"repos_dir"`
+	WorkspacesDir     string            `yaml:"workspaces_dir"`
+	DefaultVCS        string            `yaml:"default_vcs"`
+	GitHubOrgs        []string          `yaml:"github_orgs"`
+	Sets              map[string][]string `yaml:"sets"`
 }
 
 type RepoSets struct {
@@ -36,9 +31,8 @@ type RepoSets struct {
 	ReposDir          string // absolute path to repos directory
 	WorkspacesDir     string // absolute path to workspaces directory
 	DefaultVCS        string // "git" (default) or "jj" for remote clones
-	GitHubOrgs        []string
-	Repos             map[string]RepoConfig
-	Sets              map[string][]string
+	GitHubOrgs    []string
+	Sets          map[string][]string
 }
 
 func Load(metarepoDir string) (*RepoSets, error) {
@@ -62,9 +56,6 @@ func Load(metarepoDir string) (*RepoSets, error) {
 		workspacesRel = "workspaces"
 	}
 
-	if cfg.Repos == nil {
-		cfg.Repos = make(map[string]RepoConfig)
-	}
 	if cfg.Sets == nil {
 		cfg.Sets = make(map[string][]string)
 	}
@@ -84,7 +75,6 @@ func Load(metarepoDir string) (*RepoSets, error) {
 		WorkspacesDir:     workspacesDir,
 		DefaultVCS:        cfg.DefaultVCS,
 		GitHubOrgs:        cfg.GitHubOrgs,
-		Repos:             cfg.Repos,
 		Sets:              cfg.Sets,
 	}, nil
 }
@@ -106,13 +96,10 @@ func (rs *RepoSets) ListRepos() ([]string, error) {
 	return repos, nil
 }
 
-// DetectVCS returns "jj" or "git" for a repo. Checks the explicit
-// per-repo config first, then probes the repo directory for .jj or
-// .git, then falls back to DefaultVCS (or "git" if unset).
+// DetectVCS returns "jj" or "git" for a repo. Probes the repo
+// directory for .jj or .git, then falls back to DefaultVCS (or "git"
+// if unset).
 func (rs *RepoSets) DetectVCS(repoName string) string {
-	if rc, ok := rs.Repos[repoName]; ok && rc.VCS != "" {
-		return rc.VCS
-	}
 	repoDir := filepath.Join(rs.ReposDir, repoName)
 	if info, err := os.Stat(filepath.Join(repoDir, ".jj")); err == nil && info.IsDir() {
 		return "jj"
