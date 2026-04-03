@@ -37,6 +37,9 @@ func CreateWindow(session, name, cwd, shellCommand string) (string, error) {
 }
 
 func MoveWindow(windowID, targetSession string) error {
+	if windowID == "" {
+		return fmt.Errorf("refusing to move window: empty window ID (tmux would move the current window)")
+	}
 	cmd := exec.Command("tmux", "move-window", "-s", windowID, "-t", targetSession+":")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("moving window %s to %s: %s: %w", windowID, targetSession, strings.TrimSpace(string(out)), err)
@@ -45,6 +48,9 @@ func MoveWindow(windowID, targetSession string) error {
 }
 
 func KillWindow(windowID string) error {
+	if windowID == "" {
+		return fmt.Errorf("refusing to kill window: empty window ID (tmux would kill the current window)")
+	}
 	cmd := exec.Command("tmux", "kill-window", "-t", windowID)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("killing window %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)

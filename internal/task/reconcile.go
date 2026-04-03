@@ -33,10 +33,17 @@ func (m *Manager) Reconcile() error {
 		// directly. This handles cases where the window is in a
 		// session we didn't enumerate.
 		if !liveWindowIDs[task.TmuxWindow] && !tmux.WindowExists(task.TmuxWindow) {
+			newState := db.StateFailed
 			if task.SessionID != "" {
-				_ = m.tasks.UpdateState(task.ID, db.StateDormant)
-			} else {
-				_ = m.tasks.UpdateState(task.ID, db.StateFailed)
+				newState = db.StateDormant
+			}
+			// Update state before clearing the window. If the
+			// state update fails (e.g. SQLITE_BUSY), skip the
+			// window clear to avoid leaving the task active with
+			// an empty TmuxWindow — that causes Park/Kill to
+			// target the current window instead.
+			if err := m.tasks.UpdateState(task.ID, newState); err != nil {
+				continue
 			}
 			_ = m.tasks.UpdateTmuxWindow(task.ID, "")
 		}
