@@ -603,6 +603,8 @@ func initGitRepo(t *testing.T, dir string) {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
 	run(t, dir, "git", "init")
+	run(t, dir, "git", "config", "user.email", "test@example.com")
+	run(t, dir, "git", "config", "user.name", "Test User")
 	run(t, dir, "git", "commit", "--allow-empty", "-m", "init")
 }
 

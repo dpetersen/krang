@@ -354,6 +354,8 @@ func TestHasUnpushedCommitsWithRemote(t *testing.T) {
 	// Clone it.
 	workDir := filepath.Join(dir, "work")
 	run(t, dir, "git", "clone", bareDir, workDir)
+	run(t, workDir, "git", "config", "user.email", "test@example.com")
+	run(t, workDir, "git", "config", "user.name", "Test User")
 
 	// Make a commit and push it.
 	if err := os.WriteFile(filepath.Join(workDir, "file.txt"), []byte("content"), 0o644); err != nil {
