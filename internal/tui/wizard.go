@@ -67,10 +67,10 @@ type taskWizard struct {
 	cwdValue   string            // selected CWD
 
 	// Tab 3: Options
-	optionsForm    *huh.Form
-	sandboxValue   string
-	flagValues     []string
-	hasOptionsTab  bool // false when no sandbox profiles AND we want to hide it
+	optionsForm   *huh.Form
+	sandboxValue  string
+	flagValues    []string
+	hasOptionsTab bool // false when no sandbox profiles AND we want to hide it
 
 	// Remote search state
 	lastSearchQuery string
@@ -707,7 +707,6 @@ func (w *taskWizard) buildSubmitMsg() tea.Msg {
 
 	return result
 }
-
 
 // View renders the wizard as a modal.
 func (w *taskWizard) View(width int) string {

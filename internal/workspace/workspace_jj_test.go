@@ -142,8 +142,8 @@ func TestJJWorkspaceCreateMultiRepo(t *testing.T) {
 		MetarepoDir:       dir,
 		WorkspaceStrategy: StrategyMultiRepo,
 		ReposDir:          reposDir,
-		WorkspacesDir: workspacesDir,
-		Sets:          map[string][]string{},
+		WorkspacesDir:     workspacesDir,
+		Sets:              map[string][]string{},
 	}
 
 	result, err := Create(rs, "jj-multi", []string{"alpha", "beta"})

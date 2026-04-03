@@ -40,7 +40,7 @@ type ModelUsage struct {
 
 // UsageSummary holds parsed usage for an entire session.
 type UsageSummary struct {
-	Snapshots     []TokenSnapshot      // chronological
+	Snapshots     []TokenSnapshot       // chronological
 	TotalByModel  map[string]ModelUsage // keyed by model ID
 	EstimatedCost float64
 	Err           error // non-nil if parsing failed

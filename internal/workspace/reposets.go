@@ -17,11 +17,11 @@ const (
 )
 
 type Config struct {
-	WorkspaceStrategy WorkspaceStrategy `yaml:"workspace_strategy"`
-	ReposDir          string            `yaml:"repos_dir"`
-	WorkspacesDir     string            `yaml:"workspaces_dir"`
-	DefaultVCS        string            `yaml:"default_vcs"`
-	GitHubOrgs        []string          `yaml:"github_orgs"`
+	WorkspaceStrategy WorkspaceStrategy   `yaml:"workspace_strategy"`
+	ReposDir          string              `yaml:"repos_dir"`
+	WorkspacesDir     string              `yaml:"workspaces_dir"`
+	DefaultVCS        string              `yaml:"default_vcs"`
+	GitHubOrgs        []string            `yaml:"github_orgs"`
 	Sets              map[string][]string `yaml:"sets"`
 }
 
@@ -31,8 +31,8 @@ type RepoSets struct {
 	ReposDir          string // absolute path to repos directory
 	WorkspacesDir     string // absolute path to workspaces directory
 	DefaultVCS        string // "git" (default) or "jj" for remote clones
-	GitHubOrgs    []string
-	Sets          map[string][]string
+	GitHubOrgs        []string
+	Sets              map[string][]string
 }
 
 func Load(metarepoDir string) (*RepoSets, error) {

@@ -7,10 +7,10 @@ import (
 
 func TestResultParsing(t *testing.T) {
 	tests := []struct {
-		name           string
-		json           string
-		wantAttention  bool
-		wantErr        bool
+		name          string
+		json          string
+		wantAttention bool
+		wantErr       bool
 	}{
 		{
 			name:          "needs attention",

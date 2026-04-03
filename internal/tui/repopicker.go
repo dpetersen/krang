@@ -15,7 +15,7 @@ import (
 type pickerItemKind int
 
 const (
-	pickerItemSet  pickerItemKind = iota
+	pickerItemSet pickerItemKind = iota
 	pickerItemRepo
 )
 
@@ -27,13 +27,13 @@ type pickerItem struct {
 }
 
 type repoPicker struct {
-	title   string
-	items   []pickerItem
-	cursor  int // index into visibleIndices
-	styles  Styles
-	theme   Theme
-	filter  textinput.Model
-	filtering bool
+	title          string
+	items          []pickerItem
+	cursor         int // index into visibleIndices
+	styles         Styles
+	theme          Theme
+	filter         textinput.Model
+	filtering      bool
 	visibleIndices []int // maps visible position → items index
 }
 
@@ -323,7 +323,7 @@ func (p *repoPicker) view() string {
 type pickerTab int
 
 const (
-	pickerTabLocal  pickerTab = iota
+	pickerTabLocal pickerTab = iota
 	pickerTabRemote
 )
 

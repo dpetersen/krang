@@ -37,13 +37,13 @@ const (
 )
 
 type Task struct {
-	ID          string
-	Name        string
-	Prompt      string
-	State       TaskState
-	Attention   AttentionState
-	SessionID   string
-	Cwd         string
+	ID             string
+	Name           string
+	Prompt         string
+	State          TaskState
+	Attention      AttentionState
+	SessionID      string
+	Cwd            string
 	TmuxWindow     string
 	Summary        string
 	SummaryHash    string

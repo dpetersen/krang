@@ -270,4 +270,3 @@ func TestForkNonWorkspace(t *testing.T) {
 		t.Errorf("source task session_id changed from %q to %q", srcSessionID, sid)
 	}
 }
-

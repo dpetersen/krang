@@ -54,7 +54,7 @@ func TestBuildStylesBoldStyles(t *testing.T) {
 	styles := BuildStyles(ClassicTheme)
 
 	boldStyles := []struct {
-		name string
+		name  string
 		style lipgloss.Style
 	}{
 		{"Title", styles.Title},

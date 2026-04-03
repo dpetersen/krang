@@ -58,16 +58,16 @@ type activityPhase int
 
 const (
 	phaseIdle       activityPhase = iota
-	phaseWorking                        // UserPromptSubmit, SessionStart
-	phaseToolCalls                      // PostToolUse
-	phaseDone                           // Stop (done), TaskCompleted
-	phaseWaiting                        // Stop (waiting)
-	phaseError                          // StopFailure
-	phasePermission                     // PermissionRequest
+	phaseWorking                  // UserPromptSubmit, SessionStart
+	phaseToolCalls                // PostToolUse
+	phaseDone                     // Stop (done), TaskCompleted
+	phaseWaiting                  // Stop (waiting)
+	phaseError                    // StopFailure
+	phasePermission               // PermissionRequest
 )
 
 type sparklineBucket struct {
-	counts     [7]int        // indexed by activityPhase
+	counts      [7]int        // indexed by activityPhase
 	stickyPhase activityPhase // fill-forward state for empty buckets
 }
 

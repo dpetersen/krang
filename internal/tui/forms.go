@@ -98,4 +98,3 @@ func newImportForm(nameInUse func(string) bool, huhTheme *huh.Theme) (*huh.Form,
 
 	return form, result
 }
-

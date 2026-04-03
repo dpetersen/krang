@@ -226,7 +226,6 @@ func wordWrap(text string, width int) string {
 	return strings.TrimRight(result.String(), "\n")
 }
 
-
 func (m Model) renderHeader() string {
 	activeCt, parkedCt, dormantCt := 0, 0, 0
 	for _, t := range m.tasks {
@@ -1053,7 +1052,6 @@ func (m Model) renderDetailModal(t *db.Task) string {
 
 	return box.Render(content.String())
 }
-
 
 func (m Model) renderForkDialog() string {
 	src := m.forkSourceTask

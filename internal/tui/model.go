@@ -15,22 +15,22 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/huh"
 	"github.com/dpetersen/krang/internal/classify"
-	"github.com/dpetersen/krang/internal/github"
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/github"
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/proctree"
 	"github.com/dpetersen/krang/internal/summary"
 	"github.com/dpetersen/krang/internal/task"
-	"github.com/dpetersen/krang/internal/usage"
 	"github.com/dpetersen/krang/internal/tmux"
+	"github.com/dpetersen/krang/internal/usage"
 	"github.com/dpetersen/krang/internal/workspace"
 )
 
 type Model struct {
-	manager    *task.Manager
-	taskStore  *db.TaskStore
-	eventStore *db.EventStore
+	manager         *task.Manager
+	taskStore       *db.TaskStore
+	eventStore      *db.EventStore
 	hookEvents      <-chan hooks.HookEvent
 	summaryPipeline *summary.Pipeline
 	activeSession   string
@@ -38,11 +38,11 @@ type Model struct {
 	cfg             config.Config
 	styles          Styles
 	tasks           []db.Task
-	cursor     int
-	sortByPriority bool
-	mode       InputMode
-	width      int
-	height     int
+	cursor          int
+	sortByPriority  bool
+	mode            InputMode
+	width           int
+	height          int
 
 	filterInput textinput.Model
 	filterText  string
@@ -58,14 +58,14 @@ type Model struct {
 
 	repoSets *workspace.RepoSets
 
-	activeForm              *huh.Form
-	importFormResult        *importResult
-	activeWizard            *taskWizard
-	activeRepoPicker        *tabbedRepoPicker
-	remoteSearchGen         uint64
-	returnToPickerOnClone   bool
-	addReposTaskID          string
-	addReposWorkspaceDir    string
+	activeForm            *huh.Form
+	importFormResult      *importResult
+	activeWizard          *taskWizard
+	activeRepoPicker      *tabbedRepoPicker
+	remoteSearchGen       uint64
+	returnToPickerOnClone bool
+	addReposTaskID        string
+	addReposWorkspaceDir  string
 
 	workspaceProgressLines []string
 	wsProgress             *wsProgressState
@@ -75,9 +75,9 @@ type Model struct {
 	taskProcesses map[string]*proctree.TaskProcesses
 	subagents     map[string]map[string]string // taskID → agentID → agentType
 
-	pendingOps   map[string]string // taskID → operation label (e.g. "freezing...")
-	classifyGen  map[string]uint64 // taskID → generation counter for cancellation
-	spinner      spinner.Model
+	pendingOps    map[string]string // taskID → operation label (e.g. "freezing...")
+	classifyGen   map[string]uint64 // taskID → generation counter for cancellation
+	spinner       spinner.Model
 	windowIndexes map[string]string // tmux window ID → display index
 
 	windowStylesSynced bool
@@ -91,8 +91,8 @@ type Model struct {
 	paletteCursor int
 
 	// Fork dialog state.
-	forkNameInput textinput.Model
-	forkMode      int    // 0=independent, 1=shared
+	forkNameInput  textinput.Model
+	forkMode       int      // 0=independent, 1=shared
 	forkSourceTask *db.Task // task being forked
 
 	// Contested sessions: source session ID → fork workspace cwd.
@@ -106,7 +106,6 @@ type Model struct {
 	confirmUncommittedRepos []string
 	confirmUnpushedRepos    []string
 }
-
 
 func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
 	filterInput := textinput.New()
@@ -138,25 +137,25 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 
 	return Model{
-		manager:         manager,
-		taskStore:        taskStore,
-		eventStore:       eventStore,
-		hookEvents:       hookEvents,
-		summaryPipeline: summaryPipeline,
-		activeSession:   activeSession,
-		parkedSession:   parkedSession,
-		cfg:             cfg,
-		styles:          styles,
-		repoSets:        rs,
-		filterInput:     filterInput,
-		pendingOps:      make(map[string]string),
-		subagents:       make(map[string]map[string]string),
-		classifyGen:     make(map[string]uint64),
-		sparklineData:   make(map[string][]sparklineBucket),
-		usageCache:      make(map[string]*usage.UsageSummary),
-		usageLoading:    make(map[string]bool),
+		manager:           manager,
+		taskStore:         taskStore,
+		eventStore:        eventStore,
+		hookEvents:        hookEvents,
+		summaryPipeline:   summaryPipeline,
+		activeSession:     activeSession,
+		parkedSession:     parkedSession,
+		cfg:               cfg,
+		styles:            styles,
+		repoSets:          rs,
+		filterInput:       filterInput,
+		pendingOps:        make(map[string]string),
+		subagents:         make(map[string]map[string]string),
+		classifyGen:       make(map[string]uint64),
+		sparklineData:     make(map[string][]sparklineBucket),
+		usageCache:        make(map[string]*usage.UsageSummary),
+		usageLoading:      make(map[string]bool),
 		contestedSessions: make(map[string]string),
-		spinner:         s,
+		spinner:           s,
 	}
 }
 
@@ -914,7 +913,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-
 	case "s":
 		m.sortByPriority = !m.sortByPriority
 		m.cursor = 0
@@ -961,7 +959,6 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-
 func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -980,7 +977,6 @@ func (m Model) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	return m, cmd
 }
-
 
 func (m Model) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -1086,7 +1082,6 @@ func (m Model) generateSitRep() tea.Msg {
 
 	return SitRepResultMsg{Content: content}
 }
-
 
 func (m Model) handleConfirmRelaunchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
@@ -1965,15 +1960,15 @@ func (m Model) startFork(name string) (tea.Model, tea.Cmd) {
 
 	m.mode = ModeWorkspaceProgress
 	m.wsProgress = &wsProgressState{
-		Title:           fmt.Sprintf("Forking %q → %q", src.Name, name),
-		Repos:           entries,
-		Forking:         true,
-		ForkMode:        modeName,
-		SourceTaskID:    src.ID,
-		SourceSessionID: src.SessionID,
-		SourceCwd:       sourceSessionCwd(src),
-		TaskName:        name,
-		TaskFlags:       src.Flags,
+		Title:              fmt.Sprintf("Forking %q → %q", src.Name, name),
+		Repos:              entries,
+		Forking:            true,
+		ForkMode:           modeName,
+		SourceTaskID:       src.ID,
+		SourceSessionID:    src.SessionID,
+		SourceCwd:          sourceSessionCwd(src),
+		TaskName:           name,
+		TaskFlags:          src.Flags,
 		TaskSandboxProfile: src.SandboxProfile,
 	}
 

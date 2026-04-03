@@ -321,8 +321,8 @@ func TestCollectAllFiltersYoungProcesses(t *testing.T) {
 	snapshot := []rawProcess{
 		{PID: 100, PPID: 1, Elapsed: 10 * time.Minute, Command: "/bin/bash"},
 		{PID: 200, PPID: 100, Elapsed: 10 * time.Minute, Command: "claude"},
-		{PID: 300, PPID: 200, Elapsed: 5 * time.Second, Command: "grep -r foo"},         // too young
-		{PID: 400, PPID: 200, Elapsed: 2 * time.Minute, Command: "gh run watch 12345"},   // old enough
+		{PID: 300, PPID: 200, Elapsed: 5 * time.Second, Command: "grep -r foo"},        // too young
+		{PID: 400, PPID: 200, Elapsed: 2 * time.Minute, Command: "gh run watch 12345"}, // old enough
 	}
 
 	got := collectAllFromSnapshot(snapshot, map[string]int{"task": 100})

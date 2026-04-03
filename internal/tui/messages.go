@@ -99,16 +99,16 @@ type repoCloneEntry struct {
 
 // wsProgressState holds the full state for the workspace progress modal.
 type wsProgressState struct {
-	Title        string
-	Repos        []repoCloneEntry
-	LogLines     []string // scrollable log output
-	LogOffset    int      // scroll offset from bottom (0 = pinned to bottom)
-	Done         bool
-	Cancelled    bool
-	Err          error
-	LaunchTask   bool // true if we should launch Claude after cloning
-	Destroying   bool // true if this is a destroy/complete operation
-	StoppingDone bool // true once Claude has been stopped
+	Title              string
+	Repos              []repoCloneEntry
+	LogLines           []string // scrollable log output
+	LogOffset          int      // scroll offset from bottom (0 = pinned to bottom)
+	Done               bool
+	Cancelled          bool
+	Err                error
+	LaunchTask         bool // true if we should launch Claude after cloning
+	Destroying         bool // true if this is a destroy/complete operation
+	StoppingDone       bool // true once Claude has been stopped
 	TaskName           string
 	TaskID             string
 	TaskFlags          db.TaskFlags
@@ -116,11 +116,11 @@ type wsProgressState struct {
 	WorkspaceDir       string
 
 	// Fork-specific fields.
-	Forking        bool   // true if this is a fork operation
-	ForkMode       string // "independent" or "shared"
-	SourceTaskID   string // source task's ID (for lineage tracking)
+	Forking         bool   // true if this is a fork operation
+	ForkMode        string // "independent" or "shared"
+	SourceTaskID    string // source task's ID (for lineage tracking)
 	SourceSessionID string // source task's session ID (for file copy)
-	SourceCwd      string // source task's cwd (for session file copy)
+	SourceCwd       string // source task's cwd (for session file copy)
 }
 
 // wsDirCreatedMsg signals that the workspace directory was created.

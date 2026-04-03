@@ -147,11 +147,11 @@ var (
 const DefaultThemeName = "catppuccin-mocha"
 
 var themeRegistry = map[string]Theme{
-	"classic":               ClassicTheme,
-	"catppuccin-latte":      CatppuccinLatteTheme,
-	"catppuccin-frappe":     CatppuccinFrappeTheme,
-	"catppuccin-macchiato":  CatppuccinMacchiatoTheme,
-	"catppuccin-mocha":      CatppuccinMochaTheme,
+	"classic":              ClassicTheme,
+	"catppuccin-latte":     CatppuccinLatteTheme,
+	"catppuccin-frappe":    CatppuccinFrappeTheme,
+	"catppuccin-macchiato": CatppuccinMacchiatoTheme,
+	"catppuccin-mocha":     CatppuccinMochaTheme,
 }
 
 func ResolveTheme(name string) (Theme, error) {
