@@ -114,51 +114,6 @@ require a relaunch to take effect):
 | Skip Permissions | Pass `--dangerously-skip-permissions` to claude |
 | Debug | Export `KRANG_DEBUG=1` for hook relay logging (see Debugging) |
 
-## Configuration
-
-Krang works without any configuration. All config is optional.
-
-There are two levels of configuration:
-
-- **User config** (`~/.config/krang/config.yaml`) — global
-  preferences like theme, sandbox profiles, and default VCS.
-- **Project config** (`krang.yaml` in your working directory) —
-  per-project workspace settings like repo layout, repo sets, and
-  VCS overrides. See the [Workspaces](#workspaces) section.
-
-### config.yaml
-
-All fields are optional:
-
-```yaml
-theme: catppuccin-mocha
-default_vcs: jj
-github_orgs:
-  - myorg
-window_colors_enabled: true
-window_color_permission: red
-window_color_waiting: yellow
-```
-
-| Field | Description |
-|-------|-------------|
-| `theme` | UI theme (see Themes section) |
-| `default_vcs` | VCS used when cloning remote repos: `"git"` (default) or `"jj"`. For existing local repos, krang auto-detects from the repo itself |
-| `github_orgs` | GitHub orgs for the Remote tab in the repo picker. Merged with orgs from the project-level `krang.yaml` |
-| `sandboxes` | Named sandbox profiles (see [sandboxing](docs/sandboxing.md)) |
-| `default_sandbox` | Name of the sandbox profile to use by default |
-| `window_colors_enabled` | Enable tmux window color based on attention state |
-| `window_color_permission` | Color for permission-blocked windows |
-| `window_color_waiting` | Color for waiting windows |
-
-### Sandboxing
-
-Krang can run each Claude session inside a sandbox for restricted
-filesystem and network access. Named profiles let you define
-different access levels for different kinds of tasks. See
-[docs/sandboxing.md](docs/sandboxing.md) for setup, requirements,
-and a detailed safehouse walkthrough.
-
 ## Workspaces
 
 Workspaces give each task its own isolated directory with VCS-linked
@@ -234,36 +189,6 @@ sets:
 The repo picker shows sets as toggle-able headers — toggling a set
 selects all its members. Individual repos can still be toggled
 independently.
-
-### krang.yaml Reference
-
-```yaml
-# Required to enable workspaces. Without this, krang uses the CWD
-# picker regardless of other settings.
-workspace_strategy: single_repo  # or multi_repo
-
-# Directory containing source repos (relative to krang.yaml).
-# Default: "repos"
-repos_dir: repos
-
-# Directory where workspaces are created (relative to krang.yaml).
-# Default: "workspaces"
-workspaces_dir: workspaces
-
-# Default VCS for repos without .jj/ directory. "git" or "jj".
-# Overrides config.yaml's default_vcs for this project.
-default_vcs: jj
-
-# GitHub orgs for the Remote tab. Merged with config.yaml orgs.
-github_orgs:
-  - myorg
-
-# Named groups of repos (multi_repo only). Optional.
-sets:
-  backend:
-    - api-server
-    - web-app
-```
 
 ### VCS Behaviors
 
@@ -369,6 +294,79 @@ This matches the behavior of Claude Code's built-in
 If you're using sandboxing with workspaces, additional filesystem
 access is needed for VCS operations and config file walking. See
 [docs/sandboxing.md](docs/sandboxing.md#workspace-setup) for details.
+
+## Configuration
+
+Krang works without any configuration. All config is optional.
+
+### config.yaml
+
+User-level config at `~/.config/krang/config.yaml`:
+
+```yaml
+# UI theme. Available: catppuccin-mocha (default), catppuccin-latte,
+# catppuccin-frappe, catppuccin-macchiato, classic.
+theme: catppuccin-mocha
+
+# VCS used when cloning remote repos from the Remote tab.
+# "git" (default) or "jj". For existing local repos, krang
+# auto-detects from .jj/ or .git/ on disk.
+default_vcs: jj
+
+# GitHub orgs for the Remote tab in the repo picker. Merged with
+# orgs from the project-level krang.yaml.
+github_orgs:
+  - myorg
+
+# Named sandbox profiles. See docs/sandboxing.md for details.
+sandboxes:
+  default:
+    type: command
+    command: "safehouse --env-pass KRANG_STATEFILE --env-pass KRANG_DEBUG"
+
+# Sandbox profile to use by default when creating tasks.
+default_sandbox: default
+
+# Tmux window color based on attention state. Default: false.
+window_colors_enabled: true
+
+# Colors for attention-colored windows. Any tmux color name.
+window_color_permission: red
+window_color_waiting: yellow
+```
+
+### krang.yaml
+
+Project-level config at the root of your working directory. Only
+needed if you want workspaces (see [Workspaces](#workspaces)):
+
+```yaml
+# Required to enable workspaces. Without this, krang uses the CWD
+# picker regardless of other settings.
+workspace_strategy: single_repo  # or multi_repo
+
+# Directory containing source repos (relative to krang.yaml).
+# Default: "repos"
+repos_dir: repos
+
+# Directory where workspaces are created (relative to krang.yaml).
+# Default: "workspaces"
+workspaces_dir: workspaces
+
+# Default VCS for repos without .jj/ directory. "git" or "jj".
+# Overrides config.yaml's default_vcs for this project.
+default_vcs: jj
+
+# GitHub orgs for the Remote tab. Merged with config.yaml orgs.
+github_orgs:
+  - myorg
+
+# Named groups of repos (multi_repo only). Optional.
+sets:
+  backend:
+    - api-server
+    - web-app
+```
 
 ## File Locations
 
