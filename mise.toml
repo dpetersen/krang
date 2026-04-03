@@ -2,8 +2,17 @@
 description = "Build the krang binary"
 run = "go build -ldflags \"-s -w -X github.com/dpetersen/krang/cmd.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)\" -o krang ."
 
+[tasks.fmt]
+description = "Format Go source files"
+run = "gofmt -w ."
+
+[tasks.check]
+description = "Check Go formatting"
+run = "test -z \"$(gofmt -l .)\""
+
 [tasks.test]
 description = "Run unit tests"
+depends = ["check"]
 run = "go test ./..."
 
 [tasks."test:integration"]
