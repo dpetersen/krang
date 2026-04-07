@@ -23,7 +23,7 @@ func TestBuildClaudeCommandDefaults(t *testing.T) {
 
 func TestBuildClaudeCommandResume(t *testing.T) {
 	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, true, "safehouse", testStateFile, sandboxTemplateData{}, "")
-	expected := statePrefix + "safehouse claude --resume 'my-task'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
+	expected := statePrefix + "safehouse claude --resume 'sess-123'; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
 	}
@@ -49,19 +49,19 @@ func TestBuildClaudeCommandSkipPermissions(t *testing.T) {
 func TestBuildClaudeCommandAllFlags(t *testing.T) {
 	flags := db.TaskFlags{DangerouslySkipPermissions: true}
 	cmd := buildClaudeCommand("sess-123", "my-task", flags, true, "", testStateFile, sandboxTemplateData{}, "")
-	expected := statePrefix + "claude --resume 'my-task' --dangerously-skip-permissions; echo ''; echo 'Claude exited. Press Enter to close.'; read"
+	expected := statePrefix + "claude --resume 'sess-123' --dangerously-skip-permissions; echo ''; echo 'Claude exited. Press Enter to close.'; read"
 	if cmd != expected {
 		t.Errorf("expected:\n  %s\ngot:\n  %s", expected, cmd)
 	}
 }
 
-func TestBuildClaudeCommandResumeNoName(t *testing.T) {
+func TestBuildClaudeCommandResumeUsesSessionID(t *testing.T) {
 	cmd := buildClaudeCommand("sess-123", "my-task", db.TaskFlags{}, true, "safehouse", testStateFile, sandboxTemplateData{}, "")
-	if expected := "safehouse claude --resume 'my-task'"; !contains(cmd, expected) {
-		t.Errorf("resume command should use name, not session ID:\n  %s", cmd)
+	if expected := "safehouse claude --resume 'sess-123'"; !contains(cmd, expected) {
+		t.Errorf("resume command should use session ID:\n  %s", cmd)
 	}
-	if contains(cmd, "sess-123") {
-		t.Errorf("resume command should not contain session ID:\n  %s", cmd)
+	if contains(cmd, "my-task") {
+		t.Errorf("resume command should not contain task name:\n  %s", cmd)
 	}
 }
 

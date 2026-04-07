@@ -105,7 +105,7 @@ func buildClaudeCommand(sessionID, name string, flags db.TaskFlags, resume bool,
 		cmd += " --resume " + shellQuote(forkFrom) + " --fork-session"
 		cmd += " --name " + shellQuote(name)
 	} else if resume {
-		cmd += " --resume " + shellQuote(name)
+		cmd += " --resume " + shellQuote(sessionID)
 	} else {
 		cmd += " --session-id " + sessionID
 		cmd += " --name " + shellQuote(name)
