@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/huh"
+	"github.com/dpetersen/krang/internal/ccusage"
 	"github.com/dpetersen/krang/internal/classify"
 	"github.com/dpetersen/krang/internal/config"
 	"github.com/dpetersen/krang/internal/db"
@@ -88,6 +89,9 @@ type Model struct {
 	usageCache   map[string]*usage.UsageSummary
 	usageLoading map[string]bool
 
+	costCache   map[string]*ccusage.SessionCost
+	costLoading map[string]bool
+
 	paletteCursor int
 
 	// Fork dialog state.
@@ -154,6 +158,8 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		sparklineData:     make(map[string][]sparklineBucket),
 		usageCache:        make(map[string]*usage.UsageSummary),
 		usageLoading:      make(map[string]bool),
+		costCache:         make(map[string]*ccusage.SessionCost),
+		costLoading:       make(map[string]bool),
 		contestedSessions: make(map[string]string),
 		spinner:           s,
 	}
@@ -776,6 +782,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case costResultMsg:
+		delete(m.costLoading, msg.TaskID)
+		if msg.Err != nil {
+			m.appendDebugLog(fmt.Sprintf("[%s] cost: %s: %v",
+				time.Now().Format("15:04:05"), msg.TaskID, msg.Err))
+		} else if msg.Cost != nil {
+			m.costCache[msg.TaskID] = msg.Cost
+		}
+		return m, nil
+
 	case pendingOpDoneMsg:
 		delete(m.pendingOps, msg.TaskID)
 		return m, m.refreshTasks
@@ -909,7 +925,7 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		if t := m.selectedTask(); t != nil {
 			m.mode = ModeDetail
-			return m, m.fetchUsageIfNeeded(t)
+			return m, tea.Batch(m.fetchUsageIfNeeded(t), m.fetchCostIfNeeded(t))
 		}
 		return m, nil
 
@@ -2645,6 +2661,20 @@ func (m Model) fetchUsageIfNeeded(t *db.Task) tea.Cmd {
 	return func() tea.Msg {
 		summary, err := usage.ParseTranscript(path)
 		return usageResultMsg{TaskID: taskID, Usage: summary, Err: err}
+	}
+}
+
+func (m Model) fetchCostIfNeeded(t *db.Task) tea.Cmd {
+	if t.SessionID == "" || m.costCache[t.ID] != nil || m.costLoading[t.ID] {
+		return nil
+	}
+	m.costLoading[t.ID] = true
+	taskID := t.ID
+	sessionID := t.SessionID
+	version := m.cfg.CCUsageVersion
+	return func() tea.Msg {
+		cost, err := ccusage.FetchSessionCost(sessionID, version)
+		return costResultMsg{TaskID: taskID, Cost: cost, Err: err}
 	}
 }
 

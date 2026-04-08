@@ -1206,6 +1206,15 @@ func (m Model) renderUsageSection(t *db.Task, modalWidth int) string {
 		b.WriteString("\n")
 	}
 
+	// Cost from ccusage (async, may still be loading).
+	if m.costLoading[t.ID] {
+		b.WriteString(m.styles.ModalContent.Render("  cost: loading..."))
+		b.WriteString("\n")
+	} else if cost := m.costCache[t.ID]; cost != nil {
+		b.WriteString(m.styles.ModalContent.Render("  cost: " + usage.FormatCost(cost.TotalCost)))
+		b.WriteString("\n")
+	}
+
 	return b.String()
 }
 

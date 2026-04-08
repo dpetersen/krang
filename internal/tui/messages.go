@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/dpetersen/krang/internal/ccusage"
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/proctree"
@@ -217,5 +218,11 @@ type remoteCloneDoneMsg struct {
 type usageResultMsg struct {
 	TaskID string
 	Usage  *usage.UsageSummary
+	Err    error
+}
+
+type costResultMsg struct {
+	TaskID string
+	Cost   *ccusage.SessionCost
 	Err    error
 }

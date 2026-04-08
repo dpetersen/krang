@@ -20,30 +20,19 @@ type TokenSnapshot struct {
 	CacheRead   int
 }
 
-// Cost returns the estimated cost of this single snapshot.
-func (s TokenSnapshot) Cost() float64 {
-	p := pricingForModel(s.Model)
-	return tokenCost(s.Input, p.Input) +
-		tokenCost(s.Output, p.Output) +
-		tokenCost(s.CacheRead, p.CacheRead) +
-		tokenCost(s.CacheCreate, p.CacheCreate)
-}
-
 // ModelUsage aggregates token counts for a single model.
 type ModelUsage struct {
 	Input       int
 	Output      int
 	CacheCreate int
 	CacheRead   int
-	Cost        float64
 }
 
 // UsageSummary holds parsed usage for an entire session.
 type UsageSummary struct {
-	Snapshots     []TokenSnapshot       // chronological
-	TotalByModel  map[string]ModelUsage // keyed by model ID
-	EstimatedCost float64
-	Err           error // non-nil if parsing failed
+	Snapshots    []TokenSnapshot       // chronological
+	TotalByModel map[string]ModelUsage // keyed by model ID
+	Err          error                 // non-nil if parsing failed
 }
 
 // ParseTranscript reads a Claude Code transcript JSONL and extracts token
@@ -93,14 +82,6 @@ func ParseTranscript(path string) (*UsageSummary, error) {
 	sort.Slice(summary.Snapshots, func(i, j int) bool {
 		return summary.Snapshots[i].Timestamp.Before(summary.Snapshots[j].Timestamp)
 	})
-
-	var total float64
-	for model, mu := range summary.TotalByModel {
-		mu.Cost = mu.computeCost(model)
-		summary.TotalByModel[model] = mu
-		total += mu.Cost
-	}
-	summary.EstimatedCost = total
 
 	return summary, nil
 }

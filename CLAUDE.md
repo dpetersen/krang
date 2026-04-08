@@ -9,6 +9,7 @@ TUI task orchestrator for managing multiple Claude Code sessions via tmux.
 - **Claude Code command hooks** via relay script that reads `KRANG_STATEFILE` for the dynamic port
 - **AI summaries** via `claude -p --model haiku` with structured JSON output (includes current summary in prompt to reduce churn)
 - **Attention classification** via Haiku on Stop events to distinguish "done" vs "waiting"
+- **Cost display** via [ccusage](https://github.com/ryoppippi/ccusage) (`npx ccusage`); optional, only shown when npx is available
 - Claude spawned via named sandbox profiles (configurable per-task)
 
 ## Multi-Instance Support
@@ -23,7 +24,7 @@ Multiple krang instances can run simultaneously for different working directorie
 
 | Path | Purpose | XDG category |
 |------|---------|-------------|
-| `~/.config/krang/config.yaml` | Named sandbox profiles, window colors, attention classification, default VCS, GitHub orgs | Config |
+| `~/.config/krang/config.yaml` | Named sandbox profiles, window colors, attention classification, default VCS, GitHub orgs, ccusage version | Config |
 | `~/.config/krang/hooks/relay.sh` | Static relay script (Claude settings.json points here) | Config |
 | `~/.local/share/krang/instances/…/krang.db` | Per-instance SQLite database | Data |
 | `~/.local/state/krang/instances/…/krang-state.json` | Per-instance port file (ephemeral, exists while running) | State |
@@ -80,6 +81,7 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 - `internal/tmux/` — session/window/pane operations via `tmux` CLI
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
 - `internal/hooks/` — HTTP server for Claude Code hook events, relay script + settings.json installer
+- `internal/ccusage/` — per-session cost via `npx ccusage` (optional, requires npx)
 - `internal/classify/` — Haiku-based attention classification (done vs waiting) on Stop events
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
 - `internal/proctree/` — process tree walking, noise/age filtering, leaf-only display for background child process awareness

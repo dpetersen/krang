@@ -55,6 +55,7 @@ leaves everything else alone.
 
 - tmux
 - Claude Code CLI (`claude`)
+- npx (optional) — enables per-session cost display via [ccusage](https://github.com/ryoppippi/ccusage)
 
 ## Installation
 
@@ -333,6 +334,11 @@ window_colors_enabled: true
 # Colors for attention-colored windows. Any tmux color name.
 window_color_permission: red
 window_color_waiting: yellow
+
+# Override the pinned ccusage version used for cost display.
+# Requires npx on PATH. Omit to use the built-in default.
+# ccusage_version: latest
+
 ```
 
 ### krang.yaml

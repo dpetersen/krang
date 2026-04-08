@@ -24,6 +24,7 @@ type Config struct {
 	WindowColorsEnabled   *bool                     `yaml:"window_colors_enabled,omitempty"`
 	WindowColorPermission string                    `yaml:"window_color_permission,omitempty"`
 	WindowColorWaiting    string                    `yaml:"window_color_waiting,omitempty"`
+	CCUsageVersion        string                    `yaml:"ccusage_version,omitempty"`
 }
 
 const (

@@ -67,19 +67,13 @@ Task forking is implemented with two workspace modes (independent and shared). S
 
 ## Discarded / Deferred Ideas
 
-### Estimated cost tracking
+### Cost tracking via ccusage
 
-Token usage display is implemented in the detail modal (parsing transcript JSONL files for per-API-call usage), but dollar cost estimation was dropped.
+Previously attempted with hardcoded per-model pricing, which was dropped because enterprise pricing differs significantly from published API rates.
 
-**What we found:**
-- Claude Code hook events do **not** include token usage data. The hooks provide session IDs, event names, tool names, etc., but nothing about tokens or billing.
-- The transcript JSONL files (`~/.claude/projects/<project>/<session-id>.jsonl`) **do** contain full Anthropic API usage on every `assistant` message: `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, plus the model ID.
-- Transcripts write multiple entries per API response (streaming updates), so entries must be deduplicated by `message.id` to avoid double-counting.
-- Subagent transcripts are stored separately in `<session-id>/subagents/*.jsonl` and contain only the subagent's messages (no overlap with the main transcript).
+Now delegated to [ccusage](https://github.com/ryoppippi/ccusage) via `npx`. The detail modal shows per-session cost when npx is available. The ccusage version is pinned in the binary (`ccusage.DefaultVersion`) and can be overridden per-user via `ccusage_version` in config.yaml.
 
-**Why cost estimation doesn't work well:**
-- Enterprise pricing differs significantly from published API rates (~5x cheaper for Opus in at least one case), making hard-coded rates misleading.
-- There's no programmatic API to query actual billing rates.
-- The Claude Code `/cost` command shows accurate per-session costs, but that data isn't exposed via hooks or any external interface.
-
-**Possible future path:** The `claude-cost` CLI plugin (`~/.claude/plugins/`) stores cost data somewhere locally. If that storage format can be reverse-engineered or if the plugin exposes an API, it could provide accurate cost data without hard-coding rates. Worth revisiting if the plugin ecosystem matures.
+**Background:**
+- Claude Code hook events do **not** include token usage data.
+- Transcript JSONL files contain full API usage but not dollar costs.
+- ccusage reads these same transcripts and applies accurate pricing.

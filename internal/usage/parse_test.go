@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func writeJSONL(t *testing.T, path string, lines ...string) {
@@ -46,17 +45,9 @@ func TestParseTranscriptBasic(t *testing.T) {
 	if opus.Input != 1000 || opus.Output != 200 {
 		t.Errorf("opus tokens: got input=%d output=%d", opus.Input, opus.Output)
 	}
-	if opus.Cost <= 0 {
-		t.Error("opus cost should be positive")
-	}
-
 	haiku := summary.TotalByModel["claude-haiku-4-5-20251001"]
 	if haiku.Input != 500 || haiku.Output != 100 {
 		t.Errorf("haiku tokens: got input=%d output=%d", haiku.Input, haiku.Output)
-	}
-
-	if summary.EstimatedCost <= 0 {
-		t.Error("total cost should be positive")
 	}
 
 	if !summary.Snapshots[0].Timestamp.Before(summary.Snapshots[1].Timestamp) {
@@ -155,22 +146,6 @@ func TestParseTranscriptSkipsZeroUsage(t *testing.T) {
 	}
 }
 
-func TestCostCalculation(t *testing.T) {
-	mu := ModelUsage{
-		Input:       1_000_000,
-		Output:      100_000,
-		CacheCreate: 0,
-		CacheRead:   0,
-	}
-
-	// Opus: $15/M input + $75/M output
-	cost := mu.computeCost("claude-opus-4-6")
-	expected := 15.0 + 7.5 // $15 for 1M input + $7.50 for 100K output
-	if cost < expected-0.01 || cost > expected+0.01 {
-		t.Errorf("expected ~$%.2f, got $%.4f", expected, cost)
-	}
-}
-
 func TestFormatTokenCount(t *testing.T) {
 	tests := []struct {
 		input    int
@@ -187,21 +162,5 @@ func TestFormatTokenCount(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("FormatTokenCount(%d) = %q, want %q", tt.input, got, tt.expected)
 		}
-	}
-}
-
-func TestSnapshotCost(t *testing.T) {
-	snap := TokenSnapshot{
-		Timestamp:   time.Now(),
-		Model:       "claude-haiku-4-5-20251001",
-		Input:       1_000_000,
-		Output:      0,
-		CacheCreate: 0,
-		CacheRead:   0,
-	}
-	// Haiku: $0.80/M input
-	cost := snap.Cost()
-	if cost < 0.79 || cost > 0.81 {
-		t.Errorf("expected ~$0.80, got $%.4f", cost)
 	}
 }
