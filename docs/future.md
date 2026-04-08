@@ -65,21 +65,52 @@ Task forking is implemented with two workspace modes (independent and shared). S
 - **Linked mode** — jj parent-child workspace (`workspace add -r @`) for auto-rebase from source. Currently blocked by jj's stale workspace handling losing working copy changes on concurrent edits (jj-vcs/jj#1310). Worth revisiting if jj improves this.
 - **Fork from completed tasks** — conversation-only fork (no workspace to copy). Would need session files to still be available.
 
+## Multi-Agent Support (Pi, etc.)
+
+Krang currently assumes Claude Code as the agent runner, but the architecture
+could support other coding agents. The main integration point is the hook
+event system — any agent that can report lifecycle events (session start/stop,
+tool use, permission requests) to krang's HTTP server would work.
+
+**Pi (badlogic/pi-mono):**
+
+Pi has a rich event system but no shell-command hooks like Claude Code. The
+most practical integration path is a **TypeScript extension** that lives in
+Pi's extension directory (`~/.pi/agent/extensions/` or `.pi/extensions/`)
+and POSTs events to krang's HTTP server, mirroring the relay script pattern.
+
+Pi's events map well to krang's hook events:
+
+| Pi Event | Krang Equivalent |
+|---|---|
+| `session_start` / `session_shutdown` | `SessionStart` / `SessionEnd` |
+| `tool_call` (can block) | `PermissionRequest` / `PreToolUse` |
+| `tool_execution_start/end` | `PreToolUse` / `PostToolUse` |
+| `tool_result` | `PostToolUse` |
+| `input` | `UserPromptSubmit` |
+| `turn_start` / `turn_end` | (no direct equivalent) |
+
+Pi also has an RPC mode (`pi --mode rpc`) with JSONL over stdin/stdout, but
+the extension approach requires fewer changes to krang's architecture since
+it preserves the "agent runs in a tmux window, events arrive via HTTP" model.
+
+**Generalization work needed:**
+
+- Abstract the hook event types so they're not Claude-specific
+- Make the relay script / extension installable per-agent
+- Agent-specific launch commands (already partially handled by sandbox
+  profiles, but the base command itself needs to be configurable)
+- Summary and classification prompts may need agent-specific tuning
+
 ## Discarded / Deferred Ideas
 
-### Estimated cost tracking
+### Cost tracking via ccusage
 
-Token usage display is implemented in the detail modal (parsing transcript JSONL files for per-API-call usage), but dollar cost estimation was dropped.
+Previously attempted with hardcoded per-model pricing, which was dropped because enterprise pricing differs significantly from published API rates.
 
-**What we found:**
-- Claude Code hook events do **not** include token usage data. The hooks provide session IDs, event names, tool names, etc., but nothing about tokens or billing.
-- The transcript JSONL files (`~/.claude/projects/<project>/<session-id>.jsonl`) **do** contain full Anthropic API usage on every `assistant` message: `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, plus the model ID.
-- Transcripts write multiple entries per API response (streaming updates), so entries must be deduplicated by `message.id` to avoid double-counting.
-- Subagent transcripts are stored separately in `<session-id>/subagents/*.jsonl` and contain only the subagent's messages (no overlap with the main transcript).
+Now delegated to [ccusage](https://github.com/ryoppippi/ccusage) via `npx`. The detail modal shows per-session cost when npx is available. The ccusage version is pinned in the binary (`ccusage.DefaultVersion`) and can be overridden per-user via `ccusage_version` in config.yaml.
 
-**Why cost estimation doesn't work well:**
-- Enterprise pricing differs significantly from published API rates (~5x cheaper for Opus in at least one case), making hard-coded rates misleading.
-- There's no programmatic API to query actual billing rates.
-- The Claude Code `/cost` command shows accurate per-session costs, but that data isn't exposed via hooks or any external interface.
-
-**Possible future path:** The `claude-cost` CLI plugin (`~/.claude/plugins/`) stores cost data somewhere locally. If that storage format can be reverse-engineered or if the plugin exposes an API, it could provide accurate cost data without hard-coding rates. Worth revisiting if the plugin ecosystem matures.
+**Background:**
+- Claude Code hook events do **not** include token usage data.
+- Transcript JSONL files contain full API usage but not dollar costs.
+- ccusage reads these same transcripts and applies accurate pricing.
