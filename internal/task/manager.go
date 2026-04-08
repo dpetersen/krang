@@ -523,10 +523,19 @@ func (m *Manager) gracefulCloseWindow(task *db.Task) error {
 		_ = m.events.Log(task.ID, "shutdown_warning", "no claude child process found")
 	}
 
+	// After SIGINT, wait for the Claude child process to exit, then
+	// send Enter to dismiss the trailing "read" prompt that keeps
+	// the tmux pane alive for debugging startup failures.
+	enterSent := false
 	deadline := time.Now().Add(gracefulShutdownTimeout)
 	for time.Now().Before(deadline) {
 		if !tmux.WindowExists(task.TmuxWindow) {
 			return nil
+		}
+		if !enterSent && findClaudeChild(shellPID) == 0 {
+			// Claude exited — shell is on the "read" prompt.
+			_ = tmux.SendEnter(task.TmuxWindow)
+			enterSent = true
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
@@ -574,22 +583,43 @@ func (m *Manager) shutdownClaudeForRelaunch(task *db.Task) {
 	_ = tmux.KillWindow(task.TmuxWindow)
 }
 
-// findClaudeChild looks for a claude/node process that is a child of
-// the given shell PID.
-func findClaudeChild(shellPID int) int {
-	out, err := exec.Command("pgrep", "-P", fmt.Sprintf("%d", shellPID)).Output()
+// childPIDs returns the PIDs of all direct children of the given process.
+func childPIDs(pid int) []int {
+	out, err := exec.Command("pgrep", "-P", fmt.Sprintf("%d", pid)).Output()
 	if err != nil {
+		return nil
+	}
+
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		var child int
+		if _, err := fmt.Sscanf(line, "%d", &child); err != nil {
+			continue
+		}
+		pids = append(pids, child)
+	}
+	return pids
+}
+
+// findClaudeChild walks the process tree from the shell PID through
+// single-child intermediaries (e.g. safehouse) to find the Claude
+// process. Stops when a process has zero or multiple children (the
+// Claude main process has worker children). Falls back to the first
+// direct child of the shell if the tree can't be walked deeper.
+func findClaudeChild(shellPID int) int {
+	children := childPIDs(shellPID)
+	if len(children) == 0 {
 		return 0
 	}
 
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		var pid int
-		if _, err := fmt.Sscanf(line, "%d", &pid); err != nil {
-			continue
+	pid := children[0]
+	for {
+		grandchildren := childPIDs(pid)
+		if len(grandchildren) != 1 {
+			return pid
 		}
-		return pid
+		pid = grandchildren[0]
 	}
-	return 0
 }
 
 func (m *Manager) Focus(taskID string) error {

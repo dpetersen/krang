@@ -30,6 +30,14 @@ func SendKeys(windowID, keys string) error {
 	return nil
 }
 
+func SendEnter(windowID string) error {
+	cmd := exec.Command("tmux", "send-keys", "-t", windowID, "Enter")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("sending enter to %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 func WindowExists(windowID string) bool {
 	cmd := exec.Command(
 		"tmux", "display-message",
