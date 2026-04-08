@@ -20,7 +20,7 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
-const gracefulShutdownTimeout = 5 * time.Second
+const gracefulShutdownTimeout = 15 * time.Second
 
 type Manager struct {
 	tasks           *db.TaskStore
@@ -348,21 +348,23 @@ func (m *Manager) Dormify(taskID string) error {
 		return fmt.Errorf("task %s cannot be dormified (state: %s)", task.Name, task.State)
 	}
 
-	// Update state first so reconcile doesn't race us.
-	if err := m.tasks.UpdateState(task.ID, db.StateDormant); err != nil {
-		return fmt.Errorf("dormify state update: %w", err)
-	}
-
 	for _, session := range []string{m.activeSession, m.parkedSession} {
 		for _, cID := range tmux.FindCompanions(session, task.Name) {
 			_ = tmux.KillWindow(cID)
 		}
 	}
 
+	// Kill the window before updating state. If the window can't be
+	// killed, the task should not transition to dormant.
 	if task.TmuxWindow != "" {
-		m.gracefulCloseWindow(task)
+		if err := m.gracefulCloseWindow(task); err != nil {
+			return fmt.Errorf("dormify close window: %w", err)
+		}
 	}
 
+	if err := m.tasks.UpdateState(task.ID, db.StateDormant); err != nil {
+		return fmt.Errorf("dormify state update: %w", err)
+	}
 	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
 		return fmt.Errorf("dormify clear window: %w", err)
 	}
@@ -475,6 +477,14 @@ func (m *Manager) Complete(taskID string) error {
 		return fmt.Errorf("task not found: %s", taskID)
 	}
 
+	// Kill the window before updating state. If the window can't be
+	// killed, the task should not transition to completed.
+	if task.TmuxWindow != "" {
+		if err := m.gracefulCloseWindow(task); err != nil {
+			return fmt.Errorf("closing window: %w", err)
+		}
+	}
+
 	if err := m.tasks.UpdateState(task.ID, db.StateCompleted); err != nil {
 		return err
 	}
@@ -485,22 +495,24 @@ func (m *Manager) Complete(taskID string) error {
 		return err
 	}
 
-	if task.TmuxWindow != "" {
-		m.gracefulCloseWindow(task)
-	}
-
 	return nil
 }
 
 // gracefulCloseWindow finds the Claude process in the tmux pane, sends
 // SIGINT for graceful shutdown (triggers SessionEnd hooks), waits for
 // the window to close, and falls back to kill-window if it doesn't.
-func (m *Manager) gracefulCloseWindow(task *db.Task) {
+// Returns an error if the window could not be closed.
+func (m *Manager) gracefulCloseWindow(task *db.Task) error {
 	shellPID, err := tmux.PanePID(task.TmuxWindow)
 	if err != nil {
 		_ = m.events.Log(task.ID, "shutdown_warning", "could not get pane PID: "+err.Error())
-		_ = tmux.KillWindow(task.TmuxWindow)
-		return
+		if err := tmux.KillWindow(task.TmuxWindow); err != nil {
+			return fmt.Errorf("kill-window after PID lookup failure: %w", err)
+		}
+		if tmux.WindowExists(task.TmuxWindow) {
+			return fmt.Errorf("window %s still exists after kill-window", task.TmuxWindow)
+		}
+		return nil
 	}
 
 	claudePID := findClaudeChild(shellPID)
@@ -514,13 +526,21 @@ func (m *Manager) gracefulCloseWindow(task *db.Task) {
 	deadline := time.Now().Add(gracefulShutdownTimeout)
 	for time.Now().Before(deadline) {
 		if !tmux.WindowExists(task.TmuxWindow) {
-			return
+			return nil
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
 
 	_ = m.events.Log(task.ID, "graceful_shutdown_timeout", "fell back to kill-window")
-	_ = tmux.KillWindow(task.TmuxWindow)
+	if err := tmux.KillWindow(task.TmuxWindow); err != nil {
+		_ = m.events.Log(task.ID, "kill_window_error", err.Error())
+		return fmt.Errorf("kill-window: %w", err)
+	}
+	if tmux.WindowExists(task.TmuxWindow) {
+		_ = m.events.Log(task.ID, "kill_window_error", "window still exists after kill-window")
+		return fmt.Errorf("window %s still exists after kill-window", task.TmuxWindow)
+	}
+	return nil
 }
 
 // shutdownClaudeForRelaunch SIGINTs the Claude process, waits for it

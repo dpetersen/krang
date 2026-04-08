@@ -510,11 +510,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.wsProgress.StoppingDone = true
 		if msg.Err != nil {
+			// Window could not be killed — abort without destroying
+			// the workspace so the user can investigate.
+			m.wsProgress.Err = msg.Err
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
-				fmt.Sprintf("Warning stopping Claude: %v", msg.Err))
-		} else {
-			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Claude stopped.")
+				fmt.Sprintf("Error stopping Claude: %v", msg.Err))
+			m.wsProgress.Done = true
+			m.appendDebugLog(fmt.Sprintf("[%s] complete failed: %v",
+				time.Now().Format("15:04:05"), msg.Err))
+			return m, nil
 		}
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Claude stopped.")
 
 		// Start per-repo forget sequence.
 		if len(m.wsProgress.Repos) > 0 {
@@ -2575,6 +2581,12 @@ func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool, taskID s
 
 		attention, ok := hooks.AttentionFromEvent(event)
 		if ok {
+			// Don't overwrite attention on terminal tasks — late
+			// hook events (e.g. SessionEnd after Complete) must
+			// not reset the attention state.
+			if t.State == db.StateCompleted || t.State == db.StateFailed {
+				ok = false
+			}
 			// When classification is in flight, don't set the
 			// intermediate AttentionWaiting — let the classifier
 			// decide the final state.

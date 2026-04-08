@@ -182,7 +182,7 @@ The fake Claude binary (`internal/testutil/fakeclaude/`) accepts the same CLI fl
 
 ## Graceful Shutdown
 
-Tasks are shut down via SIGINT to the Claude process (found via `pgrep -P <shell_pid>`), with a 5-second timeout before falling back to `tmux kill-window`. DB state is updated before killing windows to prevent reconcile races.
+Tasks are shut down via SIGINT to the Claude process (found via `pgrep -P <shell_pid>`), with a 15-second timeout before falling back to `tmux kill-window`. The window is killed before DB state is updated — if the kill fails, the task stays in its current state and the error is surfaced in both the TUI debug log and the DB events table. For workspace tasks, workspace destruction is skipped on kill failure.
 
 On krang exit, parked tasks are offered for freezing. If frozen (or none exist), the parked session is cleaned up automatically.
 

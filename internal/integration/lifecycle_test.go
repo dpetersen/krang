@@ -174,9 +174,9 @@ func TestComplete(t *testing.T) {
 	// Confirm completion with 'y'.
 	env.SendKeys("y")
 
-	// Complete involves SIGINT + 5s timeout, then kill-window.
-	// Wait for tmux_window to be cleared (happens after the kill).
-	env.WaitFor("task completed", 15*time.Second, func() bool {
+	// Complete involves SIGINT + 15s timeout, then kill-window.
+	// DB state is updated after the window kill succeeds.
+	env.WaitFor("task completed", 25*time.Second, func() bool {
 		var state string
 		var wid sql.NullString
 		err := env.db.QueryRow("SELECT state, tmux_window FROM tasks WHERE name = ?", "complete-test").Scan(&state, &wid)
