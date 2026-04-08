@@ -19,6 +19,16 @@ run = "go test ./..."
 description = "Run integration tests (requires tmux)"
 run = "go test -v -count=1 -timeout 300s -tags=integration ./internal/integration/"
 
+[tasks.install]
+description = "Build and install krang to KRANG_INSTALL_DIR (default: ~/.local/bin)"
+depends = ["build"]
+run = """
+dest="${KRANG_INSTALL_DIR:-$HOME/.local/bin}"
+mkdir -p "$dest"
+cp krang "$dest/krang"
+echo "Installed krang to $dest/krang"
+"""
+
 [tasks.setup]
 description = "Install Claude Code hooks and configure krang (dev config)"
 depends = ["build"]

@@ -422,10 +422,11 @@ Set via the `"theme"` field in config.yaml.
 Install [mise](https://mise.jdx.dev/) for the dev build tasks:
 
 ```
-mise run build   # build binary with version from git tags
-mise run test    # run tests
-mise run setup   # install hooks (uses dev config)
-mise run run     # build, install hooks, launch TUI (uses dev DB)
+mise run build     # build binary with version from git tags
+mise run install   # build and install to ~/.local/bin (override with KRANG_INSTALL_DIR)
+mise run test      # run tests
+mise run setup     # install hooks (uses dev config)
+mise run run       # build, install hooks, launch TUI (uses dev DB)
 ```
 
 Development uses `KRANG_DB=.krang-dev.db` and
