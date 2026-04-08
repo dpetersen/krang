@@ -84,6 +84,109 @@ func TestCreateAndHookEvents(t *testing.T) {
 	env.WaitForPaneContent("ok")
 }
 
+func TestSubagentPermissionNotClobbered(t *testing.T) {
+	env := NewTestEnv(t)
+
+	env.CreateTask("perm-test")
+	sessionID := env.TaskSessionID("perm-test")
+
+	// Start the session.
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "SessionStart",
+		"cwd":             env.projectDir,
+	})
+	env.WaitForTaskAttention("perm-test", "ok")
+
+	// Two subagents start.
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "SubagentStart",
+		"cwd":             env.projectDir,
+		"agent_id":        "agent-a",
+		"agent_type":      "Explore",
+	})
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "SubagentStart",
+		"cwd":             env.projectDir,
+		"agent_id":        "agent-b",
+		"agent_type":      "Explore",
+	})
+	time.Sleep(200 * time.Millisecond)
+
+	// Agent A hits a permission wall.
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "PermissionRequest",
+		"cwd":             env.projectDir,
+		"tool_name":       "Bash",
+		"agent_id":        "agent-a",
+	})
+	env.WaitForTaskAttention("perm-test", "permission")
+
+	// Agent B completes a tool — this must NOT clear the permission.
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "PostToolUse",
+		"cwd":             env.projectDir,
+		"tool_name":       "Read",
+		"agent_id":        "agent-b",
+	})
+	time.Sleep(300 * time.Millisecond)
+	env.WaitForTaskAttention("perm-test", "permission")
+
+	// Agent A's permission is resolved (PostToolUse from same agent).
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "PostToolUse",
+		"cwd":             env.projectDir,
+		"tool_name":       "Bash",
+		"agent_id":        "agent-a",
+	})
+	env.WaitForTaskAttention("perm-test", "ok")
+}
+
+func TestSubagentPermissionClearedByUserPrompt(t *testing.T) {
+	env := NewTestEnv(t)
+
+	env.CreateTask("perm-esc-test")
+	sessionID := env.TaskSessionID("perm-esc-test")
+
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "SessionStart",
+		"cwd":             env.projectDir,
+	})
+	env.WaitForTaskAttention("perm-esc-test", "ok")
+
+	// Subagent starts and hits a permission wall.
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "SubagentStart",
+		"cwd":             env.projectDir,
+		"agent_id":        "agent-a",
+		"agent_type":      "Explore",
+	})
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "PermissionRequest",
+		"cwd":             env.projectDir,
+		"tool_name":       "Bash",
+		"agent_id":        "agent-a",
+	})
+	env.WaitForTaskAttention("perm-esc-test", "permission")
+
+	// User hits escape and types something (UserPromptSubmit clears
+	// pending permissions so we don't get stuck red forever).
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "UserPromptSubmit",
+		"cwd":             env.projectDir,
+	})
+	env.WaitForTaskAttention("perm-esc-test", "ok")
+}
+
 func TestParkUnpark(t *testing.T) {
 	env := NewTestEnv(t)
 

@@ -73,7 +73,8 @@ type Model struct {
 	debugLog []string
 
 	taskProcesses map[string]*proctree.TaskProcesses
-	subagents     map[string]map[string]string // taskID → agentID → agentType
+	subagents    map[string]map[string]string // taskID → agentID → agentType
+	pendingPerms map[string]map[string]bool   // taskID → agent_ids with unresolved permissions
 
 	pendingOps    map[string]string // taskID → operation label (e.g. "freezing...")
 	classifyGen   map[string]uint64 // taskID → generation counter for cancellation
@@ -150,6 +151,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		filterInput:       filterInput,
 		pendingOps:        make(map[string]string),
 		subagents:         make(map[string]map[string]string),
+		pendingPerms:      make(map[string]map[string]bool),
 		classifyGen:       make(map[string]uint64),
 		sparklineData:     make(map[string][]sparklineBucket),
 		usageCache:        make(map[string]*usage.UsageSummary),
@@ -253,10 +255,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.subagents[t.ID]) == 0 {
 				delete(m.subagents, t.ID)
 			}
+			delete(m.pendingPerms[t.ID], msg.Event.AgentID)
 		case "Stop", "SessionEnd":
 			// Main agent stopped — all subagents are gone.
 			delete(m.subagents, t.ID)
+			delete(m.pendingPerms, t.ID)
 		}
+
+		// Track per-agent pending permissions so that PostToolUse
+		// from a different agent doesn't clobber the permission state.
+		agentKey := msg.Event.AgentID // empty string for parent agent
+		switch msg.Event.HookEventName {
+		case "PermissionRequest":
+			if m.pendingPerms[t.ID] == nil {
+				m.pendingPerms[t.ID] = make(map[string]bool)
+			}
+			m.pendingPerms[t.ID][agentKey] = true
+		case "PostToolUse", "PostToolUseFailure":
+			delete(m.pendingPerms[t.ID], agentKey)
+		case "UserPromptSubmit":
+			// User typed something — clear all pending permissions.
+			// This is the escape hatch for denied permissions that
+			// never produce a PostToolUse.
+			delete(m.pendingPerms, t.ID)
+		}
+		suppressAttention := len(m.pendingPerms[t.ID]) > 0
 
 		// Bump generation to invalidate any in-flight classification.
 		m.classifyGen[t.ID]++
@@ -267,7 +290,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.Event.LastAssistantMessage != ""
 
 		cmds := []tea.Cmd{
-			m.handleHookEvent(msg.Event, classifying, t.ID),
+			m.handleHookEvent(msg.Event, classifying, suppressAttention, t.ID),
 			m.waitForHookEvent(),
 		}
 		if msg.Event.HookEventName == "Stop" {
@@ -2567,7 +2590,7 @@ func (m Model) waitForHookEvent() tea.Cmd {
 	}
 }
 
-func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool, taskID string) tea.Cmd {
+func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool, suppressAttention bool, taskID string) tea.Cmd {
 	return func() tea.Msg {
 		// Use the task ID resolved by the Update handler, which accounts
 		// for contested sessions from forks. Do NOT re-lookup by session
@@ -2591,6 +2614,13 @@ func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool, taskID s
 			// intermediate AttentionWaiting — let the classifier
 			// decide the final state.
 			if classifying && attention == db.AttentionWaiting {
+				ok = false
+			}
+		}
+		if ok {
+			// When another agent still has a pending permission,
+			// don't let lower-priority events downgrade to ok.
+			if suppressAttention && attention != db.AttentionPermission && attention != db.AttentionError {
 				ok = false
 			}
 		}
