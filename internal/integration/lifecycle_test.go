@@ -227,10 +227,9 @@ func TestFreezeUnfreeze(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	env.SendKeys("f")
 
-	// Freeze: state is set to dormant BEFORE the window is killed.
-	// The graceful shutdown takes up to 5s (SIGINT + timeout).
-	// Wait for tmux_window to be cleared, which happens AFTER the kill.
-	env.WaitFor("tmux_window cleared after freeze", 15*time.Second, func() bool {
+	// Freeze involves SIGINT + 15s timeout, then kill-window.
+	// DB state is updated after the window kill succeeds.
+	env.WaitFor("tmux_window cleared after freeze", 25*time.Second, func() bool {
 		return env.TaskTmuxWindow("freeze-test") == ""
 	})
 
