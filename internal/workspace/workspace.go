@@ -378,8 +378,18 @@ func cloneJJWorkspace(repoSrc, repoDst, workspaceName string) (string, error) {
 	updateCmd.Dir = repoSrc
 	_ = updateCmd.Run() // safe no-op if not stale
 
+	// Fetch latest from origin so the workspace isn't based on stale state.
+	_ = fetchJJRemote(repoSrc)
+
 	// jj workspace add must be run from the source repo.
-	cmd := exec.Command("jj", "workspace", "add", repoDst, "--name", workspaceName)
+	args := []string{"workspace", "add", repoDst, "--name", workspaceName}
+
+	// Base the workspace on the remote default branch if we can detect it.
+	if bookmark := detectJJDefaultBookmark(repoSrc); bookmark != "" {
+		args = append(args, "-r", bookmark)
+	}
+
+	cmd := exec.Command("jj", args...)
 	cmd.Dir = repoSrc
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -395,7 +405,20 @@ func createGitWorktree(repoSrc, repoDst, taskName string) error {
 
 // addGitWorktree creates a git worktree at repoDst branching from repoSrc.
 // The branch is named krang/<taskName> to make it identifiable for cleanup.
+// It fetches from origin first and bases the worktree on the remote default
+// branch so that new workspaces start from up-to-date code.
 func addGitWorktree(repoSrc, repoDst, taskName string) (string, error) {
+	// Fetch latest from origin so the worktree isn't based on a stale
+	// local HEAD. Non-fatal — proceed with whatever we have on failure.
+	_ = fetchGitRemote(repoSrc)
+
+	// Determine the remote default branch (e.g. "origin/main").
+	// If found, delegate to addGitWorktreeAt so the worktree starts there.
+	if base := detectGitDefaultBranch(repoSrc); base != "" {
+		return addGitWorktreeAt(repoSrc, repoDst, taskName, base)
+	}
+
+	// Fallback: no remote or detection failed — branch from HEAD.
 	branchName := "krang/" + taskName
 
 	// Prune stale worktree entries that might block creation.
@@ -453,7 +476,94 @@ func addGitWorktreeAt(repoSrc, repoDst, taskName, commitish string) (string, err
 		return string(output), fmt.Errorf("git worktree add: %w: %s", err, output)
 	}
 
-	return string(output), nil
+	result := string(output)
+
+	// Copy files listed in .worktreeinclude (e.g., .env).
+	if inclErr := processWorktreeInclude(repoSrc, repoDst); inclErr != nil {
+		result += "\nworktreeinclude warning: " + inclErr.Error()
+	}
+
+	return result, nil
+}
+
+// fetchGitRemote runs "git fetch origin" in repoDir.
+// Non-fatal — callers should log the error and continue.
+func fetchGitRemote(repoDir string) error {
+	cmd := exec.Command("git", "fetch", "origin")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch origin: %w: %s", err, output)
+	}
+	return nil
+}
+
+// detectGitDefaultBranch returns the remote tracking ref for the default
+// branch (e.g. "origin/main"). Returns "" if detection fails entirely.
+func detectGitDefaultBranch(repoDir string) string {
+	// Try reading the locally cached default branch.
+	if branch := gitSymbolicOriginHead(repoDir); branch != "" {
+		return branch
+	}
+
+	// Auto-detect from the remote and cache locally.
+	setHead := exec.Command("git", "remote", "set-head", "origin", "-a")
+	setHead.Dir = repoDir
+	if setHead.Run() == nil {
+		if branch := gitSymbolicOriginHead(repoDir); branch != "" {
+			return branch
+		}
+	}
+
+	// Heuristic fallback: check for common branch names.
+	for _, name := range []string{"origin/main", "origin/master"} {
+		check := exec.Command("git", "rev-parse", "--verify", name)
+		check.Dir = repoDir
+		if check.Run() == nil {
+			return name
+		}
+	}
+
+	return ""
+}
+
+// gitSymbolicOriginHead reads refs/remotes/origin/HEAD and returns the
+// remote tracking ref (e.g. "origin/main"), or "" if unset.
+func gitSymbolicOriginHead(repoDir string) string {
+	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	// Output is "refs/remotes/origin/main\n" — strip prefix to get "origin/main".
+	ref := strings.TrimSpace(string(out))
+	return strings.TrimPrefix(ref, "refs/remotes/")
+}
+
+// fetchJJRemote runs "jj git fetch" in repoDir.
+// Non-fatal — callers should ignore the error and continue.
+func fetchJJRemote(repoDir string) error {
+	cmd := exec.Command("jj", "git", "fetch")
+	cmd.Dir = repoDir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("jj git fetch: %w: %s", err, output)
+	}
+	return nil
+}
+
+// detectJJDefaultBookmark returns the bookmark name to use as the
+// workspace base (e.g. "main@origin"). Returns "" if neither main nor
+// master bookmarks exist at origin.
+func detectJJDefaultBookmark(repoDir string) string {
+	for _, candidate := range []string{"main@origin", "master@origin"} {
+		// Use jj log to check if the revset resolves.
+		cmd := exec.Command("jj", "log", "-r", candidate, "--no-graph", "--limit", "1")
+		cmd.Dir = repoDir
+		if cmd.Run() == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // ForkRepoResult holds the outcome of forking a single repo.

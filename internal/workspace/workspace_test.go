@@ -608,6 +608,195 @@ func initGitRepo(t *testing.T, dir string) {
 	run(t, dir, "git", "commit", "--allow-empty", "-m", "init")
 }
 
+// initBareRemoteWithClone creates a bare git repo (the "remote"), clones it
+// into cloneDir, and returns the bare repo path. The clone has origin pointing
+// at the bare repo so fetch/push work locally.
+func initBareRemoteWithClone(t *testing.T, bareDir, cloneDir, branchName string) {
+	t.Helper()
+	if err := os.MkdirAll(bareDir, 0o755); err != nil {
+		t.Fatalf("mkdir bare: %v", err)
+	}
+	run(t, bareDir, "git", "init", "--bare")
+
+	// Set the bare repo's HEAD to the desired branch so clones check it out.
+	run(t, bareDir, "git", "symbolic-ref", "HEAD", "refs/heads/"+branchName)
+
+	// Create a temporary working copy to push the initial commit.
+	tmpClone := t.TempDir()
+	run(t, tmpClone, "git", "clone", bareDir, ".")
+	run(t, tmpClone, "git", "config", "user.email", "test@example.com")
+	run(t, tmpClone, "git", "config", "user.name", "Test User")
+	// Ensure the branch has the desired name.
+	run(t, tmpClone, "git", "checkout", "-b", branchName)
+	run(t, tmpClone, "git", "commit", "--allow-empty", "-m", "init")
+	run(t, tmpClone, "git", "push", "origin", branchName)
+
+	// Now clone into the actual source repo dir.
+	if err := os.MkdirAll(filepath.Dir(cloneDir), 0o755); err != nil {
+		t.Fatalf("mkdir clone parent: %v", err)
+	}
+	run(t, filepath.Dir(cloneDir), "git", "clone", bareDir, filepath.Base(cloneDir))
+}
+
+// gitHeadCommit returns the HEAD commit hash in the given repo dir.
+func gitHeadCommit(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD in %s: %v", dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestGitWorktreeBasedOnRemoteMain(t *testing.T) {
+	dir := t.TempDir()
+
+	bareDir := filepath.Join(dir, "bare")
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	repoDir := filepath.Join(reposDir, "myrepo")
+
+	initBareRemoteWithClone(t, bareDir, repoDir, "main")
+
+	staleCommit := gitHeadCommit(t, repoDir)
+
+	// Push a new commit from a separate clone (simulates other developers).
+	pusher := t.TempDir()
+	run(t, pusher, "git", "clone", bareDir, ".")
+	run(t, pusher, "git", "config", "user.email", "test@example.com")
+	run(t, pusher, "git", "config", "user.name", "Test User")
+	run(t, pusher, "git", "commit", "--allow-empty", "-m", "new work")
+	run(t, pusher, "git", "push", "origin", "main")
+
+	latestCommit := gitHeadCommit(t, pusher)
+	if staleCommit == latestCommit {
+		t.Fatal("test setup: stale and latest commits should differ")
+	}
+
+	// Create workspace — should fetch and base on origin/main.
+	dst := filepath.Join(workspacesDir, "test-task")
+	_, err := addGitWorktree(repoDir, dst, "test-task")
+	if err != nil {
+		t.Fatalf("addGitWorktree: %v", err)
+	}
+
+	worktreeHead := gitHeadCommit(t, dst)
+	if worktreeHead != latestCommit {
+		t.Errorf("worktree HEAD = %s (stale), want %s (latest remote main)", worktreeHead, latestCommit)
+	}
+}
+
+func TestGitWorktreeBasedOnRemoteMaster(t *testing.T) {
+	dir := t.TempDir()
+
+	bareDir := filepath.Join(dir, "bare")
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	repoDir := filepath.Join(reposDir, "myrepo")
+
+	initBareRemoteWithClone(t, bareDir, repoDir, "master")
+
+	// Push a new commit via a separate clone.
+	pusher := t.TempDir()
+	run(t, pusher, "git", "clone", bareDir, ".")
+	run(t, pusher, "git", "config", "user.email", "test@example.com")
+	run(t, pusher, "git", "config", "user.name", "Test User")
+	run(t, pusher, "git", "commit", "--allow-empty", "-m", "new work")
+	run(t, pusher, "git", "push", "origin", "master")
+
+	latestCommit := gitHeadCommit(t, pusher)
+
+	dst := filepath.Join(workspacesDir, "test-task")
+	_, err := addGitWorktree(repoDir, dst, "test-task")
+	if err != nil {
+		t.Fatalf("addGitWorktree: %v", err)
+	}
+
+	worktreeHead := gitHeadCommit(t, dst)
+	if worktreeHead != latestCommit {
+		t.Errorf("worktree HEAD = %s, want %s (latest remote master)", worktreeHead, latestCommit)
+	}
+}
+
+func TestDetectGitDefaultBranchMain(t *testing.T) {
+	dir := t.TempDir()
+
+	bareDir := filepath.Join(dir, "bare")
+	cloneDir := filepath.Join(dir, "clone")
+
+	initBareRemoteWithClone(t, bareDir, cloneDir, "main")
+
+	branch := detectGitDefaultBranch(cloneDir)
+	if branch != "origin/main" {
+		t.Errorf("detectGitDefaultBranch = %q, want %q", branch, "origin/main")
+	}
+}
+
+func TestDetectGitDefaultBranchMaster(t *testing.T) {
+	dir := t.TempDir()
+
+	bareDir := filepath.Join(dir, "bare")
+	cloneDir := filepath.Join(dir, "clone")
+
+	initBareRemoteWithClone(t, bareDir, cloneDir, "master")
+
+	branch := detectGitDefaultBranch(cloneDir)
+	if branch != "origin/master" {
+		t.Errorf("detectGitDefaultBranch = %q, want %q", branch, "origin/master")
+	}
+}
+
+func TestDetectGitDefaultBranchNoRemote(t *testing.T) {
+	dir := t.TempDir()
+
+	// A local-only git repo with no remote.
+	initGitRepo(t, dir)
+
+	branch := detectGitDefaultBranch(dir)
+	if branch != "" {
+		t.Errorf("detectGitDefaultBranch = %q, want empty string", branch)
+	}
+}
+
+func TestFetchGitRemoteNoNetwork(t *testing.T) {
+	dir := t.TempDir()
+
+	initGitRepo(t, dir)
+	// Add a bogus remote.
+	run(t, dir, "git", "remote", "add", "origin", "https://invalid.example.com/no-such-repo.git")
+
+	err := fetchGitRemote(dir)
+	if err == nil {
+		t.Error("fetchGitRemote should return error for unreachable remote")
+	}
+}
+
+func TestGitWorktreeFallbackOnNoRemote(t *testing.T) {
+	dir := t.TempDir()
+
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+
+	repoDir := filepath.Join(reposDir, "myrepo")
+	initGitRepo(t, repoDir)
+
+	localHead := gitHeadCommit(t, repoDir)
+
+	// No remote — should still create a workspace from HEAD.
+	dst := filepath.Join(workspacesDir, "fallback-task")
+	_, err := addGitWorktree(repoDir, dst, "fallback-task")
+	if err != nil {
+		t.Fatalf("addGitWorktree: %v", err)
+	}
+
+	worktreeHead := gitHeadCommit(t, dst)
+	if worktreeHead != localHead {
+		t.Errorf("worktree HEAD = %s, want %s (local HEAD fallback)", worktreeHead, localHead)
+	}
+}
+
 func run(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)

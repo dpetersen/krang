@@ -73,8 +73,8 @@ type Model struct {
 	debugLog []string
 
 	taskProcesses map[string]*proctree.TaskProcesses
-	subagents    map[string]map[string]string // taskID → agentID → agentType
-	pendingPerms map[string]map[string]bool   // taskID → agent_ids with unresolved permissions
+	subagents     map[string]map[string]string // taskID → agentID → agentType
+	pendingPerms  map[string]map[string]bool   // taskID → agent_ids with unresolved permissions
 
 	pendingOps    map[string]string // taskID → operation label (e.g. "freezing...")
 	classifyGen   map[string]uint64 // taskID → generation counter for cancellation
