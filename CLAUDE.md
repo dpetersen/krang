@@ -141,7 +141,7 @@ Task creation and import use `charmbracelet/huh` forms rendered as modal overlay
 
 ## Workspaces
 
-Optional per-task isolated directories configured via `krang.yaml` at the metarepo root. See `docs/workspaces.md` for full details.
+Optional per-task isolated directories configured via `krang.yaml` at the metarepo root. See `docs/design/workspaces.md` for full details.
 
 - **`workspace_strategy: single_repo`** — pick one repo, workspace dir is a worktree/workspace
 - **`workspace_strategy: multi_repo`** — pick multiple repos (with optional set grouping via a custom toggle-list component), workspace dir contains worktrees/workspaces

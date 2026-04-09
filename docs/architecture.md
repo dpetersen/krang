@@ -130,13 +130,14 @@ The hook server runs alongside the TUI in the same process, bound to a dynamic p
 
 When completing, killing, or freezing a task:
 
-1. Update DB state FIRST (prevents reconcile race)
-2. Find Claude's PID via `tmux display-message #{pane_pid}` → `pgrep -P <shell_pid>`
-3. Send SIGINT (same as Ctrl+C — Claude handles this)
-4. Wait up to 5 seconds for the window to close
+1. Find Claude's PID via `tmux display-message #{pane_pid}` → walk child processes through sandbox wrappers
+2. Send SIGINT (same as Ctrl+C — Claude handles this)
+3. Wait for Claude to exit, then send Enter to dismiss the shell's "read" prompt
+4. Wait up to 15 seconds for the window to close
 5. Fall back to `tmux kill-window` if it doesn't
+6. Update DB state only after the window is confirmed dead
 
-State is updated before windows are killed so the 10-second reconciliation tick doesn't race and incorrectly transition the task.
+The window is killed before DB state is updated — if the kill fails, the task stays in its current state and the error is surfaced in both the TUI debug log and the DB events table.
 
 When krang itself exits, it prompts to freeze any remaining parked tasks and cleans up the parked session if empty.
 

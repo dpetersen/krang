@@ -202,7 +202,9 @@ the Remote tab. Once a repo is cloned, krang uses whatever is on
 disk.
 
 Both VCS backends create lightweight linked working copies that
-share the source repo's object store.
+share the source repo's object store. Before creating a workspace,
+krang fetches from origin and branches from the remote default
+branch so new worktrees start from the latest upstream state.
 
 #### jj Repos
 
@@ -293,7 +295,7 @@ This matches the behavior of Claude Code's built-in
 
 If you're using sandboxing with workspaces, additional filesystem
 access is needed for VCS operations and config file walking. See
-[docs/sandboxing.md](docs/sandboxing.md#workspace-setup) for details.
+[docs/design/sandboxing.md](docs/design/sandboxing.md#workspace-setup) for details.
 
 ## Configuration
 
@@ -318,7 +320,7 @@ default_vcs: jj
 github_orgs:
   - myorg
 
-# Named sandbox profiles. See docs/sandboxing.md for details.
+# Named sandbox profiles. See docs/design/sandboxing.md for details.
 sandboxes:
   default:
     type: command

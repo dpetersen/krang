@@ -49,7 +49,7 @@ Expose krang's task state to external agents (e.g. a workload manager Claude tha
 
 Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented. Remaining ideas:
 
-- **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI. All mutations go through the HTTP server for serialization. See `docs/workspaces.md` for the original design sketch.
+- **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI. All mutations go through the HTTP server for serialization.
 
 ## Sandbox Configuration
 
@@ -60,7 +60,7 @@ Named sandbox profiles with a `type` discriminator are implemented (currently on
 
 ## Task Forking
 
-Task forking is implemented with two workspace modes (independent and shared). See [forking.md](forking.md) for details. Remaining ideas:
+Task forking is implemented with two workspace modes (independent and shared). See [forking.md](design/forking.md) for details. Remaining ideas:
 
 - **Linked mode** — jj parent-child workspace (`workspace add -r @`) for auto-rebase from source. Currently blocked by jj's stale workspace handling losing working copy changes on concurrent edits (jj-vcs/jj#1310). Worth revisiting if jj improves this.
 - **Fork from completed tasks** — conversation-only fork (no workspace to copy). Would need session files to still be available.
@@ -104,13 +104,11 @@ it preserves the "agent runs in a tmux window, events arrive via HTTP" model.
 
 ## Discarded / Deferred Ideas
 
-### Cost tracking via ccusage
+### Cost tracking
 
-Previously attempted with hardcoded per-model pricing, which was dropped because enterprise pricing differs significantly from published API rates.
-
-Now delegated to [ccusage](https://github.com/ryoppippi/ccusage) via `npx`. The detail modal shows per-session cost when npx is available. The ccusage version is pinned in the binary (`ccusage.DefaultVersion`) and can be overridden per-user via `ccusage_version` in config.yaml.
-
-**Background:**
-- Claude Code hook events do **not** include token usage data.
-- Transcript JSONL files contain full API usage but not dollar costs.
-- ccusage reads these same transcripts and applies accurate pricing.
+Previously attempted via both hardcoded per-model pricing and
+[ccusage](https://github.com/ryoppippi/ccusage). Both approaches
+were dropped because they rely on published API pricing, which
+doesn't reflect enterprise contract rates. Revisit if Claude Code
+hook events gain token usage data or if an accurate cost source
+becomes available.
