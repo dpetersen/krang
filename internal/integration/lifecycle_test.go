@@ -4,7 +4,10 @@ package integration
 
 import (
 	"database/sql"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,6 +37,14 @@ func TestCreateAndHookEvents(t *testing.T) {
 	}
 	if manifest.Name != "hook-test" {
 		t.Errorf("fakeclaude name = %q, want %q", manifest.Name, "hook-test")
+	}
+
+	// No subdirectories → CWD should default to the project root.
+	if taskCwd := env.TaskCwd("hook-test"); taskCwd != env.projectDir {
+		t.Errorf("task cwd = %q, want %q", taskCwd, env.projectDir)
+	}
+	if manifest.Cwd != env.projectDir {
+		t.Errorf("fakeclaude cwd = %q, want %q", manifest.Cwd, env.projectDir)
 	}
 
 	sessionID := env.TaskSessionID("hook-test")
@@ -312,6 +323,56 @@ func TestReconcileVanishedWindow(t *testing.T) {
 	})
 }
 
+func TestCwdModeSelectsSubdirectory(t *testing.T) {
+	env := NewTestEnv(t)
+
+	// Create subdirectories so the CWD picker appears (instead of being skipped).
+	repoA := filepath.Join(env.projectDir, "repo-a")
+	repoB := filepath.Join(env.projectDir, "repo-b")
+	for _, d := range []string{repoA, repoB} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("creating subdir %s: %v", d, err)
+		}
+	}
+
+	// Open wizard and type task name.
+	env.SendKeys("n")
+	time.Sleep(400 * time.Millisecond)
+	env.SendKeys("cwd-test")
+	time.Sleep(200 * time.Millisecond)
+
+	// Enter to advance from Name tab to CWD tab.
+	env.SendKeys("Enter")
+	time.Sleep(400 * time.Millisecond)
+
+	// CWD picker should show "." (selected by default), "repo-a", "repo-b".
+	// Navigate down to "repo-a".
+	env.SendKeys("j")
+	time.Sleep(200 * time.Millisecond)
+
+	// Submit from the CWD tab.
+	env.SendKeys("Enter")
+
+	env.WaitForTaskExists("cwd-test")
+	env.WaitForTaskState("cwd-test", "active")
+
+	// Verify the task's cwd in the DB is the subdirectory, not the root.
+	taskCwd := env.TaskCwd("cwd-test")
+	if taskCwd != repoA {
+		t.Errorf("task cwd = %q, want %q", taskCwd, repoA)
+	}
+
+	// Verify fakeclaude was actually launched in the subdirectory.
+	env.WaitForManifestCount(1)
+	manifest := env.LatestManifest()
+	if manifest == nil {
+		t.Fatal("no fakeclaude manifest found")
+	}
+	if manifest.Cwd != repoA {
+		t.Errorf("fakeclaude cwd = %q, want %q", manifest.Cwd, repoA)
+	}
+}
+
 func TestForkNonWorkspace(t *testing.T) {
 	env := NewTestEnv(t)
 
@@ -370,5 +431,433 @@ func TestForkNonWorkspace(t *testing.T) {
 	// Original task should be unaffected.
 	if sid := env.TaskSessionID("fork-src"); sid != srcSessionID {
 		t.Errorf("source task session_id changed from %q to %q", srcSessionID, sid)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Git workspace tests
+// ---------------------------------------------------------------------------
+
+func TestGitSingleRepoWorkspace(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "single_repo", "git", []string{"alpha", "beta"})
+	repoDir := filepath.Join(env.ReposDir(), "alpha")
+
+	env.CreateSingleRepoTask("git-single")
+
+	expectedWsDir := filepath.Join(env.WorkspacesDir(), "git-single")
+
+	// DB state.
+	if wsDir := env.TaskWorkspaceDir("git-single"); wsDir != expectedWsDir {
+		t.Errorf("workspace_dir = %q, want %q", wsDir, expectedWsDir)
+	}
+	if cwd := env.TaskCwd("git-single"); cwd != expectedWsDir {
+		t.Errorf("task cwd = %q, want %q", cwd, expectedWsDir)
+	}
+
+	// Fakeclaude process CWD.
+	env.WaitForManifestCount(1)
+	manifest := env.LatestManifest()
+	if manifest == nil {
+		t.Fatal("no fakeclaude manifest found")
+	}
+	if manifest.Cwd != expectedWsDir {
+		t.Errorf("fakeclaude cwd = %q, want %q", manifest.Cwd, expectedWsDir)
+	}
+
+	// Workspace is a git worktree (has .git file, not directory).
+	gitPath := filepath.Join(expectedWsDir, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		t.Fatalf("workspace missing .git: %v", err)
+	}
+	if info.IsDir() {
+		t.Error(".git should be a file (worktree pointer), not a directory")
+	}
+
+	// Source repo should list the worktree.
+	wtList := gitWorktreeList(t, repoDir)
+	if !strings.Contains(wtList, expectedWsDir) {
+		t.Errorf("worktree not listed in source repo:\n%s", wtList)
+	}
+
+	// Branch krang/git-single should exist in the source repo.
+	if !gitBranchExists(repoDir, "krang/git-single") {
+		t.Error("branch krang/git-single should exist in source repo")
+	}
+
+	// There should NOT be a nested alpha/ subdirectory (single_repo mode).
+	if _, err := os.Stat(filepath.Join(expectedWsDir, "alpha")); err == nil {
+		t.Error("single_repo should not create nested repo subdirectory")
+	}
+}
+
+func TestGitMultiRepoWorkspace(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "multi_repo", "git", []string{"alpha", "beta"})
+
+	env.CreateMultiRepoTask("git-multi", 2)
+
+	expectedWsDir := filepath.Join(env.WorkspacesDir(), "git-multi")
+
+	// DB state.
+	if wsDir := env.TaskWorkspaceDir("git-multi"); wsDir != expectedWsDir {
+		t.Errorf("workspace_dir = %q, want %q", wsDir, expectedWsDir)
+	}
+	if cwd := env.TaskCwd("git-multi"); cwd != expectedWsDir {
+		t.Errorf("task cwd = %q, want %q", cwd, expectedWsDir)
+	}
+
+	// Fakeclaude process CWD.
+	env.WaitForManifestCount(1)
+	manifest := env.LatestManifest()
+	if manifest == nil {
+		t.Fatal("no fakeclaude manifest found")
+	}
+	if manifest.Cwd != expectedWsDir {
+		t.Errorf("fakeclaude cwd = %q, want %q", manifest.Cwd, expectedWsDir)
+	}
+
+	// Each repo should be a worktree under the workspace dir with a branch.
+	for _, repo := range []string{"alpha", "beta"} {
+		repoWtDir := filepath.Join(expectedWsDir, repo)
+		repoSrc := filepath.Join(env.ReposDir(), repo)
+
+		// Worktree .git file should exist.
+		info, err := os.Stat(filepath.Join(repoWtDir, ".git"))
+		if err != nil {
+			t.Errorf("%s: missing .git: %v", repo, err)
+			continue
+		}
+		if info.IsDir() {
+			t.Errorf("%s: .git should be a file (worktree), not a directory", repo)
+		}
+
+		// Source repo should list the worktree.
+		wtList := gitWorktreeList(t, repoSrc)
+		if !strings.Contains(wtList, repoWtDir) {
+			t.Errorf("%s: worktree not listed:\n%s", repo, wtList)
+		}
+
+		// Branch should exist.
+		if !gitBranchExists(repoSrc, "krang/git-multi") {
+			t.Errorf("%s: branch krang/git-multi should exist", repo)
+		}
+	}
+}
+
+func TestGitWorkspaceForkAndComplete(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "single_repo", "git", []string{"alpha"})
+	repoDir := filepath.Join(env.ReposDir(), "alpha")
+
+	env.CreateSingleRepoTask("git-fork-src")
+
+	srcWsDir := filepath.Join(env.WorkspacesDir(), "git-fork-src")
+	env.WaitFor("workspace dir exists", 10*time.Second, func() bool {
+		_, err := os.Stat(srcWsDir)
+		return err == nil
+	})
+
+	// Make a commit in the source workspace so the fork branch has unpushed work.
+	if err := os.WriteFile(filepath.Join(srcWsDir, "feature.txt"), []byte("wip"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"add", "feature.txt"},
+		{"commit", "-m", "add feature"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = srcWsDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	// Establish the source session.
+	srcSessionID := env.TaskSessionID("git-fork-src")
+	env.SendHook(map[string]interface{}{
+		"session_id":      srcSessionID,
+		"hook_event_name": "SessionStart",
+		"cwd":             srcWsDir,
+	})
+	time.Sleep(300 * time.Millisecond)
+
+	// Fork via detail modal.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("d")
+	time.Sleep(500 * time.Millisecond)
+	env.SendKeys("Enter")
+
+	env.WaitForTaskExists("git-fork-src-fork")
+	env.WaitForTaskState("git-fork-src-fork", "active")
+
+	forkWsDir := filepath.Join(env.WorkspacesDir(), "git-fork-src-fork")
+
+	// Fork should have its own workspace dir and CWD.
+	if wsDir := env.TaskWorkspaceDir("git-fork-src-fork"); wsDir != forkWsDir {
+		t.Errorf("fork workspace_dir = %q, want %q", wsDir, forkWsDir)
+	}
+	if cwd := env.TaskCwd("git-fork-src-fork"); cwd != forkWsDir {
+		t.Errorf("fork cwd = %q, want %q", cwd, forkWsDir)
+	}
+
+	// Fork workspace should be a git worktree.
+	info, err := os.Stat(filepath.Join(forkWsDir, ".git"))
+	if err != nil {
+		t.Fatalf("fork workspace missing .git: %v", err)
+	}
+	if info.IsDir() {
+		t.Error("fork .git should be a file (worktree), not a directory")
+	}
+
+	// Fork branch should exist.
+	if !gitBranchExists(repoDir, "krang/git-fork-src-fork") {
+		t.Error("branch krang/git-fork-src-fork should exist in source repo")
+	}
+
+	// Fakeclaude launched in fork workspace.
+	env.WaitForManifestCount(2)
+	manifest := env.LatestManifest()
+	if manifest.Cwd != forkWsDir {
+		t.Errorf("fork fakeclaude cwd = %q, want %q", manifest.Cwd, forkWsDir)
+	}
+
+	// --- Complete the fork task and verify cleanup ---
+
+	// Dismiss any modal, select the fork task (second row), open detail, complete.
+	env.SendKeys("Escape")
+	time.Sleep(200 * time.Millisecond)
+	env.SendKeys("j")
+	time.Sleep(200 * time.Millisecond)
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("c")
+	time.Sleep(500 * time.Millisecond)
+	env.SendKeys("y")
+
+	env.WaitFor("fork completed", 25*time.Second, func() bool {
+		var state string
+		err := env.db.QueryRow("SELECT state FROM tasks WHERE name = ?", "git-fork-src-fork").Scan(&state)
+		return err == nil && state == "completed"
+	})
+
+	// Fork workspace directory should be removed.
+	env.WaitFor("fork workspace removed", 10*time.Second, func() bool {
+		_, err := os.Stat(forkWsDir)
+		return os.IsNotExist(err)
+	})
+
+	// Fork branch should be KEPT because it has unpushed commits (no remote).
+	// git branch -d refuses to delete unmerged branches.
+	if !gitBranchExists(repoDir, "krang/git-fork-src-fork") {
+		t.Error("branch krang/git-fork-src-fork should be kept (unpushed commits)")
+	}
+
+	// Source worktree should NOT have been removed.
+	wtList := gitWorktreeList(t, repoDir)
+	if !strings.Contains(wtList, srcWsDir) {
+		t.Error("source worktree should still be listed")
+	}
+
+	// Source workspace should still exist on disk.
+	if _, err := os.Stat(srcWsDir); err != nil {
+		t.Errorf("source workspace should still exist: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Jujutsu workspace tests
+// ---------------------------------------------------------------------------
+
+func TestJJSingleRepoWorkspace(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "single_repo", "jj", []string{"alpha", "beta"})
+	repoDir := filepath.Join(env.ReposDir(), "alpha")
+
+	env.CreateSingleRepoTask("jj-single")
+
+	expectedWsDir := filepath.Join(env.WorkspacesDir(), "jj-single")
+
+	// DB state.
+	if wsDir := env.TaskWorkspaceDir("jj-single"); wsDir != expectedWsDir {
+		t.Errorf("workspace_dir = %q, want %q", wsDir, expectedWsDir)
+	}
+	if cwd := env.TaskCwd("jj-single"); cwd != expectedWsDir {
+		t.Errorf("task cwd = %q, want %q", cwd, expectedWsDir)
+	}
+
+	// Fakeclaude process CWD.
+	env.WaitForManifestCount(1)
+	manifest := env.LatestManifest()
+	if manifest == nil {
+		t.Fatal("no fakeclaude manifest found")
+	}
+	if manifest.Cwd != expectedWsDir {
+		t.Errorf("fakeclaude cwd = %q, want %q", manifest.Cwd, expectedWsDir)
+	}
+
+	// Workspace should have .jj directory (jj workspace).
+	jjDir := filepath.Join(expectedWsDir, ".jj")
+	if info, err := os.Stat(jjDir); err != nil || !info.IsDir() {
+		t.Fatalf("workspace missing .jj directory: %v", err)
+	}
+
+	// Source repo should list this workspace.
+	wsList := jjWorkspaceList(t, repoDir)
+	if !strings.Contains(wsList, "jj-single") {
+		t.Errorf("workspace 'jj-single' not in jj workspace list:\n%s", wsList)
+	}
+
+	// There should NOT be a nested alpha/ subdirectory (single_repo mode).
+	if _, err := os.Stat(filepath.Join(expectedWsDir, "alpha")); err == nil {
+		t.Error("single_repo should not create nested repo subdirectory")
+	}
+}
+
+func TestJJMultiRepoWorkspace(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "multi_repo", "jj", []string{"alpha", "beta"})
+
+	env.CreateMultiRepoTask("jj-multi", 2)
+
+	expectedWsDir := filepath.Join(env.WorkspacesDir(), "jj-multi")
+
+	// DB state.
+	if wsDir := env.TaskWorkspaceDir("jj-multi"); wsDir != expectedWsDir {
+		t.Errorf("workspace_dir = %q, want %q", wsDir, expectedWsDir)
+	}
+	if cwd := env.TaskCwd("jj-multi"); cwd != expectedWsDir {
+		t.Errorf("task cwd = %q, want %q", cwd, expectedWsDir)
+	}
+
+	// Fakeclaude process CWD.
+	env.WaitForManifestCount(1)
+	manifest := env.LatestManifest()
+	if manifest == nil {
+		t.Fatal("no fakeclaude manifest found")
+	}
+	if manifest.Cwd != expectedWsDir {
+		t.Errorf("fakeclaude cwd = %q, want %q", manifest.Cwd, expectedWsDir)
+	}
+
+	// Each repo should be a jj workspace under the workspace dir.
+	for _, repo := range []string{"alpha", "beta"} {
+		repoWsDir := filepath.Join(expectedWsDir, repo)
+		repoSrc := filepath.Join(env.ReposDir(), repo)
+
+		// .jj directory should exist.
+		if info, err := os.Stat(filepath.Join(repoWsDir, ".jj")); err != nil || !info.IsDir() {
+			t.Errorf("%s: missing .jj directory: %v", repo, err)
+			continue
+		}
+
+		// Source repo should list this workspace.
+		wsList := jjWorkspaceList(t, repoSrc)
+		if !strings.Contains(wsList, "jj-multi") {
+			t.Errorf("%s: workspace 'jj-multi' not in jj workspace list:\n%s", repo, wsList)
+		}
+	}
+}
+
+func TestJJWorkspaceForkAndComplete(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "single_repo", "jj", []string{"alpha"})
+	repoDir := filepath.Join(env.ReposDir(), "alpha")
+
+	env.CreateSingleRepoTask("jj-fork-src")
+
+	srcWsDir := filepath.Join(env.WorkspacesDir(), "jj-fork-src")
+	env.WaitFor("workspace dir exists", 10*time.Second, func() bool {
+		_, err := os.Stat(srcWsDir)
+		return err == nil
+	})
+
+	// Establish the source session.
+	srcSessionID := env.TaskSessionID("jj-fork-src")
+	env.SendHook(map[string]interface{}{
+		"session_id":      srcSessionID,
+		"hook_event_name": "SessionStart",
+		"cwd":             srcWsDir,
+	})
+	time.Sleep(300 * time.Millisecond)
+
+	// Source workspace should be listed.
+	wsList := jjWorkspaceList(t, repoDir)
+	if !strings.Contains(wsList, "jj-fork-src") {
+		t.Errorf("source workspace not in jj workspace list:\n%s", wsList)
+	}
+
+	// Fork via detail modal.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("d")
+	time.Sleep(500 * time.Millisecond)
+	env.SendKeys("Enter")
+
+	env.WaitForTaskExists("jj-fork-src-fork")
+	env.WaitForTaskState("jj-fork-src-fork", "active")
+
+	forkWsDir := filepath.Join(env.WorkspacesDir(), "jj-fork-src-fork")
+
+	// Fork should have its own workspace dir and CWD.
+	if wsDir := env.TaskWorkspaceDir("jj-fork-src-fork"); wsDir != forkWsDir {
+		t.Errorf("fork workspace_dir = %q, want %q", wsDir, forkWsDir)
+	}
+	if cwd := env.TaskCwd("jj-fork-src-fork"); cwd != forkWsDir {
+		t.Errorf("fork cwd = %q, want %q", cwd, forkWsDir)
+	}
+
+	// Fork workspace should have .jj directory.
+	if info, err := os.Stat(filepath.Join(forkWsDir, ".jj")); err != nil || !info.IsDir() {
+		t.Fatalf("fork workspace missing .jj: %v", err)
+	}
+
+	// Both workspaces should be listed.
+	wsList = jjWorkspaceList(t, repoDir)
+	if !strings.Contains(wsList, "jj-fork-src-fork") {
+		t.Errorf("fork workspace not in jj workspace list:\n%s", wsList)
+	}
+
+	// Fakeclaude launched in fork workspace.
+	env.WaitForManifestCount(2)
+	manifest := env.LatestManifest()
+	if manifest.Cwd != forkWsDir {
+		t.Errorf("fork fakeclaude cwd = %q, want %q", manifest.Cwd, forkWsDir)
+	}
+
+	// --- Complete the fork task and verify cleanup ---
+
+	env.SendKeys("Escape")
+	time.Sleep(200 * time.Millisecond)
+	env.SendKeys("j")
+	time.Sleep(200 * time.Millisecond)
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("c")
+	time.Sleep(500 * time.Millisecond)
+	env.SendKeys("y")
+
+	env.WaitFor("fork completed", 25*time.Second, func() bool {
+		var state string
+		err := env.db.QueryRow("SELECT state FROM tasks WHERE name = ?", "jj-fork-src-fork").Scan(&state)
+		return err == nil && state == "completed"
+	})
+
+	// Fork workspace directory should be removed.
+	env.WaitFor("fork workspace removed", 10*time.Second, func() bool {
+		_, err := os.Stat(forkWsDir)
+		return os.IsNotExist(err)
+	})
+
+	// Fork workspace should be forgotten by jj.
+	wsList = jjWorkspaceList(t, repoDir)
+	if strings.Contains(wsList, "jj-fork-src-fork") {
+		t.Errorf("fork workspace should be forgotten, but still listed:\n%s", wsList)
+	}
+
+	// Source workspace should still be listed.
+	if !strings.Contains(wsList, "jj-fork-src") {
+		t.Errorf("source workspace should still be listed:\n%s", wsList)
+	}
+
+	// Source workspace should still exist on disk.
+	if _, err := os.Stat(srcWsDir); err != nil {
+		t.Errorf("source workspace should still exist: %v", err)
 	}
 }

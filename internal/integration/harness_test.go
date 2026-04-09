@@ -327,6 +327,16 @@ func (e *TestEnv) TaskTmuxWindow(name string) string {
 	return ""
 }
 
+// TaskCwd returns the cwd for a task.
+func (e *TestEnv) TaskCwd(name string) string {
+	e.t.Helper()
+	var cwd string
+	if err := e.db.QueryRow("SELECT cwd FROM tasks WHERE name = ?", name).Scan(&cwd); err != nil {
+		e.t.Fatalf("getting cwd for %q: %v", name, err)
+	}
+	return cwd
+}
+
 // TaskSourceID returns the source_task_id for a task.
 func (e *TestEnv) TaskSourceID(name string) string {
 	e.t.Helper()
@@ -455,7 +465,298 @@ func (e *TestEnv) CreateTask(name string) {
 	e.WaitForTaskState(name, "active")
 }
 
+// NewWorkspaceTestEnv creates a test environment with workspace mode enabled.
+// It writes a krang.yaml with the given strategy and VCS type, then creates
+// repos in the repos directory. Repos are minimal with a single initial commit.
+// The vcs parameter should be "git" or "jj".
+func NewWorkspaceTestEnv(t *testing.T, strategy, vcs string, repoNames []string) *TestEnv {
+	t.Helper()
+	buildBinaries(t)
+
+	if vcs == "jj" {
+		if _, err := exec.LookPath("jj"); err != nil {
+			t.Skip("jj not installed")
+		}
+	}
+
+	root := t.TempDir()
+	homeDir := filepath.Join(root, "home")
+	projectDir := filepath.Join(root, "project")
+	fakeClaudeDir := filepath.Join(root, "fakeclaude-control")
+	dbPath := filepath.Join(root, "krang.db")
+	configPath := filepath.Join(root, "config.yaml")
+
+	reposDir := filepath.Join(projectDir, "repos")
+	workspacesDir := filepath.Join(projectDir, "workspaces")
+
+	for _, d := range []string{homeDir, projectDir, fakeClaudeDir, reposDir, workspacesDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("creating dir %s: %v", d, err)
+		}
+	}
+
+	// Write krang.yaml with VCS preference.
+	krangYaml := fmt.Sprintf("workspace_strategy: %s\nrepos_dir: repos\nworkspaces_dir: workspaces\ndefault_vcs: %s\n", strategy, vcs)
+	if err := os.WriteFile(filepath.Join(projectDir, "krang.yaml"), []byte(krangYaml), 0o644); err != nil {
+		t.Fatalf("writing krang.yaml: %v", err)
+	}
+
+	// Create repos with the specified VCS.
+	for _, name := range repoNames {
+		repoPath := filepath.Join(reposDir, name)
+		if err := os.MkdirAll(repoPath, 0o755); err != nil {
+			t.Fatalf("creating repo dir %s: %v", repoPath, err)
+		}
+		switch vcs {
+		case "jj":
+			initJJRepoForIntegration(t, repoPath)
+		default:
+			initGitRepoForIntegration(t, repoPath)
+		}
+	}
+
+	// Write minimal config.
+	configContent := "theme: classic\nclassify_attention: false\n"
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
+
+	iid := instanceID(projectDir)
+	krangSession := "k-" + iid
+	parkedSession := krangSession + "-parked"
+
+	tempSession := fmt.Sprintf("krang-test-%d", time.Now().UnixNano())
+	krangShellCmd := fmt.Sprintf(
+		"env HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s %s; sleep 999",
+		shellQuote(homeDir),
+		shellQuote(dbPath),
+		shellQuote(configPath),
+		shellQuote(fakeClaudeBinPath),
+		shellQuote(fakeClaudeDir),
+		shellQuote(krangBinPath),
+	)
+
+	cmd := exec.Command("tmux", "new-session", "-d", "-s", tempSession,
+		"-x", "120", "-y", "40", "-c", projectDir,
+		"sh", "-c", krangShellCmd)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("creating tmux session: %v: %s", err, out)
+	}
+
+	for _, kv := range [][2]string{
+		{"HOME", homeDir},
+		{"KRANG_CLAUDE_CMD", fakeClaudeBinPath},
+		{"FAKECLAUDE_CONTROLDIR", fakeClaudeDir},
+	} {
+		exec.Command("tmux", "set-environment", "-t", tempSession, kv[0], kv[1]).Run()
+		exec.Command("tmux", "set-environment", "-g", kv[0], kv[1]).Run()
+	}
+
+	t.Cleanup(func() {
+		exec.Command("tmux", "kill-session", "-t", krangSession).Run()
+		exec.Command("tmux", "kill-session", "-t", parkedSession).Run()
+		exec.Command("tmux", "kill-session", "-t", tempSession).Run()
+		for _, key := range []string{"HOME", "KRANG_CLAUDE_CMD", "FAKECLAUDE_CONTROLDIR"} {
+			exec.Command("tmux", "set-environment", "-g", "-u", key).Run()
+		}
+	})
+
+	env := &TestEnv{
+		t:             t,
+		rootDir:       root,
+		homeDir:       homeDir,
+		projectDir:    projectDir,
+		dbPath:        dbPath,
+		configPath:    configPath,
+		fakeClaudeDir: fakeClaudeDir,
+		krangSession:  krangSession,
+		parkedSession: parkedSession,
+	}
+
+	stateFilePath := filepath.Join(homeDir, ".local", "state", "krang", "instances", encodePath(projectDir), "krang-state.json")
+	env.WaitFor("krang state file", 15*time.Second, func() bool {
+		_, err := os.Stat(stateFilePath)
+		return err == nil
+	})
+
+	data, err := os.ReadFile(stateFilePath)
+	if err != nil {
+		t.Fatalf("reading state file: %v", err)
+	}
+	var sf hookStateFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		t.Fatalf("parsing state file: %v", err)
+	}
+	env.hookPort = sf.Port
+
+	env.WaitFor("krang session exists", 10*time.Second, func() bool {
+		return exec.Command("tmux", "has-session", "-t", krangSession).Run() == nil
+	})
+	env.krangPaneTarget = krangSession + ":0.0"
+
+	database, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatalf("opening test DB: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+	env.db = database
+
+	time.Sleep(500 * time.Millisecond)
+
+	return env
+}
+
+// TaskWorkspaceDir returns the workspace_dir for a task.
+func (e *TestEnv) TaskWorkspaceDir(name string) string {
+	e.t.Helper()
+	var dir sql.NullString
+	if err := e.db.QueryRow("SELECT workspace_dir FROM tasks WHERE name = ?", name).Scan(&dir); err != nil {
+		e.t.Fatalf("getting workspace_dir for %q: %v", name, err)
+	}
+	if dir.Valid {
+		return dir.String
+	}
+	return ""
+}
+
+// CreateSingleRepoTask drives the wizard to create a single_repo workspace task,
+// selecting the first repo in the list.
+func (e *TestEnv) CreateSingleRepoTask(name string) {
+	e.t.Helper()
+	e.SendKeys("n")
+	time.Sleep(400 * time.Millisecond)
+	e.SendKeys(name)
+	time.Sleep(200 * time.Millisecond)
+
+	// Enter to advance from Name tab to Repos tab.
+	e.SendKeys("Enter")
+	time.Sleep(400 * time.Millisecond)
+
+	// Single-repo shows a huh Select. Default is "(none — empty workspace)".
+	// Navigate down to the first repo.
+	e.SendKeys("j")
+	time.Sleep(200 * time.Millisecond)
+
+	// Submit.
+	e.SendKeys("Enter")
+
+	e.WaitForTaskExists(name)
+	e.WaitForTaskState(name, "active")
+
+	// Dismiss the workspace progress modal.
+	e.WaitForPaneContent("Done!")
+	e.SendKeys("Escape")
+	time.Sleep(300 * time.Millisecond)
+}
+
+// CreateMultiRepoTask drives the wizard to create a multi_repo workspace task,
+// toggling the first N repos.
+func (e *TestEnv) CreateMultiRepoTask(name string, repoCount int) {
+	e.t.Helper()
+	e.SendKeys("n")
+	time.Sleep(400 * time.Millisecond)
+	e.SendKeys(name)
+	time.Sleep(200 * time.Millisecond)
+
+	// Enter to advance from Name tab to Repos tab.
+	e.SendKeys("Enter")
+	time.Sleep(400 * time.Millisecond)
+
+	// Multi-repo shows a repo picker. Toggle repos with space, navigate with j.
+	for i := 0; i < repoCount; i++ {
+		if i > 0 {
+			e.SendKeys("j")
+			time.Sleep(100 * time.Millisecond)
+		}
+		e.SendKeys(" ")
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Submit.
+	e.SendKeys("Enter")
+
+	e.WaitForTaskExists(name)
+	e.WaitForTaskState(name, "active")
+
+	// Dismiss the workspace progress modal.
+	e.WaitForPaneContent("Done!")
+	e.SendKeys("Escape")
+	time.Sleep(300 * time.Millisecond)
+}
+
+// ReposDir returns the repos directory path for workspace test environments.
+func (e *TestEnv) ReposDir() string {
+	return filepath.Join(e.projectDir, "repos")
+}
+
+// WorkspacesDir returns the workspaces directory path.
+func (e *TestEnv) WorkspacesDir() string {
+	return filepath.Join(e.projectDir, "workspaces")
+}
+
 // --- helper functions ---
+
+func initGitRepoForIntegration(t *testing.T, repoPath string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoPath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v: %s", args, repoPath, err, out)
+		}
+	}
+}
+
+func initJJRepoForIntegration(t *testing.T, repoPath string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"git", "init"},
+		{"describe", "-m", "initial"},
+		{"new"},
+	} {
+		cmd := exec.Command("jj", args...)
+		cmd.Dir = repoPath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("jj %v in %s: %v: %s", args, repoPath, err, out)
+		}
+	}
+}
+
+// gitBranchExists checks if a branch exists in a git repo.
+func gitBranchExists(repoDir, branchName string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", branchName)
+	cmd.Dir = repoDir
+	return cmd.Run() == nil
+}
+
+// gitWorktreeList returns the output of git worktree list for a repo.
+func gitWorktreeList(t *testing.T, repoDir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "worktree", "list")
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git worktree list in %s: %v: %s", repoDir, err, out)
+	}
+	return string(out)
+}
+
+// jjWorkspaceList returns the output of jj workspace list for a repo.
+func jjWorkspaceList(t *testing.T, repoDir string) string {
+	t.Helper()
+	cmd := exec.Command("jj", "workspace", "list")
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("jj workspace list in %s: %v: %s", repoDir, err, out)
+	}
+	return string(out)
+}
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
