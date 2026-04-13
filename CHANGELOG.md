@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- CWD picker ignoring filtered selection when pressing Enter.
+
 ## [1.0.0-beta.2] - 2026-04-13
 
 ### Fixed

@@ -160,6 +160,12 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 
 When fixing a bug or adding a feature, add an entry to the `[Unreleased]` section of `CHANGELOG.md` under the appropriate category (`Added`, `Changed`, `Fixed`, etc.). See `README.md > Cutting a Release` for the full release process.
 
+## Debugging Live Instances
+
+**Never interact with a live krang instance's tmux sessions when debugging.** Krang manages sessions by name (`k-<instanceID>`). If the session gets renamed or a second krang process starts in the same session, window management breaks silently — tasks can't be focused, new windows don't appear, and the instance becomes unrecoverable without manual tmux surgery.
+
+Safe debugging approaches: query the SQLite DB directly, read source code, read log files. Do NOT run tmux commands targeting krang-managed sessions/windows, and never start krang (including via `mise run run`) inside a window managed by another krang instance.
+
 ## Building and Running
 
 ```

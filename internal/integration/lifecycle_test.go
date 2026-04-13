@@ -415,6 +415,59 @@ func TestCwdModeSelectsSubdirectory(t *testing.T) {
 	}
 }
 
+func TestCwdModeFilterThenEnterSelectsFilteredItem(t *testing.T) {
+	env := NewTestEnv(t)
+
+	// Create subdirectories so the CWD picker appears.
+	for _, name := range []string{"alpha", "beta", "gamma"} {
+		if err := os.MkdirAll(filepath.Join(env.projectDir, name), 0o755); err != nil {
+			t.Fatalf("creating subdir: %v", err)
+		}
+	}
+
+	// Open wizard and type task name.
+	env.SendKeys("n")
+	time.Sleep(400 * time.Millisecond)
+	env.SendKeys("filter-cwd")
+	time.Sleep(200 * time.Millisecond)
+
+	// Enter to advance from Name tab to CWD tab.
+	env.SendKeys("Enter")
+	time.Sleep(400 * time.Millisecond)
+
+	// Activate the huh Select filter by pressing "/".
+	env.SendKeys("/")
+	time.Sleep(200 * time.Millisecond)
+
+	// Type "beta" to filter down to one option.
+	env.SendKeys("beta")
+	time.Sleep(300 * time.Millisecond)
+
+	// Press Enter while filter is still active — this should select "beta"
+	// and submit the wizard, NOT fall back to "." (the default).
+	env.SendKeys("Enter")
+
+	env.WaitForTaskExists("filter-cwd")
+	env.WaitForTaskState("filter-cwd", "active")
+
+	// The task's cwd should be the "beta" subdirectory.
+	expectedCwd := filepath.Join(env.projectDir, "beta")
+	taskCwd := env.TaskCwd("filter-cwd")
+	if taskCwd != expectedCwd {
+		t.Errorf("task cwd = %q, want %q (filter-then-enter selected wrong directory)", taskCwd, expectedCwd)
+	}
+
+	// Verify fakeclaude was launched in the correct directory.
+	env.WaitForManifestCount(1)
+	manifest := env.LatestManifest()
+	if manifest == nil {
+		t.Fatal("no fakeclaude manifest found")
+	}
+	if manifest.Cwd != expectedCwd {
+		t.Errorf("fakeclaude cwd = %q, want %q", manifest.Cwd, expectedCwd)
+	}
+}
+
 func TestForkNonWorkspace(t *testing.T) {
 	env := NewTestEnv(t)
 

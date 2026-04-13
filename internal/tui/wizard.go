@@ -351,13 +351,17 @@ func (w *taskWizard) Update(msg tea.Msg) (tea.Cmd, tea.Msg) {
 	}
 
 	// Tab 2 with huh form: intercept enter to submit the wizard.
+	// Forward enter to the form first so it can update its value
+	// (e.g. huh Select writes the filtered selection on enter).
 	if w.activeTab == wizardTabRepos && keyMsg.String() == "enter" {
+		w.updateActiveForm(msg)
 		return nil, w.buildSubmitMsg()
 	}
 
 	// Tab 3: enter always submits. Use tab/shift-tab and space to
 	// navigate and toggle within the form.
 	if w.activeTab == wizardTabOptions && keyMsg.String() == "enter" {
+		w.updateActiveForm(msg)
 		return nil, w.buildSubmitMsg()
 	}
 
