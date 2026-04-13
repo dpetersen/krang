@@ -441,25 +441,36 @@ Or build directly with Go:
 go build -o krang .
 ```
 
+### Changelog
+
+This project uses [Keep a Changelog](https://keepachangelog.com/)
+format. When fixing bugs or adding features, add an entry to the
+`[Unreleased]` section of [CHANGELOG.md](CHANGELOG.md). When cutting
+a release, move unreleased entries into a new version heading.
+
 ### Cutting a Release
 
 Krang uses [jj](https://jj-vcs.github.io/jj/) for version control.
 Releases are distributed via a Homebrew tap at
 [dpetersen/homebrew-tap](https://github.com/dpetersen/homebrew-tap).
 
-1. Tag the release commit:
+1. Move `[Unreleased]` entries in CHANGELOG.md into a new version
+   section with today's date. Add a fresh empty `[Unreleased]`
+   heading and update the comparison links at the bottom of the file.
+
+2. Tag the release commit:
 
    ```
-   jj tag set v0.1.0-alpha.2
+   jj tag set v1.0.0-beta.2
    jj git push
    ```
 
-2. Get the SHA-256 of the GitHub tarball:
+3. Get the SHA-256 of the GitHub tarball:
 
    ```
-   curl -sL https://github.com/dpetersen/krang/archive/refs/tags/v0.1.0-alpha.2.tar.gz | shasum -a 256
+   curl -sL https://github.com/dpetersen/krang/archive/refs/tags/v1.0.0-beta.2.tar.gz | shasum -a 256
    ```
 
-3. Update `Formula/krang.rb` in the
+4. Update `Formula/krang.rb` in the
    [homebrew-tap](https://github.com/dpetersen/homebrew-tap) repo
    with the new tag URL and SHA-256, then push.

@@ -156,6 +156,10 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - **`default_vcs`** — configurable in `config.yaml` (user-level) or `krang.yaml` (project-level, takes precedence). Controls whether remote clones use `git clone` or `jj git clone`. Defaults to `git`.
 - **`github_orgs`** — configurable in both `config.yaml` and `krang.yaml`, merged with dedup. Saved orgs appear in the org select list on the Remote tab.
 
+## Changelog
+
+When fixing a bug or adding a feature, add an entry to the `[Unreleased]` section of `CHANGELOG.md` under the appropriate category (`Added`, `Changed`, `Fixed`, etc.). See `README.md > Cutting a Release` for the full release process.
+
 ## Building and Running
 
 ```
