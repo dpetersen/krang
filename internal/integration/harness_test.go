@@ -294,6 +294,29 @@ func (e *TestEnv) WaitForTaskAttention(name string, attention string) {
 	})
 }
 
+// WaitForEvent waits for a specific event type to appear in the events
+// table for the named task. This is used to synchronize on hook event
+// processing — the event is logged inside the handleHookEvent goroutine,
+// so its presence confirms the goroutine has executed past that point.
+func (e *TestEnv) WaitForEvent(taskName string, eventType string) {
+	e.t.Helper()
+	e.WaitForEventCount(taskName, eventType, 1)
+}
+
+// WaitForEventCount waits for at least n events of the given type.
+func (e *TestEnv) WaitForEventCount(taskName string, eventType string, n int) {
+	e.t.Helper()
+	e.WaitFor(fmt.Sprintf("%d× event %s for task %q", n, eventType, taskName), 10*time.Second, func() bool {
+		var count int
+		e.db.QueryRow(`
+			SELECT COUNT(*) FROM events e
+			JOIN tasks t ON t.id = e.task_id
+			WHERE t.name = ? AND e.event_type = ?`,
+			taskName, eventType).Scan(&count)
+		return count >= n
+	})
+}
+
 // WaitForTaskExists waits for a task to appear in the DB.
 func (e *TestEnv) WaitForTaskExists(name string) {
 	e.t.Helper()

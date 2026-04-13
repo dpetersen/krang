@@ -55,7 +55,7 @@ func TestCreateAndHookEvents(t *testing.T) {
 		"hook_event_name": "SessionStart",
 		"cwd":             env.projectDir,
 	})
-	env.WaitForTaskAttention("hook-test", "ok")
+	env.WaitForEvent("hook-test", "SessionStart")
 
 	// Send tool use hooks.
 	env.SendHook(map[string]interface{}{
@@ -64,8 +64,7 @@ func TestCreateAndHookEvents(t *testing.T) {
 		"cwd":             env.projectDir,
 		"tool_name":       "Read",
 	})
-	time.Sleep(200 * time.Millisecond)
-	env.WaitForTaskAttention("hook-test", "ok")
+	env.WaitForEvent("hook-test", "PostToolUse")
 
 	// Send Stop -> attention becomes waiting.
 	env.SendHook(map[string]interface{}{
@@ -107,7 +106,7 @@ func TestIdlePromptDoesNotOverwriteDone(t *testing.T) {
 		"hook_event_name": "SessionStart",
 		"cwd":             env.projectDir,
 	})
-	env.WaitForTaskAttention("idle-test", "ok")
+	env.WaitForEvent("idle-test", "SessionStart")
 
 	// TaskCompleted sets attention to done (green).
 	env.SendHook(map[string]interface{}{
@@ -125,7 +124,7 @@ func TestIdlePromptDoesNotOverwriteDone(t *testing.T) {
 		"notification_type": "idle_prompt",
 		"cwd":               env.projectDir,
 	})
-	time.Sleep(500 * time.Millisecond)
+	env.WaitForEvent("idle-test", "Notification")
 	env.WaitForTaskAttention("idle-test", "done")
 
 	// A genuine UserPromptSubmit should still be able to change state.
@@ -149,7 +148,7 @@ func TestSubagentPermissionNotClobbered(t *testing.T) {
 		"hook_event_name": "SessionStart",
 		"cwd":             env.projectDir,
 	})
-	env.WaitForTaskAttention("perm-test", "ok")
+	env.WaitForEvent("perm-test", "SessionStart")
 
 	// Two subagents start.
 	env.SendHook(map[string]interface{}{
@@ -166,7 +165,7 @@ func TestSubagentPermissionNotClobbered(t *testing.T) {
 		"agent_id":        "agent-b",
 		"agent_type":      "Explore",
 	})
-	time.Sleep(200 * time.Millisecond)
+	env.WaitForEventCount("perm-test", "SubagentStart", 2)
 
 	// Agent A hits a permission wall.
 	env.SendHook(map[string]interface{}{
@@ -186,7 +185,7 @@ func TestSubagentPermissionNotClobbered(t *testing.T) {
 		"tool_name":       "Read",
 		"agent_id":        "agent-b",
 	})
-	time.Sleep(300 * time.Millisecond)
+	env.WaitForEvent("perm-test", "PostToolUse")
 	env.WaitForTaskAttention("perm-test", "permission")
 
 	// Agent A's permission is resolved (PostToolUse from same agent).
@@ -211,7 +210,7 @@ func TestSubagentPermissionClearedByUserPrompt(t *testing.T) {
 		"hook_event_name": "SessionStart",
 		"cwd":             env.projectDir,
 	})
-	env.WaitForTaskAttention("perm-esc-test", "ok")
+	env.WaitForEvent("perm-esc-test", "SessionStart")
 
 	// Subagent starts and hits a permission wall.
 	env.SendHook(map[string]interface{}{
@@ -221,6 +220,7 @@ func TestSubagentPermissionClearedByUserPrompt(t *testing.T) {
 		"agent_id":        "agent-a",
 		"agent_type":      "Explore",
 	})
+	env.WaitForEvent("perm-esc-test", "SubagentStart")
 	env.SendHook(map[string]interface{}{
 		"session_id":      sessionID,
 		"hook_event_name": "PermissionRequest",
