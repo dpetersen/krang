@@ -10,7 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - CWD picker ignoring filtered selection when pressing Enter.
-
+- Fix false "krang is already running" error when only the parked session
+  exists. Session checks now use exact tmux name matching and verify
+  liveness via the hook server health endpoint, with specific error
+  messages for live instances vs stale sessions.
+- Clean up the parked tmux session on exit when no tasks are parked,
+  preventing stale sessions from lingering.
 ## [1.0.0-beta.2] - 2026-04-13
 
 ### Fixed

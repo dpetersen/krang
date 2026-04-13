@@ -75,29 +75,38 @@ func (s *Server) Stop() {
 	_ = os.Remove(s.stateFilePath)
 }
 
-// checkExistingInstance reads an existing state file and checks whether
-// a krang instance is already running on that port. Returns an error if
-// a live instance is found; silently proceeds if the state file is
-// missing or stale.
-func (s *Server) checkExistingInstance() error {
-	data, err := os.ReadFile(s.stateFilePath)
+// InstanceIsLive checks whether a krang instance is running by reading
+// the state file and hitting the health endpoint. Returns true only if
+// a live instance responds.
+func InstanceIsLive(stateFilePath string) bool {
+	data, err := os.ReadFile(stateFilePath)
 	if err != nil {
-		return nil // No state file — proceed.
+		return false
 	}
 
 	var state stateFile
 	if err := json.Unmarshal(data, &state); err != nil || state.Port == 0 {
-		return nil // Corrupt state file — overwrite.
+		return false
 	}
 
 	client := &http.Client{Timeout: 1 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/health", state.Port))
 	if err != nil {
-		return nil // Not responding — stale.
+		return false
 	}
 	resp.Body.Close()
+	return true
+}
 
-	return fmt.Errorf("krang is already running for this directory on port %d", state.Port)
+// checkExistingInstance reads an existing state file and checks whether
+// a krang instance is already running on that port. Returns an error if
+// a live instance is found; silently proceeds if the state file is
+// missing or stale.
+func (s *Server) checkExistingInstance() error {
+	if InstanceIsLive(s.stateFilePath) {
+		return fmt.Errorf("krang is already running for this directory")
+	}
+	return nil
 }
 
 func (s *Server) writeStateFile() error {

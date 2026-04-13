@@ -56,9 +56,24 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 
 	// If a session with our krang name already exists and it's not
-	// this one, another krang TUI is already running for this directory.
+	// this one, another krang instance may be running for this
+	// directory. Verify via the hook server health check to
+	// distinguish a live instance from a stale session.
 	if currentSession != krangSession && tmux.SessionExists(krangSession) {
-		return fmt.Errorf("krang is already running for this directory; attach with: tmux a -t %s", krangSession)
+		if hooks.InstanceIsLive(stateFilePath) {
+			return fmt.Errorf("krang is already running for this directory; attach with: tmux a -t %s", krangSession)
+		}
+		return fmt.Errorf("a stale krang tmux session exists from a previous run: %s\nkill it with: tmux kill-session -t %s", krangSession, krangSession)
+	}
+
+	// A leftover parked session (without a matching active session) is
+	// harmless — EnsureParkedSession will reuse it. But if krang is
+	// actually still running (e.g. in a different tmux client), block.
+	if currentSession != krangSession && !tmux.SessionExists(krangSession) && tmux.SessionExists(parkedSession) {
+		if hooks.InstanceIsLive(stateFilePath) {
+			return fmt.Errorf("krang is already running for this directory (parked session found: %s)", parkedSession)
+		}
+		// Stale parked session — not an error, will be reused.
 	}
 
 	if currentSession != krangSession {
@@ -132,6 +147,21 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("running TUI: %w", err)
+	}
+
+	// Clean up the parked session if no tasks are parked. This
+	// prevents stale sessions from lingering after krang exits.
+	if tasks, err := taskStore.List(); err == nil {
+		hasParked := false
+		for _, t := range tasks {
+			if t.State == db.StateParked {
+				hasParked = true
+				break
+			}
+		}
+		if !hasParked {
+			_ = tmux.KillSession(parkedSession)
+		}
 	}
 
 	return nil

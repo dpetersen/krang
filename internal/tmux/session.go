@@ -17,7 +17,7 @@ func ParkedSessionName(instanceID string) string {
 }
 
 func SessionExists(name string) bool {
-	err := exec.Command("tmux", "has-session", "-t", name).Run()
+	err := exec.Command("tmux", "has-session", "-t", "="+name).Run()
 	return err == nil
 }
 
@@ -61,7 +61,7 @@ func RenameSession(oldName, newName string) error {
 }
 
 func KillSession(name string) error {
-	cmd := exec.Command("tmux", "kill-session", "-t", name)
+	cmd := exec.Command("tmux", "kill-session", "-t", "="+name)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("killing session %s: %s: %w", name, strings.TrimSpace(string(out)), err)
 	}
