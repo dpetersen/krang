@@ -2616,6 +2616,13 @@ func (m Model) handleHookEvent(event hooks.HookEvent, classifying bool, suppress
 			if classifying && attention == db.AttentionWaiting {
 				ok = false
 			}
+			// Don't let idle_prompt notifications downgrade a
+			// classified "done" back to "waiting" — the classifier
+			// already decided this task is finished.
+			if t.Attention == db.AttentionDone && attention == db.AttentionWaiting &&
+				event.NotificationType == "idle_prompt" {
+				ok = false
+			}
 		}
 		if ok {
 			// When another agent still has a pending permission,

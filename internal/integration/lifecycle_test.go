@@ -95,6 +95,48 @@ func TestCreateAndHookEvents(t *testing.T) {
 	env.WaitForPaneContent("ok")
 }
 
+func TestIdlePromptDoesNotOverwriteDone(t *testing.T) {
+	env := NewTestEnv(t)
+
+	env.CreateTask("idle-test")
+	sessionID := env.TaskSessionID("idle-test")
+
+	// Establish the session.
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "SessionStart",
+		"cwd":             env.projectDir,
+	})
+	env.WaitForTaskAttention("idle-test", "ok")
+
+	// TaskCompleted sets attention to done (green).
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "TaskCompleted",
+		"cwd":             env.projectDir,
+	})
+	env.WaitForTaskAttention("idle-test", "done")
+
+	// Claude fires an idle_prompt notification ~60s after going idle.
+	// This must NOT overwrite the classified "done" state.
+	env.SendHook(map[string]interface{}{
+		"session_id":        sessionID,
+		"hook_event_name":   "Notification",
+		"notification_type": "idle_prompt",
+		"cwd":               env.projectDir,
+	})
+	time.Sleep(500 * time.Millisecond)
+	env.WaitForTaskAttention("idle-test", "done")
+
+	// A genuine UserPromptSubmit should still be able to change state.
+	env.SendHook(map[string]interface{}{
+		"session_id":      sessionID,
+		"hook_event_name": "UserPromptSubmit",
+		"cwd":             env.projectDir,
+	})
+	env.WaitForTaskAttention("idle-test", "ok")
+}
+
 func TestSubagentPermissionNotClobbered(t *testing.T) {
 	env := NewTestEnv(t)
 
