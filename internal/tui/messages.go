@@ -116,11 +116,12 @@ type wsProgressState struct {
 	WorkspaceDir       string
 
 	// Fork-specific fields.
-	Forking         bool   // true if this is a fork operation
-	ForkMode        string // "independent" or "shared"
-	SourceTaskID    string // source task's ID (for lineage tracking)
-	SourceSessionID string // source task's session ID (for file copy)
-	SourceCwd       string // source task's cwd (for session file copy)
+	Forking         bool     // true if this is a fork operation
+	ForkMode        string   // "independent" or "shared"
+	SourceTaskID    string   // source task's ID (for lineage tracking)
+	SourceSessionID string   // source task's session ID (for file copy)
+	SourceCwd       string   // source task's cwd (for session file copy)
+	ManagedRepos    []string // repo names being forked (for non-repo copy exclusion)
 }
 
 // wsDirCreatedMsg signals that the workspace directory was created.
@@ -164,6 +165,11 @@ type wsForkRepoDoneMsg struct {
 	Output string
 	VCS    string
 	Err    error
+}
+
+// wsForkNonRepoCopiedMsg signals that non-repo items were copied.
+type wsForkNonRepoCopiedMsg struct {
+	Err error
 }
 
 // wsForkSessionCopiedMsg signals that session files were copied.

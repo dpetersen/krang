@@ -140,7 +140,8 @@ func AddRepos(rs *RepoSets, workspaceDir, taskName string, repos []string) (*Cre
 }
 
 // PresentRepos returns the names of repo subdirectories already
-// present in a multi_repo workspace.
+// present in a multi_repo workspace. Only directories that contain
+// .git or .jj are included; plain directories and files are ignored.
 func PresentRepos(workspaceDir string) []string {
 	entries, err := os.ReadDir(workspaceDir)
 	if err != nil {
@@ -148,11 +149,98 @@ func PresentRepos(workspaceDir string) []string {
 	}
 	var repos []string
 	for _, e := range entries {
-		if e.IsDir() {
+		if !e.IsDir() {
+			continue
+		}
+		sub := filepath.Join(workspaceDir, e.Name())
+		if isRepoDir(sub) {
 			repos = append(repos, e.Name())
 		}
 	}
 	return repos
+}
+
+// NonRepoItem describes a workspace entry that is not a managed repo.
+type NonRepoItem struct {
+	Name string // entry name (e.g. "docs", "CLAUDE.md")
+	Kind string // "file" or "dir"
+}
+
+// NonRepoItems returns workspace entries that are not in the managed
+// repos list. Directories get Kind "dir", everything else gets "file".
+func NonRepoItems(workspaceDir string, managedRepos []string) []NonRepoItem {
+	managed := make(map[string]bool, len(managedRepos))
+	for _, r := range managedRepos {
+		managed[r] = true
+	}
+
+	entries, err := os.ReadDir(workspaceDir)
+	if err != nil {
+		return nil
+	}
+
+	var items []NonRepoItem
+	for _, e := range entries {
+		if managed[e.Name()] {
+			continue
+		}
+		kind := "file"
+		if e.IsDir() {
+			kind = "dir"
+		}
+		items = append(items, NonRepoItem{Name: e.Name(), Kind: kind})
+	}
+	return items
+}
+
+// CopyNonRepoItems copies all workspace entries from srcDir to dstDir
+// except those in the managedRepos list. Managed repos are forked
+// separately via ForkRepo. Everything else (files, symlinks, non-repo
+// directories, and one-off cloned repos) is copied verbatim.
+func CopyNonRepoItems(srcDir, dstDir string, managedRepos []string) error {
+	managed := make(map[string]bool, len(managedRepos))
+	for _, r := range managedRepos {
+		managed[r] = true
+	}
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("reading workspace dir: %w", err)
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if managed[name] {
+			continue
+		}
+		srcPath := filepath.Join(srcDir, name)
+		dstPath := filepath.Join(dstDir, name)
+
+		info, err := os.Lstat(srcPath)
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", name, err)
+		}
+
+		switch {
+		case info.IsDir():
+			if err := copyTreeExcluding(srcPath, dstPath, nil); err != nil {
+				return fmt.Errorf("copying directory %s: %w", name, err)
+			}
+		case info.Mode()&os.ModeSymlink != 0:
+			target, readErr := os.Readlink(srcPath)
+			if readErr != nil {
+				return fmt.Errorf("readlink %s: %w", name, readErr)
+			}
+			if err := os.Symlink(target, dstPath); err != nil {
+				return fmt.Errorf("symlink %s: %w", name, err)
+			}
+		default:
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return fmt.Errorf("copying file %s: %w", name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // DestroyRepoResult holds the outcome of forgetting a single repo's workspace.

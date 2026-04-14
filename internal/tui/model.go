@@ -434,7 +434,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.wsProgress.Forking {
-			// Start the first repo fork.
+			// Multi-repo: copy non-repo items first, then fork repos.
+			if m.repoSets != nil && m.repoSets.WorkspaceStrategy == workspace.StrategyMultiRepo {
+				m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Copying non-repo items...")
+				return m, m.wsForkCopyNonRepoCmd()
+			}
+			// Single-repo: start the repo fork directly.
 			m.wsProgress.Repos[0].Status = cloneStatusCloning
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 				fmt.Sprintf("Forking %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
@@ -610,6 +615,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wsProgress.Done = true
 		return m, nil
 
+	case wsForkNonRepoCopiedMsg:
+		if m.wsProgress == nil {
+			return m, nil
+		}
+		// Mark all non-repo entries as done (or failed).
+		for i := range m.wsProgress.Repos {
+			if isNonRepoEntry(m.wsProgress.Repos[i].VCS) {
+				if msg.Err != nil {
+					m.wsProgress.Repos[i].Status = cloneStatusFailed
+					m.wsProgress.Repos[i].Err = msg.Err
+				} else {
+					m.wsProgress.Repos[i].Status = cloneStatusDone
+				}
+			}
+		}
+		if msg.Err != nil {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+				fmt.Sprintf("Warning copying non-repo items: %v", msg.Err))
+		} else {
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Non-repo items copied.")
+		}
+		// Find the first repo entry to fork.
+		firstRepo := -1
+		for i, r := range m.wsProgress.Repos {
+			if !isNonRepoEntry(r.VCS) {
+				firstRepo = i
+				break
+			}
+		}
+		if firstRepo < 0 {
+			// No repos — move to session copy.
+			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Copying session files...")
+			return m, m.wsForkCopySessionCmd()
+		}
+		m.wsProgress.Repos[firstRepo].Status = cloneStatusCloning
+		m.wsProgress.LogLines = append(m.wsProgress.LogLines,
+			fmt.Sprintf("Forking %s (%s)...", m.wsProgress.Repos[firstRepo].Repo, m.wsProgress.Repos[firstRepo].VCS))
+		return m, m.wsForkRepoCmd(firstRepo, m.repoSets)
+
 	case wsForkRepoDoneMsg:
 		if m.wsProgress == nil {
 			return m, nil
@@ -651,9 +695,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Next repo or move to session copy.
-		nextIdx := msg.Index + 1
-		if nextIdx < len(m.wsProgress.Repos) {
+		// Next repo (skip non-repo entries) or move to session copy.
+		nextIdx := -1
+		for i := msg.Index + 1; i < len(m.wsProgress.Repos); i++ {
+			if !isNonRepoEntry(m.wsProgress.Repos[i].VCS) {
+				nextIdx = i
+				break
+			}
+		}
+		if nextIdx >= 0 {
 			m.wsProgress.Repos[nextIdx].Status = cloneStatusCloning
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 				fmt.Sprintf("Forking %s (%s)...", m.wsProgress.Repos[nextIdx].Repo, m.wsProgress.Repos[nextIdx].VCS))
@@ -1980,11 +2030,27 @@ func (m Model) startFork(name string) (tea.Model, tea.Cmd) {
 		}
 	} else {
 		repos = workspace.PresentRepos(src.WorkspaceDir)
+		// Filter to managed repos (those with source in rs.ReposDir).
+		// One-off cloned repos can't be worktree-ified and will be
+		// copied as non-repo items instead.
+		var managed []string
+		for _, repo := range repos {
+			if _, err := os.Stat(filepath.Join(rs.ReposDir, repo)); err == nil {
+				managed = append(managed, repo)
+			}
+		}
+		repos = managed
 	}
 
-	entries := make([]repoCloneEntry, len(repos))
-	for i, repo := range repos {
-		entries[i] = repoCloneEntry{Repo: repo, VCS: rs.DetectVCS(repo)}
+	// Build entries: managed repos first, then non-repo items.
+	entries := make([]repoCloneEntry, 0, len(repos))
+	for _, repo := range repos {
+		entries = append(entries, repoCloneEntry{Repo: repo, VCS: rs.DetectVCS(repo)})
+	}
+	if rs.WorkspaceStrategy == workspace.StrategyMultiRepo {
+		for _, item := range workspace.NonRepoItems(src.WorkspaceDir, repos) {
+			entries = append(entries, repoCloneEntry{Repo: item.Name, VCS: item.Kind})
+		}
 	}
 
 	m.mode = ModeWorkspaceProgress
@@ -1999,6 +2065,7 @@ func (m Model) startFork(name string) (tea.Model, tea.Cmd) {
 		TaskName:           name,
 		TaskFlags:          src.Flags,
 		TaskSandboxProfile: src.SandboxProfile,
+		ManagedRepos:       repos,
 	}
 
 	return m, tea.Batch(m.wsForkCreateDirCmd(rs, name), m.spinner.Tick)
@@ -2060,6 +2127,31 @@ func (m Model) wsForkRepoCmd(index int, rs *workspace.RepoSets) tea.Cmd {
 			Err:    result.Err,
 		}
 	}
+}
+
+// wsForkCopyNonRepoCmd copies non-repo files and directories from the
+// source workspace to the fork.
+func (m Model) wsForkCopyNonRepoCmd() tea.Cmd {
+	ws := m.wsProgress
+	if ws == nil {
+		return nil
+	}
+	srcWorkspaceDir := ws.SourceCwd
+	if m.forkSourceTask != nil && m.forkSourceTask.WorkspaceDir != "" {
+		srcWorkspaceDir = m.forkSourceTask.WorkspaceDir
+	}
+	dstDir := ws.WorkspaceDir
+	managedRepos := ws.ManagedRepos
+	return func() tea.Msg {
+		err := workspace.CopyNonRepoItems(srcWorkspaceDir, dstDir, managedRepos)
+		return wsForkNonRepoCopiedMsg{Err: err}
+	}
+}
+
+// isNonRepoEntry returns true if the VCS label indicates a non-repo
+// entry that was copied rather than forked.
+func isNonRepoEntry(vcs string) bool {
+	return vcs == "file" || vcs == "dir"
 }
 
 // sourceSessionCwd returns the directory Claude's session file is keyed

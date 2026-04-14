@@ -529,6 +529,65 @@ func TestForkNonWorkspace(t *testing.T) {
 	}
 }
 
+func TestForkInheritsFlagsAndSandbox(t *testing.T) {
+	env := NewTestEnv(t)
+
+	env.CreateTask("flag-src")
+
+	// Set flags and sandbox profile on the source task via direct DB update.
+	_, err := env.db.Exec(
+		`UPDATE tasks SET flags = ?, sandbox_profile = ? WHERE name = ?`,
+		`{"dangerously_skip_permissions":true,"debug":true}`, "my-sandbox", "flag-src",
+	)
+	if err != nil {
+		t.Fatalf("setting flags/sandbox: %v", err)
+	}
+
+	// Establish the source session.
+	srcSessionID := env.TaskSessionID("flag-src")
+	env.SendHook(map[string]interface{}{
+		"session_id":      srcSessionID,
+		"hook_event_name": "SessionStart",
+		"cwd":             env.projectDir,
+	})
+	time.Sleep(300 * time.Millisecond)
+
+	// Fork via detail modal.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("d")
+	time.Sleep(500 * time.Millisecond)
+	env.SendKeys("Enter")
+
+	env.WaitForTaskExists("flag-src-fork")
+	env.WaitForTaskState("flag-src-fork", "active")
+
+	// Verify the fork inherited the sandbox profile.
+	var forkSandbox string
+	if err := env.db.QueryRow(
+		"SELECT sandbox_profile FROM tasks WHERE name = ?", "flag-src-fork",
+	).Scan(&forkSandbox); err != nil {
+		t.Fatalf("querying fork sandbox_profile: %v", err)
+	}
+	if forkSandbox != "my-sandbox" {
+		t.Errorf("fork sandbox_profile = %q, want %q", forkSandbox, "my-sandbox")
+	}
+
+	// Verify the fork inherited the flags.
+	var forkFlags string
+	if err := env.db.QueryRow(
+		"SELECT flags FROM tasks WHERE name = ?", "flag-src-fork",
+	).Scan(&forkFlags); err != nil {
+		t.Fatalf("querying fork flags: %v", err)
+	}
+	if !strings.Contains(forkFlags, `"dangerously_skip_permissions":true`) {
+		t.Errorf("fork flags missing dangerously_skip_permissions: %s", forkFlags)
+	}
+	if !strings.Contains(forkFlags, `"debug":true`) {
+		t.Errorf("fork flags missing debug: %s", forkFlags)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Git workspace tests
 // ---------------------------------------------------------------------------
@@ -954,5 +1013,93 @@ func TestJJWorkspaceForkAndComplete(t *testing.T) {
 	// Source workspace should still exist on disk.
 	if _, err := os.Stat(srcWsDir); err != nil {
 		t.Errorf("source workspace should still exist: %v", err)
+	}
+}
+
+func TestMultiRepoForkWithNonRepoItems(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "multi_repo", "git", []string{"alpha", "beta"})
+
+	env.CreateMultiRepoTask("multi-fork-src", 2)
+
+	srcWsDir := filepath.Join(env.WorkspacesDir(), "multi-fork-src")
+	env.WaitFor("workspace dir exists", 10*time.Second, func() bool {
+		_, err := os.Stat(srcWsDir)
+		return err == nil
+	})
+
+	// Add non-repo items to the source workspace.
+	if err := os.MkdirAll(filepath.Join(srcWsDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcWsDir, "docs", "design.md"), []byte("design doc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcWsDir, "CLAUDE.md"), []byte("# Instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcWsDir, "deploy.sh"), []byte("#!/bin/bash\necho deploy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Establish the source session.
+	srcSessionID := env.TaskSessionID("multi-fork-src")
+	env.SendHook(map[string]interface{}{
+		"session_id":      srcSessionID,
+		"hook_event_name": "SessionStart",
+		"cwd":             srcWsDir,
+	})
+	time.Sleep(300 * time.Millisecond)
+
+	// Fork via detail modal.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("d")
+	time.Sleep(500 * time.Millisecond)
+	env.SendKeys("Enter")
+
+	env.WaitForTaskExists("multi-fork-src-fork")
+	env.WaitForTaskState("multi-fork-src-fork", "active")
+
+	forkWsDir := filepath.Join(env.WorkspacesDir(), "multi-fork-src-fork")
+
+	// Fork should have its own workspace dir.
+	if wsDir := env.TaskWorkspaceDir("multi-fork-src-fork"); wsDir != forkWsDir {
+		t.Errorf("fork workspace_dir = %q, want %q", wsDir, forkWsDir)
+	}
+
+	// Repos should be git worktrees in the fork.
+	for _, repo := range []string{"alpha", "beta"} {
+		info, err := os.Lstat(filepath.Join(forkWsDir, repo, ".git"))
+		if err != nil {
+			t.Fatalf("%s: fork missing .git: %v", repo, err)
+		}
+		if info.IsDir() {
+			t.Errorf("%s: fork .git should be a file (worktree)", repo)
+		}
+	}
+
+	// Non-repo items should be copied.
+	data, err := os.ReadFile(filepath.Join(forkWsDir, "docs", "design.md"))
+	if err != nil {
+		t.Fatalf("reading copied docs/design.md: %v", err)
+	}
+	if string(data) != "design doc" {
+		t.Errorf("design.md = %q, want %q", string(data), "design doc")
+	}
+
+	data, err = os.ReadFile(filepath.Join(forkWsDir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("reading copied CLAUDE.md: %v", err)
+	}
+	if string(data) != "# Instructions" {
+		t.Errorf("CLAUDE.md = %q, want %q", string(data), "# Instructions")
+	}
+
+	data, err = os.ReadFile(filepath.Join(forkWsDir, "deploy.sh"))
+	if err != nil {
+		t.Fatalf("reading copied deploy.sh: %v", err)
+	}
+	if string(data) != "#!/bin/bash\necho deploy" {
+		t.Errorf("deploy.sh = %q, want %q", string(data), "#!/bin/bash\necho deploy")
 	}
 }

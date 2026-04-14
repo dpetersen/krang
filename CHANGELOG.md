@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Fix forking multi-repo workspaces that contain non-repo directories or
+  root-level files. Non-repo items are now copied to the fork and shown
+  in the progress wizard as "(file)" or "(dir)".
 - CWD picker ignoring filtered selection when pressing Enter.
 - Fix false "krang is already running" error when only the parked session
   exists. Session checks now use exact tmux name matching and verify

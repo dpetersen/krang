@@ -797,6 +797,275 @@ func TestGitWorktreeFallbackOnNoRemote(t *testing.T) {
 	}
 }
 
+func TestPresentReposFiltersNonRepos(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a real repo subdir.
+	repoDir := filepath.Join(wsDir, "alpha")
+	initGitRepo(t, repoDir)
+
+	// Create a plain directory (not a repo).
+	if err := os.MkdirAll(filepath.Join(wsDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a root-level file.
+	if err := os.WriteFile(filepath.Join(wsDir, "CLAUDE.md"), []byte("# Instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	repos := PresentRepos(wsDir)
+	if len(repos) != 1 || repos[0] != "alpha" {
+		t.Errorf("PresentRepos = %v, want [alpha]", repos)
+	}
+}
+
+func TestNonRepoItems(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a managed repo.
+	initGitRepo(t, filepath.Join(wsDir, "alpha"))
+
+	// Create non-repo items.
+	if err := os.MkdirAll(filepath.Join(wsDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "CLAUDE.md"), []byte("# Instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "deploy.sh"), []byte("#!/bin/bash\necho hi"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	items := NonRepoItems(wsDir, []string{"alpha"})
+
+	// Should contain docs (dir), CLAUDE.md (file), deploy.sh (file) but not alpha.
+	byName := make(map[string]string)
+	for _, item := range items {
+		byName[item.Name] = item.Kind
+	}
+	if byName["alpha"] != "" {
+		t.Error("NonRepoItems should not include managed repo 'alpha'")
+	}
+	if byName["docs"] != "dir" {
+		t.Errorf("docs Kind = %q, want %q", byName["docs"], "dir")
+	}
+	if byName["CLAUDE.md"] != "file" {
+		t.Errorf("CLAUDE.md Kind = %q, want %q", byName["CLAUDE.md"], "file")
+	}
+	if byName["deploy.sh"] != "file" {
+		t.Errorf("deploy.sh Kind = %q, want %q", byName["deploy.sh"], "file")
+	}
+}
+
+func TestCopyNonRepoItems(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "source")
+	dstDir := filepath.Join(dir, "dest")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Managed repo — should be skipped.
+	initGitRepo(t, filepath.Join(srcDir, "alpha"))
+
+	// Plain directory with a nested file.
+	if err := os.MkdirAll(filepath.Join(srcDir, "docs", "design"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "docs", "design", "plan.md"), []byte("the plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Root-level file.
+	if err := os.WriteFile(filepath.Join(srcDir, "CLAUDE.md"), []byte("# Instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink.
+	if err := os.Symlink("CLAUDE.md", filepath.Join(srcDir, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CopyNonRepoItems(srcDir, dstDir, []string{"alpha"})
+	if err != nil {
+		t.Fatalf("CopyNonRepoItems: %v", err)
+	}
+
+	// Managed repo should NOT be copied.
+	if _, err := os.Stat(filepath.Join(dstDir, "alpha")); !os.IsNotExist(err) {
+		t.Error("managed repo 'alpha' should not be copied")
+	}
+
+	// Plain directory should be copied.
+	data, err := os.ReadFile(filepath.Join(dstDir, "docs", "design", "plan.md"))
+	if err != nil {
+		t.Fatalf("reading copied docs: %v", err)
+	}
+	if string(data) != "the plan" {
+		t.Errorf("plan.md = %q, want %q", string(data), "the plan")
+	}
+
+	// Root-level file should be copied.
+	data, err = os.ReadFile(filepath.Join(dstDir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("reading copied CLAUDE.md: %v", err)
+	}
+	if string(data) != "# Instructions" {
+		t.Errorf("CLAUDE.md = %q, want %q", string(data), "# Instructions")
+	}
+
+	// Symlink should be preserved.
+	target, err := os.Readlink(filepath.Join(dstDir, "link.md"))
+	if err != nil {
+		t.Fatalf("readlink: %v", err)
+	}
+	if target != "CLAUDE.md" {
+		t.Errorf("symlink target = %q, want %q", target, "CLAUDE.md")
+	}
+}
+
+func TestCopyNonRepoItemsWithOneOffClone(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "source")
+	dstDir := filepath.Join(dir, "dest")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Managed repo — will be in the managed list.
+	initGitRepo(t, filepath.Join(srcDir, "alpha"))
+
+	// One-off clone — has .git but NOT in the managed list.
+	initGitRepo(t, filepath.Join(srcDir, "random-clone"))
+	if err := os.WriteFile(filepath.Join(srcDir, "random-clone", "readme.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := CopyNonRepoItems(srcDir, dstDir, []string{"alpha"})
+	if err != nil {
+		t.Fatalf("CopyNonRepoItems: %v", err)
+	}
+
+	// One-off clone should be copied (including its .git).
+	data, err := os.ReadFile(filepath.Join(dstDir, "random-clone", "readme.md"))
+	if err != nil {
+		t.Fatalf("reading copied one-off clone: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("readme.md = %q, want %q", string(data), "hello")
+	}
+
+	// Its .git should also be copied.
+	if _, err := os.Stat(filepath.Join(dstDir, "random-clone", ".git")); err != nil {
+		t.Errorf("one-off clone .git should be copied: %v", err)
+	}
+
+	// Managed repo should NOT be copied.
+	if _, err := os.Stat(filepath.Join(dstDir, "alpha")); !os.IsNotExist(err) {
+		t.Error("managed repo 'alpha' should not be copied")
+	}
+}
+
+func TestMultiRepoForkWithNonRepoItems(t *testing.T) {
+	dir := t.TempDir()
+
+	reposDir := filepath.Join(dir, "repos")
+	workspacesDir := filepath.Join(dir, "workspaces")
+	mkdirs(t, reposDir)
+
+	initGitRepo(t, filepath.Join(reposDir, "alpha"))
+	initGitRepo(t, filepath.Join(reposDir, "beta"))
+
+	rs := &RepoSets{
+		MetarepoDir:       dir,
+		WorkspaceStrategy: StrategyMultiRepo,
+		ReposDir:          reposDir,
+		WorkspacesDir:     workspacesDir,
+		Sets:              map[string][]string{},
+	}
+
+	// Create source workspace with two repos.
+	srcResult, err := Create(rs, "source-task", []string{"alpha", "beta"})
+	if err != nil {
+		t.Fatalf("Create source: %v", err)
+	}
+
+	// Add non-repo items to the source workspace.
+	if err := os.MkdirAll(filepath.Join(srcResult.WorkspaceDir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcResult.WorkspaceDir, "docs", "design.md"), []byte("design doc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcResult.WorkspaceDir, "CLAUDE.md"), []byte("# Instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fork each repo.
+	forkDir := filepath.Join(workspacesDir, "fork-task")
+	if err := os.MkdirAll(forkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, repo := range []string{"alpha", "beta"} {
+		dstPath := filepath.Join(forkDir, repo)
+		result := ForkRepo(rs, srcResult.WorkspaceDir, dstPath, repo, "fork-task")
+		if result.Err != nil {
+			t.Fatalf("ForkRepo %s: %v", repo, result.Err)
+		}
+	}
+
+	// Copy non-repo items.
+	managedRepos := []string{"alpha", "beta"}
+	if err := CopyNonRepoItems(srcResult.WorkspaceDir, forkDir, managedRepos); err != nil {
+		t.Fatalf("CopyNonRepoItems: %v", err)
+	}
+
+	// Verify repos are worktrees.
+	for _, repo := range []string{"alpha", "beta"} {
+		gitPath := filepath.Join(forkDir, repo, ".git")
+		info, err := os.Lstat(gitPath)
+		if err != nil {
+			t.Fatalf("%s: expected .git: %v", repo, err)
+		}
+		if info.IsDir() {
+			t.Errorf("%s: .git should be a file (worktree), not a directory", repo)
+		}
+	}
+
+	// Verify non-repo items are copied.
+	data, err := os.ReadFile(filepath.Join(forkDir, "docs", "design.md"))
+	if err != nil {
+		t.Fatalf("reading copied docs: %v", err)
+	}
+	if string(data) != "design doc" {
+		t.Errorf("design.md = %q, want %q", string(data), "design doc")
+	}
+
+	data, err = os.ReadFile(filepath.Join(forkDir, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("reading copied CLAUDE.md: %v", err)
+	}
+	if string(data) != "# Instructions" {
+		t.Errorf("CLAUDE.md = %q, want %q", string(data), "# Instructions")
+	}
+}
+
 func run(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
