@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0-beta.3] - 2026-04-16
+
 ### Fixed
 
 - Fix forking multi-repo workspaces that contain non-repo directories or
@@ -31,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   that were completed before Claude sent SessionStart (e.g. after a
   launch failure) left stale files behind that confused future
   resumes of the source task.
+
 ## [1.0.0-beta.2] - 2026-04-13
 
 ### Fixed
@@ -44,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Initial beta release.
 
-[Unreleased]: https://github.com/dpetersen/krang/compare/v1.0.0-beta.2...HEAD
+[Unreleased]: https://github.com/dpetersen/krang/compare/v1.0.0-beta.3...HEAD
+[1.0.0-beta.3]: https://github.com/dpetersen/krang/compare/v1.0.0-beta.2...v1.0.0-beta.3
 [1.0.0-beta.2]: https://github.com/dpetersen/krang/compare/v1.0.0-beta.1...v1.0.0-beta.2
 [1.0.0-beta.1]: https://github.com/dpetersen/krang/releases/tag/v1.0.0-beta.1
