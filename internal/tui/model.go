@@ -2238,7 +2238,7 @@ func (m *Model) tryAdoptSession(event hooks.HookEvent) *db.Task {
 		// Clean up contested session marker and copied session files.
 		if t.SourceTaskID != "" {
 			if srcTask, err := m.taskStore.Get(t.SourceTaskID); err == nil && srcTask != nil {
-				_ = task.CleanupCopiedSession(srcTask.SessionID, t.Cwd)
+				_ = task.CleanupCopiedSession(srcTask.SessionID, srcTask.Cwd, t.Cwd)
 				delete(m.contestedSessions, srcTask.SessionID)
 			}
 		}

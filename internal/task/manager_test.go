@@ -303,7 +303,7 @@ func TestCleanupCopiedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CleanupCopiedSession(sessionID, cwd); err != nil {
+	if err := CleanupCopiedSession(sessionID, "/tmp/source-project", cwd); err != nil {
 		t.Fatalf("CleanupCopiedSession: %v", err)
 	}
 
@@ -315,6 +315,110 @@ func TestCleanupCopiedSession(t *testing.T) {
 	// Companion directory should be gone.
 	if _, err := os.Stat(companionDir); !os.IsNotExist(err) {
 		t.Error("companion directory should be removed")
+	}
+}
+
+func TestCleanupCopiedSessionSameCwd(t *testing.T) {
+	// When oldCwd == newCwd, no copy was made, so cleanup must be a
+	// no-op — otherwise it would delete the source's real session file.
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	cwd := "/tmp/shared-project"
+	sessionID := "shared-session"
+
+	dir := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath(cwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(dir, sessionID+".jsonl")
+	if err := os.WriteFile(sessionFile, []byte("real-data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CleanupCopiedSession(sessionID, cwd, cwd); err != nil {
+		t.Fatalf("CleanupCopiedSession: %v", err)
+	}
+
+	if _, err := os.Stat(sessionFile); err != nil {
+		t.Fatalf("session file should remain for shared-workspace fork: %v", err)
+	}
+}
+
+func TestFindSessionCwdPreferredHit(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	preferred := filepath.Join(homeDir, "real-workspace")
+	if err := os.MkdirAll(preferred, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "prefer-session"
+	projectDir := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath(preferred))
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A stale copy in a lex-earlier project dir that decodes to a
+	// nonexistent path — this is the exact production failure mode.
+	staleDir := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath("/aaa/stale/path"))
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleDir, sessionID+".jsonl"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := findSessionCwd(sessionID, preferred)
+	if err != nil {
+		t.Fatalf("findSessionCwd: %v", err)
+	}
+	if got != preferred {
+		t.Errorf("findSessionCwd = %q, want preferred %q", got, preferred)
+	}
+}
+
+func TestFindSessionCwdPrefersExistingOverStale(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	// Real workspace exists on disk. Use a single-segment name with
+	// no hyphens so the decoder's naive fallback reconstructs it
+	// correctly even on macOS where /var-via-symlink defeats the
+	// filesystem walker.
+	realCwd := filepath.Join(homeDir, "zzzreal")
+	if err := os.MkdirAll(realCwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "pick-existing"
+
+	realProject := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath(realCwd))
+	if err := os.MkdirAll(realProject, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(realProject, sessionID+".jsonl"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stale project dir: sorts before real (alphabetically), decodes
+	// to a path that doesn't exist on disk.
+	staleProject := filepath.Join(homeDir, ".claude", "projects", pathutil.EncodePath("/aaa/dead/workspace"))
+	if err := os.MkdirAll(staleProject, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleProject, sessionID+".jsonl"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := findSessionCwd(sessionID, "")
+	if err != nil {
+		t.Fatalf("findSessionCwd: %v", err)
+	}
+	if got != realCwd {
+		t.Errorf("findSessionCwd = %q, want existing %q", got, realCwd)
 	}
 }
 

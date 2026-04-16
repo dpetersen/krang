@@ -315,6 +315,71 @@ func TestFreezeUnfreeze(t *testing.T) {
 	}
 }
 
+// TestUnfreezeIgnoresStaleProjectDir reproduces the bug where a stale
+// copy of a session file — left behind in another Claude project
+// directory (e.g. from a fork whose workspace was deleted without the
+// session being adopted) — caused unfreeze to pick the wrong cwd.
+// findSessionCwd walked ~/.claude/projects in lex order and returned
+// the stale entry first; decodeCwdFromDirName couldn't resolve its
+// deleted workspace and fell back to naive hyphen-to-slash decoding,
+// producing a bogus path that tmux couldn't use — so the unfrozen
+// window landed at $HOME instead of the real workspace.
+func TestUnfreezeIgnoresStaleProjectDir(t *testing.T) {
+	env := NewTestEnv(t)
+
+	env.CreateTask("task-migration")
+	env.WaitForManifestCount(1)
+	initialManifest := env.LatestManifest()
+	sessionID := initialManifest.SessionID
+	if sessionID == "" {
+		t.Fatal("initial manifest has no session_id")
+	}
+	expectedCwd := initialManifest.Cwd
+
+	// Plant a stale copy of the session file in a project directory
+	// that (a) sorts alphabetically before the real one, so lex-first
+	// iteration would pick it, and (b) decodes to a filesystem path
+	// that doesn't exist, so the decoder can't walk to resolve it.
+	// "-aaa…" sorts before any -tmp/-var/-private path that t.TempDir
+	// produces on macOS or Linux.
+	staleDirName := encodePath("/aaa/stale/nonexistent/fake/fork")
+	staleDir := filepath.Join(env.homeDir, ".claude", "projects", staleDirName)
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatalf("creating stale project dir: %v", err)
+	}
+	stalePath := filepath.Join(staleDir, sessionID+".jsonl")
+	if err := os.WriteFile(stalePath, []byte(`{"type":"init"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("planting stale session file: %v", err)
+	}
+
+	// Freeze.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("f")
+	env.WaitFor("tmux_window cleared after freeze", 25*time.Second, func() bool {
+		return env.TaskTmuxWindow("task-migration") == ""
+	})
+	env.WaitForTaskState("task-migration", "dormant")
+
+	// Unfreeze.
+	env.SendKeys("Escape")
+	time.Sleep(200 * time.Millisecond)
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("f")
+	env.WaitForTaskState("task-migration", "active")
+	env.WaitForManifestCount(2)
+
+	resumed := env.LatestManifest()
+	if resumed.Resume == "" {
+		t.Error("unfrozen task should launch with --resume")
+	}
+	if resumed.Cwd != expectedCwd {
+		t.Errorf("resumed claude cwd = %q, want %q (stale project dir at %q leaked into unfreeze)",
+			resumed.Cwd, expectedCwd, staleDir)
+	}
+}
+
 func TestComplete(t *testing.T) {
 	env := NewTestEnv(t)
 
@@ -775,6 +840,17 @@ func TestGitWorkspaceForkAndComplete(t *testing.T) {
 		t.Errorf("fork fakeclaude cwd = %q, want %q", manifest.Cwd, forkWsDir)
 	}
 
+	// The source session file was copied into the fork's project dir
+	// at fork time. Since fakeclaude doesn't fire SessionStart, the
+	// adoption-time cleanup hasn't run — Complete should be the safety
+	// net that removes it. Otherwise a future resume of the source task
+	// would find two project dirs holding its session file.
+	forkProjectDir := filepath.Join(env.homeDir, ".claude", "projects", encodePath(forkWsDir))
+	copiedSrcSession := filepath.Join(forkProjectDir, srcSessionID+".jsonl")
+	if _, err := os.Stat(copiedSrcSession); err != nil {
+		t.Fatalf("expected source session copy at %q before complete: %v", copiedSrcSession, err)
+	}
+
 	// --- Complete the fork task and verify cleanup ---
 
 	// Dismiss any modal, select the fork task (second row), open detail, complete.
@@ -815,6 +891,14 @@ func TestGitWorkspaceForkAndComplete(t *testing.T) {
 	// Source workspace should still exist on disk.
 	if _, err := os.Stat(srcWsDir); err != nil {
 		t.Errorf("source workspace should still exist: %v", err)
+	}
+
+	// Copied source session file should be cleaned up from the fork's
+	// project dir — otherwise resuming the source task later would find
+	// two project dirs holding its session file and could launch in the
+	// wrong cwd.
+	if _, err := os.Stat(copiedSrcSession); !os.IsNotExist(err) {
+		t.Errorf("copied source session file should be removed after fork complete, stat err=%v", err)
 	}
 }
 

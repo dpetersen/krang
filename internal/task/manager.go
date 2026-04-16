@@ -167,7 +167,7 @@ func (m *Manager) CreateTask(name, prompt, cwd string, flags db.TaskFlags, sandb
 func (m *Manager) ImportTask(name, sessionID string) error {
 	taskID := ulid.Make().String()
 
-	cwd, err := findSessionCwd(sessionID)
+	cwd, err := findSessionCwd(sessionID, "")
 	if err != nil {
 		return fmt.Errorf("could not find session %s in Claude projects: %w", sessionID, err)
 	}
@@ -185,29 +185,55 @@ func (m *Manager) ImportTask(name, sessionID string) error {
 }
 
 // findSessionCwd searches ~/.claude/projects/ for a session ID file
-// and decodes the cwd from the containing directory name.
-func findSessionCwd(sessionID string) (string, error) {
+// and decodes the cwd from the containing directory name. If preferred
+// is non-empty and its project directory contains the session, returns
+// preferred immediately — this avoids picking up stale copies left in
+// other project dirs by forks whose workspaces were later deleted.
+// When multiple project dirs contain the session file, prefers one
+// whose decoded path still exists on disk over ones pointing at
+// deleted workspaces.
+func findSessionCwd(sessionID, preferred string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 
 	projectsDir := filepath.Join(home, ".claude", "projects")
+
+	if preferred != "" {
+		preferredFile := filepath.Join(projectsDir, pathutil.EncodePath(preferred), sessionID+".jsonl")
+		if _, err := os.Stat(preferredFile); err == nil {
+			return preferred, nil
+		}
+	}
+
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return "", fmt.Errorf("reading projects dir: %w", err)
 	}
 
+	var existing, missing []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		sessionFile := filepath.Join(projectsDir, entry.Name(), sessionID+".jsonl")
-		if _, err := os.Stat(sessionFile); err == nil {
-			return decodeCwdFromDirName(entry.Name()), nil
+		if _, err := os.Stat(sessionFile); err != nil {
+			continue
+		}
+		decoded := decodeCwdFromDirName(entry.Name())
+		if info, err := os.Stat(decoded); err == nil && info.IsDir() {
+			existing = append(existing, decoded)
+		} else {
+			missing = append(missing, decoded)
 		}
 	}
-
+	if len(existing) > 0 {
+		return existing[0], nil
+	}
+	if len(missing) > 0 {
+		return missing[0], nil
+	}
 	return "", fmt.Errorf("session %s not found in any project directory", sessionID)
 }
 
@@ -397,7 +423,7 @@ func (m *Manager) Wake(taskID string) error {
 	// resolves sessions relative to the project directory, so launching
 	// from the wrong cwd causes "session not found" errors.
 	launchCwd := task.Cwd
-	if sessionCwd, err := findSessionCwd(task.SessionID); err == nil {
+	if sessionCwd, err := findSessionCwd(task.SessionID, task.Cwd); err == nil {
 		launchCwd = sessionCwd
 	}
 
@@ -448,7 +474,7 @@ func (m *Manager) Relaunch(taskID string) error {
 
 	// Use the session's original project directory (see Thaw for rationale).
 	launchCwd := task.Cwd
-	if sessionCwd, err := findSessionCwd(task.SessionID); err == nil {
+	if sessionCwd, err := findSessionCwd(task.SessionID, task.Cwd); err == nil {
 		launchCwd = sessionCwd
 	}
 
@@ -493,6 +519,17 @@ func (m *Manager) Complete(taskID string) error {
 	}
 	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
 		return err
+	}
+
+	// Clean up any source session file copied into this task's project
+	// dir at fork time. On happy-path adoption this already ran; this
+	// is the safety net for forks that never adopted (Claude failed to
+	// launch, user aborted) — otherwise the stale copy would mislead
+	// findSessionCwd the next time the source task is resumed.
+	if task.SourceTaskID != "" {
+		if srcTask := findTask(tasks, task.SourceTaskID); srcTask != nil && srcTask.SessionID != "" {
+			_ = CleanupCopiedSession(srcTask.SessionID, srcTask.Cwd, task.Cwd)
+		}
 	}
 
 	return nil
@@ -740,15 +777,24 @@ func CopySessionFiles(sessionID, oldCwd, newCwd string) error {
 	return nil
 }
 
-// CleanupCopiedSession removes session files that were copied for
-// forking. Called after the forked session has been adopted.
-func CleanupCopiedSession(sessionID, cwd string) error {
+// CleanupCopiedSession removes session files that were copied from
+// oldCwd's project dir into newCwd's project dir for a fork. Called
+// on fork adoption (happy path) and on task completion (safety net
+// for forks that never adopted — e.g. Claude failed to launch or
+// the user aborted). No-op when oldCwd == newCwd, since no copy was
+// made in that case and removing would delete the source's real
+// session file.
+func CleanupCopiedSession(sessionID, oldCwd, newCwd string) error {
+	if oldCwd == newCwd {
+		return nil
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 
-	dir := filepath.Join(home, ".claude", "projects", pathutil.EncodePath(cwd))
+	dir := filepath.Join(home, ".claude", "projects", pathutil.EncodePath(newCwd))
 
 	// Remove the JSONL file.
 	_ = os.Remove(filepath.Join(dir, sessionID+".jsonl"))

@@ -19,6 +19,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   messages for live instances vs stale sessions.
 - Clean up the parked tmux session on exit when no tasks are parked,
   preventing stale sessions from lingering.
+- Fix unfreeze launching at the wrong cwd (often the user's home
+  directory) when a stale session file existed in another project
+  directory — typically left over from a fork whose workspace was
+  deleted without the fork session ever being adopted. findSessionCwd
+  now prefers the task's own cwd and, failing that, prefers matches
+  whose decoded path still exists over ones pointing at deleted
+  workspaces.
+- Clean up copied source session files when a forked task is completed.
+  Previously these were only removed on session adoption, so forks
+  that were completed before Claude sent SessionStart (e.g. after a
+  launch failure) left stale files behind that confused future
+  resumes of the source task.
 ## [1.0.0-beta.2] - 2026-04-13
 
 ### Fixed
