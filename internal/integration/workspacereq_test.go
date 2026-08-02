@@ -281,17 +281,27 @@ func TestCompletingATaskForgetsEverySlotIdentity(t *testing.T) {
 		t.Fatalf("the slot is not on disk: %v", err)
 	}
 
-	// Complete from the keyboard: detail modal, c, confirm.
+	// Complete from the keyboard: detail modal, c, confirm. Each keypress
+	// waits on what the previous one put on screen — a bare sleep here
+	// sends "c" to the normal-mode handler on a slow machine.
 	env.SendKeys("Tab")
-	time.Sleep(300 * time.Millisecond)
+	env.WaitForPaneContent("Working copies (3):")
 	env.SendKeys("c")
-	time.Sleep(500 * time.Millisecond)
 
 	// The confirmation counts every working copy, the slot included.
 	env.WaitForPaneContent("3 working copies")
 	env.SendKeys("y")
 
-	env.WaitForTaskState("slotty", "completed")
+	// Completion SIGINTs Claude and waits out gracefulShutdownTimeout (15s)
+	// before falling back to kill-window, and the DB is only updated once
+	// the window is gone. WaitForTaskState's 10s budget is shorter than
+	// krang's own shutdown timeout, so this has to be an explicit wait —
+	// the same 25s every other completion test uses.
+	env.WaitFor("task completed", 25*time.Second, func() bool {
+		var state string
+		err := env.db.QueryRow("SELECT state FROM tasks WHERE name = ?", "slotty").Scan(&state)
+		return err == nil && state == "completed"
+	})
 	env.WaitFor("workspace removed", 25*time.Second, func() bool {
 		_, err := os.Stat(workspaceDir)
 		return os.IsNotExist(err)
