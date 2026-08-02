@@ -192,6 +192,21 @@ func (m *Manager) ImportTask(name, sessionID string) error {
 // When multiple project dirs contain the session file, prefers one
 // whose decoded path still exists on disk over ones pointing at
 // deleted workspaces.
+// SessionResumable reports whether Claude can still resume the session.
+//
+// Claude Code deletes transcripts older than its cleanupPeriodDays
+// setting (30 days by default), so a task left frozen long enough keeps
+// a session ID that no longer resolves to anything on disk. Resuming it
+// fails with "no such session", and until krang checks for this the
+// task looks perfectly healthy in the list.
+func SessionResumable(sessionID, preferredCwd string) bool {
+	if sessionID == "" {
+		return false
+	}
+	_, err := findSessionCwd(sessionID, preferredCwd)
+	return err == nil
+}
+
 func findSessionCwd(sessionID, preferred string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -413,6 +428,13 @@ func (m *Manager) Wake(taskID string) error {
 	}
 	if task.SessionID == "" {
 		return fmt.Errorf("task %s has no session ID to resume", task.Name)
+	}
+	if !SessionResumable(task.SessionID, task.Cwd) {
+		return fmt.Errorf(
+			"task %s cannot be resumed: Claude has no transcript for session %s. "+
+				"Transcripts are deleted after cleanupPeriodDays (30 by default); "+
+				"complete the task or raise that setting to keep them longer",
+			task.Name, task.SessionID)
 	}
 
 	sandboxCmd := m.resolveSandboxCommand(task.SandboxProfile)

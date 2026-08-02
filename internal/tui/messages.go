@@ -10,6 +10,9 @@ import (
 type TasksRefreshedMsg struct {
 	Tasks         []db.Task
 	WindowIndexes map[string]string // tmux window ID → display index
+	// Unresumable holds the IDs of frozen tasks whose Claude transcript
+	// no longer exists, keyed for O(1) lookup during render.
+	Unresumable map[string]bool
 }
 
 // taskCreatedMsg fires after a non-workspace task is created. The

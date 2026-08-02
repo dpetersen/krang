@@ -80,6 +80,9 @@ type Model struct {
 	classifyGen   map[string]uint64 // taskID → generation counter for cancellation
 	spinner       spinner.Model
 	windowIndexes map[string]string // tmux window ID → display index
+	// unresumable holds frozen task IDs whose Claude transcript is gone,
+	// refreshed alongside the task list.
+	unresumable map[string]bool
 
 	windowStylesSynced bool
 
@@ -188,6 +191,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TasksRefreshedMsg:
 		m.tasks = msg.Tasks
 		m.windowIndexes = msg.WindowIndexes
+		m.unresumable = msg.Unresumable
 		m.applyPendingSelection()
 		if m.cursor >= len(m.filteredTasks()) && len(m.filteredTasks()) > 0 {
 			m.cursor = len(m.filteredTasks()) - 1
@@ -2399,7 +2403,18 @@ func (m Model) refreshTasks() tea.Msg {
 		return ErrorMsg{Err: err}
 	}
 	indexes := tmux.WindowIndexes(m.activeSession)
-	return TasksRefreshedMsg{Tasks: tasks, WindowIndexes: indexes}
+
+	// Only frozen tasks are at risk: they're the ones resumed from a
+	// session ID, and the only ones idle long enough for Claude to have
+	// cleaned the transcript up underneath them.
+	unresumable := make(map[string]bool)
+	for _, t := range tasks {
+		if t.State == db.StateDormant && !task.SessionResumable(t.SessionID, t.Cwd) {
+			unresumable[t.ID] = true
+		}
+	}
+
+	return TasksRefreshedMsg{Tasks: tasks, WindowIndexes: indexes, Unresumable: unresumable}
 }
 
 func (m Model) reconcileTick() tea.Cmd {

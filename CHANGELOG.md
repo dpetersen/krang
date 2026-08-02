@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   default) targets the default server exactly as before; the integration
   harness sets it per-test.
 
+- Frozen tasks whose Claude transcript no longer exists are marked with
+  a ⚠ next to the name, with an explanation in the detail modal.
+  Claude deletes transcripts older than `cleanupPeriodDays` (30 by
+  default), which leaves a frozen task holding a session ID that
+  resolves to nothing — krang previously showed it as healthy and let
+  you discover the problem from Claude's "no such session" error.
+  Unfreezing such a task now fails up front with a clear message.
+- Help (`?`) documents the row markers next to task names (☠, ⚠, `+`),
+  which were previously undocumented.
+
 ### Changed
 
 - Select the newly-created task in the main list as soon as it appears,

@@ -35,6 +35,8 @@ Multiple krang instances can run simultaneously for different working directorie
 - **Frozen** (DB: `dormant`) — no tmux window, session ID saved for `--resume`
 - **Completed/Failed** — terminal states; names freed for reuse
 
+Frozen tasks can outlive their transcript: Claude Code deletes session files older than `cleanupPeriodDays` (30 by default), leaving a session ID that resolves to nothing. `task.SessionResumable()` checks for this, `refreshTasks` evaluates it for dormant tasks on every refresh, and the TUI marks affected rows with ⚠. `Manager.Wake` refuses up front rather than launching a window that dies with "no such session".
+
 ## Keybinding Model
 
 The TUI uses a two-tier keybinding system: a minimal set of global keys on the main screen, and per-task actions in a detail modal.

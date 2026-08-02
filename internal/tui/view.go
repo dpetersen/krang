@@ -293,6 +293,9 @@ func (m Model) renderTable() string {
 		if m.taskIsDangerous(t) {
 			name = "☠ " + name
 		}
+		if m.unresumable[t.ID] {
+			name = "⚠ " + name
+		}
 
 		cursor := " "
 		if i == m.cursor {
@@ -727,6 +730,15 @@ func (m Model) buildHelpContent() string {
 		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
 	}
 
+	sb.WriteString("\n" + title.Render("Name Markers") + "\n\n")
+	for _, item := range []hint{
+		{"☠", "Running unsandboxed, or with permission prompts skipped."},
+		{"⚠", "Frozen task whose Claude transcript is gone — it can no longer be unfrozen."},
+		{"+", "One companion window (repeated per companion)."},
+	} {
+		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
+	}
+
 	sb.WriteString("\n" + title.Render("Glossary") + "\n\n")
 	accentStyle := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
 	for _, item := range []struct{ term, def string }{
@@ -909,6 +921,17 @@ func (m Model) renderDetailModal(t *db.Task) string {
 	}
 	if t.SessionID != "" {
 		content.WriteString(m.styles.ModalContent.Render("  claude session: " + t.SessionID))
+		content.WriteString("\n")
+	}
+	if m.unresumable[t.ID] {
+		content.WriteString(m.styles.WarningText.Render(
+			"  ⚠ transcript missing — cannot unfreeze"))
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render(
+			"    Claude deleted this session's transcript (cleanupPeriodDays,"))
+		content.WriteString("\n")
+		content.WriteString(m.styles.ModalContent.Render(
+			"    30 days by default). The task's work may still be on disk."))
 		content.WriteString("\n")
 	}
 	if t.TmuxWindow != "" {
