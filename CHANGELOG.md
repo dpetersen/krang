@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Detail modal lists a task's working copies, grouped under the repo each one
+  is a checkout of. The initial checkout reads quietly; every added slot is
+  called out with its label and the base it was created from. Directories with
+  no provenance row are marked `unrecorded`, and recorded rows with nothing on
+  disk are marked `missing`.
+- Workspace mutations requested over the HTTP API now show a status line under
+  the task table while they run (`agent add task=… alpha--tests`), including a
+  count of anything queued behind the human's own workspace flow. The debug log
+  gained a matching `started` line to go with the existing completion line.
+- `krang workspace` — a CLI for the workspace API, so an agent inside a
+  task window can change its own workspace without a human at the TUI.
+  Four subcommands (`list`, `repos`, `add`, `remove`) sit next to `setup`
+  and `teardown`, outside tmux; they find the running instance through
+  `KRANG_STATEFILE` and call the loopback endpoints, which means the TUI
+  process still does all the work and is still the single writer.
+
+  The design target is a caller with no eyes. `--cwd` defaults to the
+  process's working directory, so `krang workspace list` answers with no
+  arguments at all from inside a workspace; `--task` overrides it.
+  `--json` prints krang's response envelope byte for byte on every
+  subcommand, and `add` prints the new working copy's absolute path and
+  nothing else. Exit codes distinguish the four decisions a caller
+  actually has to make: 0 success, 1 an error retrying can't fix, 2 a
+  refusal that the *identical* command fixes once you've dealt with what
+  the message names (`unsaved_work`, `label_required`, `slot_limit`, …),
+  3 krang may or may not have applied it — do not blindly retry, and 4
+  krang never took the request so retrying is safe. Every subcommand's
+  `--help` names its endpoint, its defaults, and the whole exit-code
+  table, because an agent reads one `--help`, not the tree.
+
 ### Fixed
 
 - `workspace_repos.base_revision` is now actually written. The column

@@ -247,6 +247,42 @@ func TestWorkspaceAddListRemoveRoundTripsThroughTUI(t *testing.T) {
 	}
 }
 
+// AC: a mutation an agent asked for over the API is visible to the
+// human at the keyboard. The events row is asserted at unit level; what
+// only the real binary can show is that the lines actually reach the
+// screen, so this drives a genuine HTTP call and reads krang's pane.
+func TestWorkspaceRequestSurfacesInTheTUI(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "multi_repo", "git", []string{"alpha", "beta"})
+
+	env.CreateMultiRepoTask("wsvis", 1)
+
+	// A labeled second checkout of a repo the task already holds: the
+	// case the detail modal has to render as distinct from the initial
+	// working copy.
+	status, body := callWorkspaceAPI(env, http.MethodPost, "/api/workspace/add", map[string]any{
+		"task": "wsvis", "repo": "alpha", "label": "tests",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("add status = %d, want 200 (body %v)", status, body)
+	}
+	env.WaitForEvent("wsvis", "workspace_add")
+
+	// The debug log says the request started and how it turned out. Both
+	// lines are the durable record a human scrolls back to; the status
+	// line that spins between them is gone by the time we can look.
+	env.WaitForPaneContent("workspace add task=wsvis started")
+	env.WaitForPaneContent("workspace add task=wsvis ok")
+
+	// And the detail modal lists the slot the agent added, under the repo
+	// it is a checkout of and marked with the label that tells it apart
+	// from the task's initial working copy of the same repo.
+	env.SendKeys("Tab")
+	env.WaitForPaneContent("Working copies (2):")
+	env.WaitForPaneContent("alpha--tests")
+	env.WaitForPaneContent("slot tests")
+	env.SendKeys("Escape")
+}
+
 // An agent inside a workspace says where it is rather than what the
 // task is called, and krang works out the rest.
 func TestWorkspaceListResolvesTaskFromCwd(t *testing.T) {

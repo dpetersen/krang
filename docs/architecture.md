@@ -188,6 +188,36 @@ A per-task cap of `workspace.MaxSlotsPerTask` (4) working copies bounds sprawl o
 
 **Removal order.** Forget the recorded VCS identity, remove the directory, drop the row — stopping at the first failure so all three stay in step and the identical request can be retried. Removing a repo's last slot is not special-cased: it is how a repo leaves a task, through the same gates, and the response says `data.repo_dropped`. In `single_repo` the workspace directory *is* the initial checkout and *is* the task's cwd, so removing that slot would be a task teardown; it is refused with `workspace_root` regardless of `force`. In `multi_repo` — what this API is really for — the task's cwd is the workspace container and no slot is ever the cwd root.
 
+## Workspace CLI
+
+`krang workspace` is the agent-facing front end for that API: `list`, `repos`, `add`, `remove`, sitting alongside `setup` and `teardown` rather than inside the TUI. It is a client, not a second implementation — it posts to the loopback endpoints and lets the Bubble Tea process, the single writer, do the work.
+
+```
+agent in a task window            krang instance
+  krang workspace add --repo x
+    ├─ $KRANG_STATEFILE ──► {"port": N}
+    └─ POST 127.0.0.1:N/api/workspace/add ──► queue ──► TUI ──► envelope
+                                                                  │
+             exit code ◄── applied/reason ◄── stdout: /ws/task/x ◄┘
+```
+
+**The caller has no eyes.** Every design choice follows from the primary user being a Claude session, not a person at a prompt. `--cwd` defaults to the process's working directory, so `krang workspace list` answers with no arguments at all from inside a workspace — the first call an agent can make without already knowing what krang named its task. `--task` overrides it and suppresses the cwd rather than sending both, because two answers to "which task?" in one request is one too many. `add` prints the new working copy's absolute path and nothing else, since the next thing an agent does is `cd` into it. `--json` prints the response bytes verbatim rather than a re-encode, so a field krang grows later survives the trip through a client that predates it.
+
+**Exit codes encode the next action, not the failure.** There are four decisions a caller can make, so there are four non-zero codes rather than one per reason:
+
+| Code | Meaning | What the caller should do |
+|---|---|---|
+| 1 | Unfixable error: bad flags, no state file, unknown task/repo/slot, `operation_failed`, an instance too old to serve the endpoint | Stop. Nothing applied. |
+| 2 | Refused over the state of the world: `unsaved_work`, `label_required`, `slot_limit`, `shared_workspace`, `slot_missing`, `ambiguous_slot` | Deal with what the message names, then send the *identical* command. Nothing applied. |
+| 3 | `applied: "unknown"` — accepted then unanswered, or failed partway | Do not retry. Re-read with `krang workspace list` and decide from what is there. |
+| 4 | krang never took it: `unavailable`, `not_accepted`, `expired`, dead port | Retry once krang is up. Nothing applied. |
+
+`applied` is consulted before `reason`, because "might have happened" outranks every other classification: retrying a mutation that already landed is the single failure this CLI exists to prevent. The client's own deadline is the server's plus ten seconds for the same reason — the server timing out yields an envelope that says `applied: "unknown"`, while the client timing out first yields a dead socket and no information at all.
+
+**Not-found is not ambiguous.** An instance launched before the workspace API existed answers 404 from its router, before any handler runs. That is a hard guarantee that nothing was applied, so it gets its own diagnosis ("this instance predates the workspace API; relaunch krang") and exit 1, rather than the exit 3 that a genuinely unknowable answer earns. The distinction was found by pointing the CLI at a real running instance, which was exactly that.
+
+The transport, rendering, and exit-code mapping live in `internal/workspaceclient`; `cmd/workspace.go` is flags and help text. That split is what lets the tests drive the whole path — state file, HTTP, envelope, output, code — against an `httptest` server, and end to end against a real `hooks.Server` with a stand-in servicing the request channel.
+
 ## Graceful Shutdown
 
 When completing, killing, or freezing a task:

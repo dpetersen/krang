@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	ltable "github.com/charmbracelet/lipgloss/table"
 	"github.com/dpetersen/krang/internal/db"
+	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/tmux"
 	"github.com/dpetersen/krang/internal/usage"
 )
@@ -31,6 +32,12 @@ func (m Model) View() string {
 	top.WriteString("\n\n")
 	top.WriteString(m.renderTable())
 	top.WriteString("\n")
+	// Agent-driven workspace work goes here, above the mode-specific UI,
+	// so it stays put whatever the human is doing.
+	if status := m.renderWorkspaceRequestStatus(); status != "" {
+		top.WriteString(status)
+		top.WriteString("\n")
+	}
 
 	var modalContent string
 
@@ -106,6 +113,10 @@ func (m Model) renderNormalView() string {
 	top.WriteString("\n\n")
 	top.WriteString(m.renderTable())
 	top.WriteString("\n")
+	if status := m.renderWorkspaceRequestStatus(); status != "" {
+		top.WriteString(status)
+		top.WriteString("\n")
+	}
 	if m.filterText != "" {
 		top.WriteString(m.styles.Header.Render(fmt.Sprintf("  filter: %s (/ to change, esc to clear)", m.filterText)))
 	}
@@ -535,6 +546,87 @@ func (m Model) renderActionBar() string {
 		)
 	}
 	return " " + strings.Join(hints, "  ")
+}
+
+// renderWorkspaceRequestStatus is the affordance that makes a workspace
+// mutation an agent asked for over the HTTP API as visible as one the
+// human started from the keyboard. It renders as a status line under
+// the table rather than as the progress modal the W/n/d flows use.
+//
+// Why not the modal: an API request arrives at a moment nobody chose.
+// workspaceBusy() guarantees no *workspace* modal is open, but the
+// human may perfectly well be in the detail modal, typing a filter, or
+// reading the command palette. Pushing them into a full-screen modal
+// they did not open — one that would swallow the keystroke they were
+// halfway through, and whose esc would then close *their* context —
+// buys visibility at the cost of stealing the keyboard. A line where
+// they are already looking costs nothing and says the same thing.
+//
+// Esc semantics: esc does not cancel an API-initiated mutation, and the
+// line says so rather than leaving it to be discovered. This *matches*
+// the W-key path instead of diverging from it. Esc in the progress
+// modal sets wsProgress.Cancelled, which stops the checklist before the
+// *next* repo; it has never interrupted a clone already underway (see
+// handleWorkspaceProgressKey and the "Cancelling after current
+// operation..." footer). An API add or remove_slot is exactly one
+// operation with nothing queued behind it, so "cancel after the current
+// operation" would be a control that does nothing. There is also an
+// HTTP caller on the other end that has already been told its request
+// was accepted; a cancel here would owe it an answer krang has no
+// honest way to produce. Requests still *queued* are a different
+// matter — those have not started, and their own deadline drops them
+// (see startNextWorkspaceRequest).
+func (m Model) renderWorkspaceRequestStatus() string {
+	accent := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
+	muted := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+	text := lipgloss.NewStyle().Foreground(m.styles.theme.Subtitle)
+
+	if m.workspaceRequest == nil {
+		if len(m.workspaceQueue) == 0 {
+			return ""
+		}
+		// Waiting on the human: say so, so a modal left open doesn't
+		// look like krang ignoring the agent.
+		return " " + muted.Render("·") + " " + accent.Render("agent") + " " +
+			text.Render(fmt.Sprintf("%d workspace request(s) queued", len(m.workspaceQueue)))
+	}
+
+	req := *m.workspaceRequest
+	name := m.workspaceRequestTask
+	if name == "" {
+		name = "?"
+	}
+	label := fmt.Sprintf("%s task=%s", req.Op, name)
+	if target := workspaceRequestTarget(req); target != "" {
+		label += " " + target
+	}
+	if !m.workspaceRequestStarted.IsZero() {
+		if elapsed := time.Since(m.workspaceRequestStarted).Truncate(time.Second); elapsed > 0 {
+			label += fmt.Sprintf(" (%s)", elapsed)
+		}
+	}
+
+	line := " " + m.spinner.View() + " " + accent.Render("agent") + " " + text.Render(label)
+	if len(m.workspaceQueue) > 0 {
+		line += "  " + muted.Render(fmt.Sprintf("+%d queued", len(m.workspaceQueue)))
+	}
+	return line + "   " + m.renderHint("esc", "cannot cancel")
+}
+
+// workspaceRequestTarget names the working copy a request is about, in
+// the same directory-name form the listing and the detail modal use, so
+// the status line and the slot list read as one vocabulary.
+func workspaceRequestTarget(req hooks.WorkspaceRequest) string {
+	if req.Dir != "" {
+		return req.Dir
+	}
+	if req.Repo == "" {
+		return ""
+	}
+	if req.Label == "" {
+		return req.Repo
+	}
+	return req.Repo + "--" + req.Label
 }
 
 func (m Model) renderFooter() string {
@@ -1000,6 +1092,9 @@ func (m Model) renderDetailModal(t *db.Task) string {
 		content.WriteString("\n")
 	}
 
+	// Working copies section
+	content.WriteString(m.renderSlotsSection(t))
+
 	// Process section
 	if tp, ok := m.taskProcesses[t.ID]; ok && len(tp.Children) > 0 {
 		content.WriteString("\n")
@@ -1080,6 +1175,141 @@ func (m Model) renderDetailModal(t *db.Task) string {
 		Width(modalWidth)
 
 	return box.Render(content.String())
+}
+
+// detailSlotsMaxShown bounds how many working copies the detail modal
+// lists. The API caps a task at workspace.MaxSlotsPerTask, but the
+// human's repo picker is deliberately not capped, and the modal does
+// not scroll — a twenty-repo workspace would push the Actions section
+// off the screen and make the modal useless for the thing it is
+// primarily for.
+const detailSlotsMaxShown = 12
+
+// renderSlotsSection lists the working copies a task's workspace holds,
+// grouped under the repo each one is a checkout of.
+//
+// The repo's initial checkout — the slot with no label, which keeps the
+// pre-slot names — reads quietly. Every other slot is called out with
+// its label in the accent colour, because "there is a second alpha in
+// here, and an agent put it there" is exactly what a glance at this
+// modal has to answer. A directory with no provenance row is marked
+// "unrecorded": it is genuinely present, but everything krang says
+// about it was derived from its name rather than recorded when it was
+// made. A recorded row with nothing on disk is marked "missing" for the
+// mirror-image reason.
+//
+// The slot list is the same one the workspace API reports, so the TUI
+// and GET /api/workspace can never disagree about what is in there.
+func (m Model) renderSlotsSection(t *db.Task) string {
+	if t.WorkspaceDir == "" {
+		return ""
+	}
+	slots := m.workspaceSlots(t)
+	if len(slots) == 0 {
+		return ""
+	}
+
+	// Group in first-appearance order. workspaceSlots puts recorded rows
+	// first in row order, so a repo's initial checkout heads its group
+	// and the slots added later follow it.
+	var repoOrder []string
+	byRepo := make(map[string][]hooks.SlotInfo, len(slots))
+	for _, slot := range slots {
+		repo := slot.Repo
+		if repo == "" {
+			// A directory krang could not resolve to a managed repo is
+			// still a working copy; group it under its own name rather
+			// than dropping it into a nameless bucket.
+			repo = slot.Dir
+		}
+		if _, seen := byRepo[repo]; !seen {
+			repoOrder = append(repoOrder, repo)
+		}
+		byRepo[repo] = append(byRepo[repo], slot)
+	}
+
+	muted := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(m.styles.ModalContent.Render(
+		fmt.Sprintf("  Working copies (%d):", len(slots))))
+	b.WriteString("\n")
+
+	shown := 0
+	for _, repo := range repoOrder {
+		if shown >= detailSlotsMaxShown {
+			break
+		}
+		b.WriteString(m.styles.ModalContent.Render("    " + repo))
+		b.WriteString("\n")
+		for _, slot := range byRepo[repo] {
+			if shown >= detailSlotsMaxShown {
+				break
+			}
+			b.WriteString("      " + m.renderSlotLine(slot))
+			b.WriteString("\n")
+			shown++
+		}
+	}
+	if remaining := len(slots) - shown; remaining > 0 {
+		b.WriteString(muted.Render(fmt.Sprintf("      … %d more", remaining)))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// renderSlotLine renders one working copy: its directory, what makes it
+// distinct from the repo's initial checkout, and where it started from.
+func (m Model) renderSlotLine(slot hooks.SlotInfo) string {
+	accent := lipgloss.NewStyle().Foreground(m.styles.theme.Accent)
+	muted := lipgloss.NewStyle().Foreground(m.styles.theme.Muted)
+	warn := lipgloss.NewStyle().Foreground(m.styles.theme.Warning)
+
+	marker := muted.Render("·")
+	name := m.styles.ModalContent.Render(slot.Dir)
+	notes := []string{"initial"}
+	if slot.Slot != "" {
+		marker = accent.Render("+")
+		name = accent.Render(slot.Dir)
+		notes = []string{"slot " + slot.Slot}
+	}
+	// Empty for rows written before base was recorded, and for slots
+	// created without one — "detect the remote default branch" is not a
+	// revision, so there is nothing honest to print.
+	if slot.Base != "" {
+		notes = append(notes, "base "+abbreviateRevision(slot.Base))
+	}
+
+	line := marker + " " + name + "  " + muted.Render(strings.Join(notes, "  "))
+	if !slot.Recorded {
+		line += "  " + warn.Render("unrecorded")
+	}
+	if !slot.Exists {
+		line += "  " + warn.Render("missing")
+	}
+	return line
+}
+
+// abbreviateRevision shortens a full object id to the 12 characters git
+// and jj both consider a readable short form. A full hash is 40-plus
+// characters and would wrap the modal onto a second line for no gain,
+// while a symbolic base ("main", "origin/master", a revset) is left
+// exactly as it was recorded — the point of showing the base is that it
+// is the thing the caller asked for.
+func abbreviateRevision(rev string) string {
+	const shortLen = 12
+	if len(rev) <= shortLen {
+		return rev
+	}
+	for _, r := range rev {
+		isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !isHex {
+			return rev
+		}
+	}
+	return rev[:shortLen]
 }
 
 func (m Model) renderForkDialog() string {

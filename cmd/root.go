@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -28,8 +29,17 @@ var rootCmd = &cobra.Command{
 	RunE:          runTUI,
 }
 
+// Execute runs the CLI. A command that needs to say more than
+// "succeeded or didn't" returns an error carrying an ExitCode method;
+// those have already written their own diagnostics, so the code is
+// passed on without another line of output. Everything else is a plain
+// error and exits 1.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			os.Exit(coded.ExitCode())
+		}
 		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}

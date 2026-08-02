@@ -125,6 +125,14 @@ type Model struct {
 	workspaceRequests <-chan hooks.WorkspaceRequest
 	workspaceQueue    []hooks.WorkspaceRequest
 	workspaceRequest  *hooks.WorkspaceRequest
+
+	// Display state for the status-line indicator that surfaces the
+	// in-flight request (renderWorkspaceRequestStatus). The task name is
+	// resolved once, when the request starts, because a cwd-identified
+	// caller sends no name and the view must not hit the database on
+	// every animation frame to find one.
+	workspaceRequestTask    string
+	workspaceRequestStarted time.Time
 }
 
 // NewModel builds the TUI. The RepoSets is the one the manager was
@@ -925,7 +933,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinner.TickMsg:
 		wsActive := m.wsProgress != nil && !m.wsProgress.Done
-		if len(m.pendingOps) > 0 || wsActive {
+		// An agent's mutation animates the status line, so it has to keep
+		// the tick alive the same way the human's progress modal does.
+		if len(m.pendingOps) > 0 || wsActive || m.workspaceRequest != nil {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			return m, cmd

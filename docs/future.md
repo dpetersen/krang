@@ -47,9 +47,9 @@ Expose krang's task state to external agents (e.g. a workload manager Claude tha
 
 ## Workspace Enhancements
 
-Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented, as is the workspace HTTP API — `GET /api/workspace`, `GET /api/workspace/repos`, `POST /api/workspace/add`, `DELETE /api/workspace/slot`. See [architecture.md](architecture.md#workspace-api). Remaining ideas:
+Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented, as is the workspace HTTP API — `GET /api/workspace`, `GET /api/workspace/repos`, `POST /api/workspace/add`, `DELETE /api/workspace/slot` — and the `krang workspace list|repos|add|remove` CLI in front of it. See [architecture.md](architecture.md#workspace-api) and [architecture.md](architecture.md#workspace-cli). Remaining ideas:
 
-- **CLI subcommand** — `krang workspace list|repos|add|remove`, reading `KRANG_STATEFILE` for the port and calling the endpoints above. The envelopes are already machine-readable and stable (`status`, `reason`, `applied`, plus `slots`/`repos`/`slot`/`blockers`), so the subcommand is argument parsing, a `--json` passthrough, and turning `reason` into an exit code. It should default the `cwd` parameter to its own working directory so `krang workspace list` needs no arguments inside a workspace. A skill file in `.claude/commands/` then tells Claude how to use it.
+- **A skill file for the CLI** — the subcommands document themselves in `--help` (endpoint, defaults, exit-code table), which is enough for an agent that thinks to look. A skill in `.claude/commands/` would tell it to look in the first place, and is the piece still missing.
 
 - **Shared-workspace slot ownership** — adding a slot to a workspace two tasks share is refused (`shared_workspace`), because nothing in the data model says which task owns a slot: the `workspace_repos` row names one task, and completing that task forgets a VCS identity the other may still be working in. Answering this properly means either co-owned rows (a join table, and a rule for when the last owner leaves) or making shared forks own their workspace jointly at fork time. Refusing is the honest v1; the ambiguity is real and predates the API.
 

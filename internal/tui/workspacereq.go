@@ -130,9 +130,35 @@ func (m Model) startNextWorkspaceRequest() (Model, tea.Cmd) {
 
 		held := req
 		m.workspaceRequest = &held
-		return m, m.runWorkspaceRequest(req)
+		m.workspaceRequestTask = m.displayRequestTask(req)
+		m.workspaceRequestStarted = time.Now()
+
+		// Starting is announced, not just finishing. The human's own
+		// flows put a modal on screen the instant they begin; an agent's
+		// request gets the same "this started" moment in the events row
+		// the log renders, and the status line picks it up from the
+		// in-flight fields above.
+		m.appendDebugLog(fmt.Sprintf("[%s] workspace %s task=%s started",
+			time.Now().Format("15:04:05"), req.Op, m.workspaceRequestTask))
+
+		// The status line spins for as long as the request runs, and
+		// nothing else is necessarily animating, so the tick starts here.
+		return m, tea.Batch(m.runWorkspaceRequest(req), m.spinner.Tick)
 	}
 	return m, nil
+}
+
+// displayRequestTask resolves the name to show while a request runs. A
+// caller that identified itself by cwd sends no name at all, and the
+// status line has to say which task krang is changing.
+func (m Model) displayRequestTask(req hooks.WorkspaceRequest) string {
+	if req.TaskName != "" {
+		return req.TaskName
+	}
+	if t := m.taskByWorkspaceCwd(req.Cwd); t != nil {
+		return t.Name
+	}
+	return ""
 }
 
 // runWorkspaceRequest performs the mutation off the Update loop.
@@ -283,6 +309,8 @@ func (m Model) handleWorkspaceRequestDone(msg workspaceRequestDoneMsg) (Model, t
 	// back — the mutation that holds it is still running.
 	if !msg.ReadOnly {
 		m.workspaceRequest = nil
+		m.workspaceRequestTask = ""
+		m.workspaceRequestStarted = time.Time{}
 	}
 
 	line := fmt.Sprintf("[%s] workspace %s task=%s %s",

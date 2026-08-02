@@ -297,6 +297,30 @@ If you're using sandboxing with workspaces, additional filesystem
 access is needed for VCS operations and config file walking. See
 [docs/design/sandboxing.md](docs/design/sandboxing.md#workspace-setup) for details.
 
+### Changing a Workspace from Inside a Task
+
+A Claude session running in a task window can reshape its own workspace
+with `krang workspace`, without a human at the TUI. The subcommands talk
+to the running instance over its loopback API (found via the
+`KRANG_STATEFILE` env var krang sets for every session it launches), so
+the TUI process still performs the change and still serializes it
+against everything else.
+
+```
+krang workspace list                          # what this task holds
+krang workspace repos                         # what's available to add
+krang workspace add --repo api-service        # clone one in; prints its path
+krang workspace add --repo api-service --label tests   # a second checkout
+krang workspace remove --dir api-service--tests        # take one back out
+```
+
+`--cwd` defaults to the current directory, so these need no arguments
+inside a workspace; `--task <name>` targets another one. `--json` prints
+the raw response envelope. Exit codes distinguish "refused, fix it and
+retry the same command" (2) from "krang may have applied this — don't
+retry blindly" (3) from "krang isn't answering" (4); each subcommand's
+`--help` has the full table.
+
 ## Configuration
 
 Krang works without any configuration. All config is optional.
