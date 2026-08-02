@@ -1187,3 +1187,77 @@ func TestMultiRepoForkWithNonRepoItems(t *testing.T) {
 		t.Errorf("deploy.sh = %q, want %q", string(data), "#!/bin/bash\necho deploy")
 	}
 }
+
+// TestFreezeWithCompanion exercises the companion window lifecycle around
+// freeze: a companion is created, freeze prompts for confirmation, canceling
+// leaves everything in place, and confirming tears down both the primary and
+// companion windows.
+func TestFreezeWithCompanion(t *testing.T) {
+	env := NewTestEnv(t)
+
+	env.CreateTask("comp-test")
+
+	// Open detail modal and create a companion window.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("+")
+
+	// createCompanion first creates the window, then tags it with
+	// @krang-companion in a follow-up tmux call — poll for the tag so we
+	// don't race the goroutine that applies it.
+	env.WaitFor("companion window tagged @krang-companion", 5*time.Second, func() bool {
+		return env.WindowOption(env.krangSession, "comp-test+", "@krang-companion") == "comp-test"
+	})
+	// And it should not be tagged as a task window.
+	if got := env.WindowOption(env.krangSession, "comp-test+", "@krang-task"); got != "" {
+		t.Errorf("@krang-task on companion window = %q, want empty", got)
+	}
+
+	// Open detail modal and press freeze. Since the task has a companion,
+	// we expect the confirmation modal rather than an immediate freeze.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("f")
+	env.WaitForPaneContent("companion window(s) will be destroyed")
+
+	// Cancel the confirmation. Task and both windows should remain.
+	env.SendKeys("n")
+	env.WaitForPaneAbsent("companion window(s) will be destroyed")
+
+	var state string
+	if err := env.db.QueryRow("SELECT state FROM tasks WHERE name = ?", "comp-test").Scan(&state); err != nil {
+		t.Fatalf("reading state: %v", err)
+	}
+	if state != "active" {
+		t.Errorf("after canceling freeze, state = %q, want active", state)
+	}
+	if !env.TmuxWindowExists(env.krangSession, "comp-test") {
+		t.Error("primary window should still exist after canceling freeze")
+	}
+	if !env.TmuxWindowExists(env.krangSession, "comp-test+") {
+		t.Error("companion window should still exist after canceling freeze")
+	}
+
+	// Re-open the detail modal, press freeze again, and confirm.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("f")
+	env.WaitForPaneContent("companion window(s) will be destroyed")
+	env.SendKeys("y")
+
+	// Freeze involves SIGINT + 15s timeout, then kill-window.
+	env.WaitFor("tmux_window cleared after freeze", 25*time.Second, func() bool {
+		return env.TaskTmuxWindow("comp-test") == ""
+	})
+	env.WaitForTaskState("comp-test", "dormant")
+
+	// Both windows should be gone from both sessions.
+	if env.TmuxWindowExists(env.krangSession, "comp-test") ||
+		env.TmuxWindowExists(env.parkedSession, "comp-test") {
+		t.Error("primary window should be gone after freeze")
+	}
+	if env.TmuxWindowExists(env.krangSession, "comp-test+") ||
+		env.TmuxWindowExists(env.parkedSession, "comp-test+") {
+		t.Error("companion window should be gone after freeze")
+	}
+}

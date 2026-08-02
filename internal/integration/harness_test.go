@@ -438,6 +438,25 @@ func (e *TestEnv) TmuxWindowExists(session, windowName string) bool {
 	return false
 }
 
+// WindowOption returns the value of a tmux user option (e.g. "@krang-companion")
+// for the window with the given name in the given session, or "" if the window
+// or option is not set.
+func (e *TestEnv) WindowOption(session, windowName, option string) string {
+	cmd := e.tmux("list-windows", "-t", session,
+		"-F", "#{window_name}\t#{"+option+"}")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 2 && parts[0] == windowName {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
 // CapturePane returns the current text content of krang's pane.
 func (e *TestEnv) CapturePane() string {
 	cmd := e.tmux("capture-pane", "-t", e.krangPaneTarget, "-p")
