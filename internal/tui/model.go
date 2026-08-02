@@ -120,32 +120,13 @@ type Model struct {
 	selectTaskID string
 }
 
-func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, workspaceRepos *db.WorkspaceRepoStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
+// NewModel builds the TUI. The RepoSets is the one the manager was
+// built with — nil means no workspace mode — so slot creation resolves
+// repos exactly the way the picker displays them.
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, workspaceRepos *db.WorkspaceRepoStore, rs *workspace.RepoSets, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "filter tasks..."
 	filterInput.CharLimit = 40
-
-	// Try to load workspace config; nil means no workspace mode.
-	cwd, _ := os.Getwd()
-	rs, _ := workspace.Load(cwd)
-
-	// User-level config fills in when workspace config doesn't set values.
-	if rs != nil {
-		if rs.DefaultVCS == "" && cfg.DefaultVCS != "" {
-			rs.DefaultVCS = cfg.DefaultVCS
-		}
-		if len(cfg.GitHubOrgs) > 0 {
-			seen := make(map[string]bool)
-			for _, o := range rs.GitHubOrgs {
-				seen[o] = true
-			}
-			for _, o := range cfg.GitHubOrgs {
-				if !seen[o] {
-					rs.GitHubOrgs = append(rs.GitHubOrgs, o)
-				}
-			}
-		}
-	}
 
 	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 
@@ -487,7 +468,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wsProgress.Repos[0].Status = cloneStatusCloning
 		m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 			fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
-		return m, m.wsCloneRepoCmd(0, m.repoSets)
+		return m, m.wsCloneRepoCmd(0)
 
 	case wsCloneDoneMsg:
 		if m.wsProgress == nil || msg.Index >= len(m.wsProgress.Repos) {
@@ -502,13 +483,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			entry.Status = cloneStatusDone
 			entry.VCS = msg.VCS
+			entry.Provenance = msg.Provenance
 			if output := strings.TrimSpace(msg.Output); output != "" {
 				for _, line := range strings.Split(output, "\n") {
 					m.wsProgress.LogLines = append(m.wsProgress.LogLines, line)
 				}
 			}
+			created := entry.Provenance.DirName
+			if created == "" {
+				created = entry.Repo
+			}
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
-				fmt.Sprintf("Done: %s (%s)", entry.Repo, entry.VCS))
+				fmt.Sprintf("Done: %s (%s)", created, entry.VCS))
 		}
 		entry.Output = msg.Output
 
@@ -531,7 +517,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.wsProgress.Repos[nextIdx].Status = cloneStatusCloning
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 				fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[nextIdx].Repo, m.wsProgress.Repos[nextIdx].VCS))
-			return m, m.wsCloneRepoCmd(nextIdx, m.repoSets)
+			return m, m.wsCloneRepoCmd(nextIdx)
 		}
 
 		// All repos done. Launch task if needed.
@@ -1382,6 +1368,9 @@ func (m Model) handleWizardEditSubmit(result wizardEditSubmitMsg) (tea.Model, te
 		m.mode = ModeWorkspaceProgress
 		m.initWSProgress(title, result.SelectedRepos, rs, false, originalTask.Name, db.TaskFlags{}, "")
 		m.wsProgress.WorkspaceDir = workspaceDir
+		// The task already exists, so each working copy records its
+		// provenance as soon as it is made.
+		m.wsProgress.TaskID = taskID
 		m.wsProgress.Repos[0].Status = cloneStatusCloning
 		m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 			fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
@@ -1393,7 +1382,7 @@ func (m Model) handleWizardEditSubmit(result wizardEditSubmitMsg) (tea.Model, te
 		if sandboxChanged {
 			_ = m.taskStore.UpdateSandboxProfile(taskID, result.SandboxProfile)
 		}
-		return m, tea.Batch(m.wsCloneRepoCmd(0, rs), m.spinner.Tick)
+		return m, tea.Batch(m.wsCloneRepoCmd(0), m.spinner.Tick)
 	}
 
 	// No repos — just flags/sandbox changes.
@@ -1488,6 +1477,7 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			rs := m.repoSets
 			workspaceDir := m.addReposWorkspaceDir
 			taskName := filepath.Base(workspaceDir)
+			addReposTaskID := m.addReposTaskID
 			m.activeRepoPicker = nil
 			m.addReposTaskID = ""
 			m.addReposWorkspaceDir = ""
@@ -1495,12 +1485,13 @@ func (m Model) handleRepoSelectLocalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			title := fmt.Sprintf("Adding repos to %q", taskName)
 			m.initWSProgress(title, selected, rs, false, taskName, db.TaskFlags{}, "")
 			m.wsProgress.WorkspaceDir = workspaceDir
+			m.wsProgress.TaskID = addReposTaskID
 			// Start first clone directly (dir already exists).
 			if len(selected) > 0 {
 				m.wsProgress.Repos[0].Status = cloneStatusCloning
 				m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 					fmt.Sprintf("Cloning %s (%s)...", m.wsProgress.Repos[0].Repo, m.wsProgress.Repos[0].VCS))
-				return m, tea.Batch(m.wsCloneRepoCmd(0, rs), m.spinner.Tick)
+				return m, tea.Batch(m.wsCloneRepoCmd(0), m.spinner.Tick)
 			}
 			m.wsProgress.Done = true
 			return m, nil
@@ -1767,6 +1758,7 @@ func (m Model) recordedRepos(taskID string) []workspace.RepoProvenance {
 			RepoName: row.RepoName,
 			VCS:      row.VCS,
 			VCSName:  row.VCSName,
+			Label:    row.SlotLabel,
 			Recorded: true,
 		}
 	}
@@ -1774,9 +1766,10 @@ func (m Model) recordedRepos(taskID string) []workspace.RepoProvenance {
 }
 
 // checkWorkspaceWarnings checks git worktrees in the workspace for
-// uncommitted changes and unpushed commits. Returns repo names that
-// have each condition.
-func checkWorkspaceWarnings(rs *workspace.RepoSets, t *db.Task) (uncommittedRepos, unpushedRepos []string) {
+// uncommitted changes and unpushed commits. Returns the working-copy
+// directory names that have each condition — a task holding two slots
+// of one repo needs to know which slot the warning is about.
+func checkWorkspaceWarnings(rs *workspace.RepoSets, t *db.Task, recorded []workspace.RepoProvenance) (uncommittedRepos, unpushedRepos []string) {
 	if rs == nil || t.WorkspaceDir == "" {
 		return nil, nil
 	}
@@ -1794,10 +1787,9 @@ func checkWorkspaceWarnings(rs *workspace.RepoSets, t *db.Task) (uncommittedRepo
 	case workspace.StrategySingleRepo:
 		checkRepo(t.WorkspaceDir, t.Name)
 	case workspace.StrategyMultiRepo:
-		repos := workspace.PresentRepos(t.WorkspaceDir)
-		for _, repo := range repos {
-			if rs.DetectVCS(repo) != "jj" {
-				checkRepo(filepath.Join(t.WorkspaceDir, repo), repo)
+		for _, slot := range workspace.PresentSlots(rs, t.WorkspaceDir, recorded) {
+			if slot.VCS != "jj" {
+				checkRepo(filepath.Join(t.WorkspaceDir, slot.DirName), slot.DirName)
 			}
 		}
 	}
@@ -1909,7 +1901,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.confirmUncommittedRepos = nil
 		m.confirmUnpushedRepos = nil
 		if t.WorkspaceDir != "" {
-			m.confirmUncommittedRepos, m.confirmUnpushedRepos = checkWorkspaceWarnings(m.repoSets, t)
+			m.confirmUncommittedRepos, m.confirmUnpushedRepos = checkWorkspaceWarnings(m.repoSets, t, m.recordedRepos(t.ID))
 		}
 		m.mode = ModeConfirmComplete
 		return m, nil
@@ -1937,7 +1929,7 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		var excludeRepos map[string]bool
 		if t.WorkspaceDir != "" {
-			present := workspace.PresentRepos(t.WorkspaceDir)
+			present := workspace.PresentRepos(m.repoSets, t.WorkspaceDir, m.recordedRepos(t.ID))
 			excludeRepos = make(map[string]bool)
 			for _, r := range present {
 				excludeRepos[r] = true
@@ -2103,7 +2095,11 @@ func (m Model) startFork(name string) (tea.Model, tea.Cmd) {
 			repos = []string{allRepos[0]}
 		}
 	} else {
-		repos = workspace.PresentRepos(src.WorkspaceDir)
+		// Forking works a directory at a time: each working copy in the
+		// source workspace becomes one in the fork. Slot directories
+		// aren't handled yet — they land here under their directory
+		// name and get copied as non-repo items.
+		repos = workspace.PresentDirs(src.WorkspaceDir)
 		// Filter to managed repos (those with source in rs.ReposDir).
 		// One-off cloned repos can't be worktree-ified and will be
 		// copied as non-repo items instead.
@@ -2620,22 +2616,29 @@ func (m Model) wsCreateDirAndStart(rs *workspace.RepoSets) tea.Cmd {
 	}
 }
 
-// wsCloneRepoCmd clones a single repo at the given index.
-func (m Model) wsCloneRepoCmd(index int, rs *workspace.RepoSets) tea.Cmd {
+// wsCloneRepoCmd creates the working copy for the repo at the given
+// index. Every clone goes through Manager.CreateSlot, which picks the
+// slot's identity and records it. A workspace being built for a task
+// that doesn't exist yet has no ID to record against, so the
+// provenance rides along on the progress entry until wsLaunchTaskCmd
+// has a task to attach it to.
+func (m Model) wsCloneRepoCmd(index int) tea.Cmd {
 	ws := m.wsProgress
 	if ws == nil || index >= len(ws.Repos) {
 		return nil
 	}
 	entry := ws.Repos[index]
-	dst := workspace.RepoDst(rs, ws.WorkspaceDir, entry.Repo)
+	taskID := ws.TaskID
 	taskName := ws.TaskName
+	workspaceDir := ws.WorkspaceDir
 	return func() tea.Msg {
-		result := workspace.CloneRepo(rs, taskName, dst, entry.Repo)
+		result, err := m.manager.CreateSlot(taskID, taskName, workspaceDir, entry.Repo, "")
 		return wsCloneDoneMsg{
-			Index:  index,
-			Output: result.Output,
-			VCS:    result.VCS,
-			Err:    result.Err,
+			Index:      index,
+			Output:     result.Output,
+			VCS:        result.VCS,
+			Provenance: result.Provenance,
+			Err:        err,
 		}
 	}
 }
@@ -2650,6 +2653,12 @@ func (m Model) wsLaunchTaskCmd() tea.Cmd {
 	workspaceDir := ws.WorkspaceDir
 	flags := ws.TaskFlags
 	sandboxProfile := ws.TaskSandboxProfile
+	created := make([]workspace.RepoProvenance, 0, len(ws.Repos))
+	for _, entry := range ws.Repos {
+		if entry.Status == cloneStatusDone && entry.Provenance.DirName != "" {
+			created = append(created, entry.Provenance)
+		}
+	}
 	return func() tea.Msg {
 		t, err := m.manager.CreateTask(name, "", workspaceDir, flags, sandboxProfile)
 		if err != nil {
@@ -2657,6 +2666,13 @@ func (m Model) wsLaunchTaskCmd() tea.Cmd {
 		}
 		if err := m.taskStore.UpdateWorkspaceDir(t.ID, workspaceDir); err != nil {
 			return wsLaunchDoneMsg{Err: err}
+		}
+		// The working copies were made before the task row existed, so
+		// their provenance lands now. Recording all of them matters:
+		// the reconcile backfill only fires for tasks with no rows at
+		// all, so a partial record would never be completed.
+		for _, provenance := range created {
+			_ = m.manager.RecordSlot(t.ID, provenance)
 		}
 		return wsLaunchDoneMsg{TaskID: t.ID}
 	}

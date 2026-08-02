@@ -127,8 +127,10 @@ func TestGitWorktreeCreateWithStaleBranch(t *testing.T) {
 		Sets:              map[string][]string{},
 	}
 
-	// Creating a workspace with the same task name should succeed
-	// because addGitWorktree cleans up stale branches.
+	// Creating a workspace with the same task name should succeed:
+	// the branch is fully merged, so slot creation reclaims it. See
+	// TestCloneRepoRefusesBranchHoldingUnmergedWork for where the line
+	// is drawn.
 	result, err := Create(rs, "stale-task", []string{"myrepo"})
 	if err != nil {
 		t.Fatalf("Create with stale branch: %v", err)

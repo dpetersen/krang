@@ -79,6 +79,28 @@ func Load(metarepoDir string) (*RepoSets, error) {
 	}, nil
 }
 
+// ApplyUserDefaults fills in what krang.yaml left unset from the
+// user-level config. Applying it once at startup is what keeps the TUI
+// and the manager reasoning about the same repos.
+func (rs *RepoSets) ApplyUserDefaults(defaultVCS string, githubOrgs []string) {
+	if rs == nil {
+		return
+	}
+	if rs.DefaultVCS == "" && defaultVCS != "" {
+		rs.DefaultVCS = defaultVCS
+	}
+	seen := make(map[string]bool, len(rs.GitHubOrgs))
+	for _, org := range rs.GitHubOrgs {
+		seen[org] = true
+	}
+	for _, org := range githubOrgs {
+		if !seen[org] {
+			seen[org] = true
+			rs.GitHubOrgs = append(rs.GitHubOrgs, org)
+		}
+	}
+}
+
 // ListRepos returns sorted names of directories in the repos dir.
 func (rs *RepoSets) ListRepos() ([]string, error) {
 	entries, err := os.ReadDir(rs.ReposDir)

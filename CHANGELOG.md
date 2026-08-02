@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Unified slot creation. Every working copy krang makes for a task now
+  goes through one path that gives it an explicit `SlotIdentity`
+  (task, repo, label) and derives its directory name, jj workspace
+  name, and git branch from it. A task's initial working copy keeps the
+  names it has always had — directory `<repo>`, VCS identity `<task>` —
+  so nothing on disk is renamed. Additional slots of the same repo get
+  directory `<repo>--<label>`, jj workspace `<task>--<repo>--<label>`,
+  and branch `krang/<task>--<repo>--<label>`, auto-numbering (2, 3, …)
+  when no label is given. Creation records a `workspace_repos` row for
+  every working copy, including initial ones.
+
+- Slot creation refuses collisions instead of overwriting. The computed
+  jj workspace name is checked against `jj workspace list` in the source
+  repo and the git branch against `git branch --list` before anything is
+  written, and a slot directory that would spell a managed repo's name
+  is rejected outright.
+
 - Workspace repo provenance. A new `workspace_repos` table records, for
   every working copy inside a task's workspace directory, which repo it
   was created from and which jj workspace / git branch it owns. Cleanup
@@ -51,6 +68,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   when a wakeup fires or a monitor ends.
 
 ### Changed
+
+- Reusing a task name no longer force-deletes the leftover
+  `krang/<task>` branch. Cleanup goes out of its way to keep branches
+  holding unpushed work, and creation then threw them away. Krang now
+  reclaims the branch only when `git branch -d` agrees nothing is lost
+  (fully merged, not checked out anywhere) and otherwise refuses with an
+  error naming the branch.
+
+- The repo picker's "already present" filter is slot-aware. It hides the
+  repos a workspace holds rather than the directory names, so a second
+  slot of a repo no longer reads as an unknown repo of its own.
 
 - Select the newly-created task in the main list as soon as it appears,
   so the first lifecycle action after dismissing the creation (or fork)

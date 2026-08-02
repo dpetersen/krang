@@ -9,9 +9,9 @@ import (
 	"github.com/dpetersen/krang/internal/workspace"
 )
 
-// backfillFixture builds a metarepo on disk plus a temp database, and
+// managerFixture builds a metarepo on disk plus a temp database, and
 // returns a manager wired the way krang wires one at startup.
-type backfillFixture struct {
+type managerFixture struct {
 	manager        *Manager
 	tasks          *db.TaskStore
 	workspaceRepos *db.WorkspaceRepoStore
@@ -19,7 +19,7 @@ type backfillFixture struct {
 	workspacesDir  string
 }
 
-func newBackfillFixture(t *testing.T) *backfillFixture {
+func newManagerFixture(t *testing.T) *managerFixture {
 	t.Helper()
 
 	metarepoDir := t.TempDir()
@@ -47,11 +47,11 @@ func newBackfillFixture(t *testing.T) *backfillFixture {
 		tasks, db.NewEventStore(database), workspaceRepos,
 		// Sessions that don't exist — reconcile tolerates that, and
 		// none of these tasks have a tmux window anyway.
-		"krang-backfill-test", "krang-backfill-test-parked",
+		"krang-manager-test", "krang-manager-test-parked",
 		nil, "", "", metarepoDir, repoSets,
 	)
 
-	return &backfillFixture{
+	return &managerFixture{
 		manager:        manager,
 		tasks:          tasks,
 		workspaceRepos: workspaceRepos,
@@ -74,7 +74,7 @@ func makeRepoDir(t *testing.T, dir, vcs string) {
 }
 
 func TestReconcileBackfillsWorkspaceRepos(t *testing.T) {
-	f := newBackfillFixture(t)
+	f := newManagerFixture(t)
 
 	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
 	makeRepoDir(t, filepath.Join(f.reposDir, "beta"), "git")
@@ -131,7 +131,7 @@ func TestReconcileBackfillsWorkspaceRepos(t *testing.T) {
 }
 
 func TestReconcileBackfillIsIdempotent(t *testing.T) {
-	f := newBackfillFixture(t)
+	f := newManagerFixture(t)
 
 	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
 	makeRepoDir(t, filepath.Join(f.reposDir, "beta"), "git")
@@ -163,7 +163,7 @@ func TestReconcileBackfillIsIdempotent(t *testing.T) {
 }
 
 func TestReconcileSkipsTasksWithoutWorkspaces(t *testing.T) {
-	f := newBackfillFixture(t)
+	f := newManagerFixture(t)
 
 	if err := f.tasks.Create(&db.Task{
 		ID: "01CWD", Name: "no-workspace", State: db.StateActive,
@@ -189,7 +189,7 @@ func TestReconcileSkipsTasksWithoutWorkspaces(t *testing.T) {
 // its own, so backfill leaves it alone rather than recording working
 // copies that belong to the workspace's owner.
 func TestReconcileSkipsSharedWorkspaceForks(t *testing.T) {
-	f := newBackfillFixture(t)
+	f := newManagerFixture(t)
 
 	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
 

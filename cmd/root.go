@@ -116,6 +116,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		repoSets = nil
 	}
+	repoSets.ApplyUserDefaults(cfg.DefaultVCS, cfg.GitHubOrgs)
 	manager := task.NewManager(taskStore, eventStore, workspaceRepoStore, krangSession, parkedSession, cfg.Sandboxes, cfg.DefaultSandbox, stateFilePath, cwd, repoSets)
 
 	if err := manager.Reconcile(); err != nil {
@@ -143,7 +144,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 	styles := tui.BuildStyles(theme)
 
-	model := tui.NewModel(manager, taskStore, eventStore, workspaceRepoStore, hookEvents, summaryPipeline, krangSession, parkedSession, cfg, styles)
+	model := tui.NewModel(manager, taskStore, eventStore, workspaceRepoStore, repoSets, hookEvents, summaryPipeline, krangSession, parkedSession, cfg, styles)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := program.Run(); err != nil {

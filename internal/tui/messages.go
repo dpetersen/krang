@@ -146,10 +146,11 @@ type wsDirCreatedMsg struct {
 
 // wsCloneDoneMsg signals that a single repo clone has completed.
 type wsCloneDoneMsg struct {
-	Index  int
-	Output string
-	VCS    string
-	Err    error
+	Index      int
+	Output     string
+	VCS        string
+	Provenance workspace.RepoProvenance
+	Err        error
 }
 
 // wsLaunchDoneMsg signals that the task launch step completed.

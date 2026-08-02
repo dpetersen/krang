@@ -196,7 +196,9 @@ SQLite per-instance at `~/.local/share/krang/instances/<encoded-cwd>/krang.db` (
 
 **workspace_repos table:** id, task_id (FK), repo_name, dir_name, vcs, vcs_name, slot_label, base_revision, created_at
 
-One row per working copy inside a task's workspace directory. Cleanup reads these rows to learn which repo under the repos dir a directory came from and which jj workspace / git branch to forget, instead of inferring both from the directory name. Unique on (task_id, dir_name) and (repo_name, vcs_name). Rows are dropped when the task completes, releasing its VCS identities along with its name. Directories with no row — one-off clones made by hand, workspaces predating the table that backfill skipped — still get the old directory-name derivation as a best-effort fallback. The events table can't serve this purpose: it's trimmed on every reconcile.
+One row per working copy inside a task's workspace directory, written by the creation path for every slot including a task's initial ones. Cleanup reads these rows to learn which repo under the repos dir a directory came from and which jj workspace / git branch to forget, instead of inferring both from the directory name. Unique on (task_id, dir_name) and (repo_name, vcs_name). Rows are dropped when the task completes, releasing its VCS identities along with its name. Directories with no row — one-off clones made by hand, workspaces predating the table that backfill skipped — still get the old directory-name derivation as a best-effort fallback. The events table can't serve this purpose: it's trimmed on every reconcile.
+
+Recording every slot matters because the reconcile backfill only fires for tasks with *zero* rows: a task recorded partially would never have the rest filled in.
 
 ## Import
 

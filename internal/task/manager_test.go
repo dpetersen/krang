@@ -426,7 +426,7 @@ func TestFindSessionCwdPrefersExistingOverStale(t *testing.T) {
 // identities have to be released at the same time — the workspace_repos
 // unique constraint would otherwise reject the next task of that name.
 func TestCompleteDropsRecordedWorkspaceRepos(t *testing.T) {
-	f := newBackfillFixture(t)
+	f := newManagerFixture(t)
 
 	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
 	workspaceDir := filepath.Join(f.workspacesDir, "finished")

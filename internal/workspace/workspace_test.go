@@ -268,7 +268,7 @@ func TestAddReposToWorkspace(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	present := PresentRepos(createResult.WorkspaceDir)
+	present := PresentDirs(createResult.WorkspaceDir)
 	if len(present) != 2 {
 		t.Fatalf("expected 2 present repos, got %v", present)
 	}
@@ -282,7 +282,7 @@ func TestAddReposToWorkspace(t *testing.T) {
 		t.Errorf("expected 1 added, got %d", len(addResult.Created))
 	}
 
-	present = PresentRepos(createResult.WorkspaceDir)
+	present = PresentDirs(createResult.WorkspaceDir)
 	if len(present) != 3 {
 		t.Fatalf("expected 3 present repos after add, got %v", present)
 	}
@@ -797,7 +797,7 @@ func TestGitWorktreeFallbackOnNoRemote(t *testing.T) {
 	}
 }
 
-func TestPresentReposFiltersNonRepos(t *testing.T) {
+func TestPresentDirsFiltersNonRepos(t *testing.T) {
 	dir := t.TempDir()
 	wsDir := filepath.Join(dir, "workspace")
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
@@ -818,9 +818,9 @@ func TestPresentReposFiltersNonRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repos := PresentRepos(wsDir)
+	repos := PresentDirs(wsDir)
 	if len(repos) != 1 || repos[0] != "alpha" {
-		t.Errorf("PresentRepos = %v, want [alpha]", repos)
+		t.Errorf("PresentDirs = %v, want [alpha]", repos)
 	}
 }
 

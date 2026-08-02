@@ -14,6 +14,7 @@ import (
 type CreateResult struct {
 	WorkspaceDir string
 	Created      map[string]string // repo name → VCS used
+	Slots        []RepoProvenance  // provenance of each working copy created
 	Errors       []string
 }
 
@@ -49,23 +50,16 @@ func createSingleRepo(rs *RepoSets, taskName, workspaceDir, repo string) (*Creat
 		return nil, fmt.Errorf("creating workspaces directory: %w", err)
 	}
 
-	vcs := rs.DetectVCS(repo)
-	repoSrc := filepath.Join(rs.ReposDir, repo)
-
-	var err error
-	switch vcs {
-	case "jj":
-		err = createJJWorkspace(repoSrc, workspaceDir, taskName)
-	default:
-		err = createGitWorktree(repoSrc, workspaceDir, taskName)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%s (%s): %w", repo, vcs, err)
+	identity := SlotIdentity{TaskName: taskName, RepoName: repo}
+	clone := CloneRepoAs(rs, identity, SlotDst(rs, workspaceDir, identity))
+	if clone.Err != nil {
+		return nil, fmt.Errorf("%s (%s): %w", repo, clone.VCS, clone.Err)
 	}
 
 	return &CreateResult{
 		WorkspaceDir: workspaceDir,
-		Created:      map[string]string{repo: vcs},
+		Created:      map[string]string{repo: clone.VCS},
+		Slots:        []RepoProvenance{clone.Provenance},
 	}, nil
 }
 
@@ -74,31 +68,7 @@ func createMultiRepo(rs *RepoSets, taskName, workspaceDir string, repos []string
 		return nil, fmt.Errorf("creating workspace directory: %w", err)
 	}
 
-	result := &CreateResult{
-		WorkspaceDir: workspaceDir,
-		Created:      make(map[string]string),
-	}
-
-	for _, repo := range repos {
-		vcs := rs.DetectVCS(repo)
-		repoSrc := filepath.Join(rs.ReposDir, repo)
-		repoDst := filepath.Join(workspaceDir, repo)
-
-		var err error
-		switch vcs {
-		case "jj":
-			err = createJJWorkspace(repoSrc, repoDst, taskName)
-		default:
-			err = createGitWorktree(repoSrc, repoDst, taskName)
-		}
-
-		if err != nil {
-			result.Errors = append(result.Errors,
-				fmt.Sprintf("%s (%s): %v", repo, vcs, err))
-			continue
-		}
-		result.Created[repo] = vcs
-	}
+	result := cloneInitialSlots(rs, workspaceDir, taskName, repos)
 
 	if len(result.Created) == 0 && len(result.Errors) > 0 {
 		_ = os.RemoveAll(workspaceDir)
@@ -108,7 +78,32 @@ func createMultiRepo(rs *RepoSets, taskName, workspaceDir string, repos []string
 	return result, nil
 }
 
-// AddRepos adds new repos to an existing multi_repo workspace.
+// cloneInitialSlots gives each repo its initial working copy in the
+// workspace, collecting per-repo failures instead of aborting.
+func cloneInitialSlots(rs *RepoSets, workspaceDir, taskName string, repos []string) *CreateResult {
+	result := &CreateResult{
+		WorkspaceDir: workspaceDir,
+		Created:      make(map[string]string),
+	}
+
+	for _, repo := range repos {
+		identity := SlotIdentity{TaskName: taskName, RepoName: repo}
+		clone := CloneRepoAs(rs, identity, SlotDst(rs, workspaceDir, identity))
+		if clone.Err != nil {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("%s (%s): %v", repo, clone.VCS, clone.Err))
+			continue
+		}
+		result.Created[repo] = clone.VCS
+		result.Slots = append(result.Slots, clone.Provenance)
+	}
+
+	return result
+}
+
+// AddRepos adds working copies to an existing multi_repo workspace. A
+// repo the workspace already holds lands in an auto-numbered slot
+// rather than colliding with the copy that's there.
 func AddRepos(rs *RepoSets, workspaceDir, taskName string, repos []string) (*CreateResult, error) {
 	result := &CreateResult{
 		WorkspaceDir: workspaceDir,
@@ -116,33 +111,30 @@ func AddRepos(rs *RepoSets, workspaceDir, taskName string, repos []string) (*Cre
 	}
 
 	for _, repo := range repos {
-		vcs := rs.DetectVCS(repo)
-		repoSrc := filepath.Join(rs.ReposDir, repo)
-		repoDst := filepath.Join(workspaceDir, repo)
-
-		var err error
-		switch vcs {
-		case "jj":
-			err = createJJWorkspace(repoSrc, repoDst, taskName)
-		default:
-			err = createGitWorktree(repoSrc, repoDst, taskName)
-		}
-
+		identity, err := ResolveSlotIdentity(rs, workspaceDir, taskName, repo, "")
 		if err != nil {
-			result.Errors = append(result.Errors,
-				fmt.Sprintf("%s (%s): %v", repo, vcs, err))
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", repo, err))
 			continue
 		}
-		result.Created[repo] = vcs
+		clone := CloneRepoAs(rs, identity, SlotDst(rs, workspaceDir, identity))
+		if clone.Err != nil {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("%s (%s): %v", repo, clone.VCS, clone.Err))
+			continue
+		}
+		result.Created[repo] = clone.VCS
+		result.Slots = append(result.Slots, clone.Provenance)
 	}
 
 	return result, nil
 }
 
-// PresentRepos returns the names of repo subdirectories already
-// present in a multi_repo workspace. Only directories that contain
-// .git or .jj are included; plain directories and files are ignored.
-func PresentRepos(workspaceDir string) []string {
+// PresentDirs returns the names of working-copy subdirectories in a
+// multi_repo workspace. Only directories that contain .git or .jj are
+// included; plain directories and files are ignored. These are
+// directory names, not repo names — see PresentRepos for the repos a
+// workspace holds.
+func PresentDirs(workspaceDir string) []string {
 	entries, err := os.ReadDir(workspaceDir)
 	if err != nil {
 		return nil
@@ -261,6 +253,7 @@ type RepoProvenance struct {
 	RepoName string // directory name under ReposDir
 	VCS      string // "jj" or "git"
 	VCSName  string // jj workspace name; git branches are krang/<VCSName>
+	Label    string // slot label; empty for a task's initial working copy
 	Recorded bool
 }
 
@@ -271,7 +264,7 @@ type RepoProvenance struct {
 func DeriveProvenance(rs *RepoSets, workspaceDir string) []RepoProvenance {
 	vcsName := filepath.Base(workspaceDir)
 	var derived []RepoProvenance
-	for _, dirName := range PresentRepos(workspaceDir) {
+	for _, dirName := range PresentDirs(workspaceDir) {
 		entry := RepoProvenance{
 			DirName:  dirName,
 			RepoName: dirName,
@@ -445,34 +438,62 @@ func CreateWorkspaceDir(rs *RepoSets, taskName string) (string, error) {
 
 // CloneRepoResult holds the outcome of a single repo clone operation.
 type CloneRepoResult struct {
-	Repo   string
-	VCS    string
-	Output string // combined stdout+stderr from the clone command
-	Err    error
+	Repo       string
+	VCS        string
+	Output     string // combined stdout+stderr from the clone command
+	Provenance RepoProvenance
+	Err        error
 }
 
-// CloneRepo clones or creates a workspace for a single repo. For
-// single_repo mode, dst should be the workspace dir itself. For
-// multi_repo mode, dst should be workspaceDir/repo.
-func CloneRepo(rs *RepoSets, taskName, dst, repo string) CloneRepoResult {
-	vcs := rs.DetectVCS(repo)
-	repoSrc := filepath.Join(rs.ReposDir, repo)
+// CloneRepoAs creates one working copy of a repo under an explicit
+// identity, which fixes its directory name, its jj workspace name, and
+// its git branch. Every working copy krang makes for a task goes
+// through here, so the names are derived one way and the identity is
+// checked against what the source repo already holds before anything
+// is written. On success the result carries the provenance the caller
+// should record.
+func CloneRepoAs(rs *RepoSets, identity SlotIdentity, dst string) CloneRepoResult {
+	result := CloneRepoResult{
+		Repo: identity.RepoName,
+		VCS:  rs.DetectVCS(identity.RepoName),
+	}
 
-	var output string
-	var err error
-	switch vcs {
+	if err := identity.Validate(rs); err != nil {
+		result.Err = err
+		return result
+	}
+	if err := checkVCSNameFree(rs, identity); err != nil {
+		result.Err = err
+		return result
+	}
+
+	repoSrc := filepath.Join(rs.ReposDir, identity.RepoName)
+	switch result.VCS {
 	case "jj":
-		output, err = cloneJJWorkspace(repoSrc, dst, taskName)
+		result.Output, result.Err = cloneJJWorkspace(repoSrc, dst, identity.VCSName())
 	default:
-		output, err = addGitWorktree(repoSrc, dst, taskName)
+		result.Output, result.Err = addGitWorktree(repoSrc, dst, identity.VCSName())
+	}
+	if result.Err != nil {
+		return result
 	}
 
-	return CloneRepoResult{
-		Repo:   repo,
-		VCS:    vcs,
-		Output: output,
-		Err:    err,
+	result.Provenance = RepoProvenance{
+		DirName:  identity.DirName(),
+		RepoName: identity.RepoName,
+		VCS:      result.VCS,
+		VCSName:  identity.VCSName(),
+		Label:    identity.Label,
 	}
+	return result
+}
+
+// CloneRepo creates a task's initial working copy of a repo, which
+// keeps the pre-slot names. For single_repo mode, dst should be the
+// workspace dir itself. For multi_repo mode, dst should be
+// workspaceDir/repo.
+func CloneRepo(rs *RepoSets, taskName, dst, repo string) CloneRepoResult {
+	return CloneRepoAs(rs, SlotIdentity{TaskName: taskName, RepoName: repo}, dst)
 }
 
 // RepoDst returns the destination path for a repo within a workspace.
@@ -481,11 +502,6 @@ func RepoDst(rs *RepoSets, workspaceDir, repo string) string {
 		return workspaceDir
 	}
 	return filepath.Join(workspaceDir, repo)
-}
-
-func createJJWorkspace(repoSrc, repoDst, workspaceName string) error {
-	_, err := cloneJJWorkspace(repoSrc, repoDst, workspaceName)
-	return err
 }
 
 func cloneJJWorkspace(repoSrc, repoDst, workspaceName string) (string, error) {
@@ -515,13 +531,8 @@ func cloneJJWorkspace(repoSrc, repoDst, workspaceName string) (string, error) {
 	return string(output), nil
 }
 
-func createGitWorktree(repoSrc, repoDst, taskName string) error {
-	_, err := addGitWorktree(repoSrc, repoDst, taskName)
-	return err
-}
-
 // addGitWorktree creates a git worktree at repoDst branching from repoSrc.
-// The branch is named krang/<taskName> to make it identifiable for cleanup.
+// The branch is named krang/<vcsName> to make it identifiable for cleanup.
 // It fetches from origin first and bases the worktree on the remote default
 // branch so that new workspaces start from up-to-date code.
 func addGitWorktree(repoSrc, repoDst, taskName string) (string, error) {
@@ -723,13 +734,13 @@ func AllReposJJ(rs *RepoSets, workspaceDir string) bool {
 		_, err := os.Stat(filepath.Join(workspaceDir, ".jj"))
 		return err == nil
 	}
-	repos := PresentRepos(workspaceDir)
-	for _, repo := range repos {
-		if rs.DetectVCS(repo) != "jj" {
+	slots := PresentSlots(rs, workspaceDir, nil)
+	for _, slot := range slots {
+		if slot.VCS != "jj" {
 			return false
 		}
 	}
-	return len(repos) > 0
+	return len(slots) > 0
 }
 
 func forkJJRepoIndependent(repoSrc, srcWorkspace, dstPath, forkTaskName string) (string, error) {
