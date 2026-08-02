@@ -177,9 +177,12 @@ the same precedent (`process-exec` on the path the tool actually lives
 at), pointed at krang instead:
 
 ```scheme
-;; Krang: workspace CLI executes the krang binary itself
-(allow process-exec (literal "/opt/homebrew/bin/krang"))
-;; Intel Macs: (allow process-exec (literal "/usr/local/bin/krang"))
+;; Krang: workspace CLI executes the krang binary itself. Use the path
+;; `which krang` reports; SBPL literals do not expand ~, and a symlinked
+;; install needs the RESOLVED target path, since Seatbelt matches the
+;; real file.
+(allow process-exec (literal "/Users/<you>/.local/bin/krang"))
+;; Homebrew installs: (allow process-exec (literal "/opt/homebrew/bin/krang"))
 ```
 
 If krang isn't installed via Homebrew, adjust the path — `which krang`
