@@ -165,6 +165,62 @@ The `--add-dirs` grants read+write access to the repos directory,
 which is needed because both jj workspaces and git worktrees reference
 the source repo's object store.
 
+### Workspace CLI Access
+
+A sandboxed task that calls `krang workspace ...` itself — rather than
+a human using the TUI — needs everything above plus four things.
+
+**1. Permission to execute the krang binary.** `krang workspace` is a
+subcommand of the krang binary, run as a plain process, not through the
+relay script. This is a separate grant from the relay script's: follow
+the same precedent (`process-exec` on the path the tool actually lives
+at), pointed at krang instead:
+
+```scheme
+;; Krang: workspace CLI executes the krang binary itself
+(allow process-exec (literal "/opt/homebrew/bin/krang"))
+;; Intel Macs: (allow process-exec (literal "/usr/local/bin/krang"))
+```
+
+If krang isn't installed via Homebrew, adjust the path — `which krang`
+from an unsandboxed shell gives the path to grant.
+
+**2. Loopback TCP to the hook server's dynamic port.** `krang workspace`
+speaks HTTP to `127.0.0.1:<port>`, the same server the relay script
+posts hook events to, just outbound instead of via the script's `curl`.
+Safehouse's default policy is fully open to the network
+(`(allow network*)`), so this works with no extra configuration out of
+the box. If your profile has been narrowed past that default — safehouse
+itself documents a "tight mode" that keeps only `network-outbound` open,
+or narrower — grant outbound loopback access explicitly. The port is
+dynamic per krang instance, so pin to the whole loopback range rather
+than one port:
+
+```scheme
+;; Krang: workspace CLI reaches the hook server's dynamic loopback port
+(allow network-outbound (remote ip "localhost:*"))
+```
+
+**3. `KRANG_STATEFILE` passthrough.** No new grant needed — it's the
+same env var the relay script depends on (see Requirements above),
+already covered by `--env-pass KRANG_STATEFILE` in the sandbox command.
+It's exported into the shell before the sandbox tool runs
+(`buildClaudeCommand` in `internal/task/manager.go`), so it's part of
+the sandboxed process's environment from the moment it starts, and
+every process Claude spawns from inside the sandbox — including a
+`krang workspace` call from a Bash tool call — inherits it the ordinary
+way, with nothing workspace-specific to configure.
+
+**4. No relaunch for slots created after launch.** New slot directories
+land inside the task's own working directory, which the sandbox already
+grants read+write access to (see Requirements above). Because that
+grant covers the whole working directory rather than the specific
+subdirectories that existed at launch time, an in-flight sandboxed
+session should be able to use a slot that `krang workspace add` creates
+mid-session with no sandbox relaunch. This is the designed property,
+not yet confirmed live in a sandboxed session — that verification is
+tracked separately.
+
 ### Multiple Profiles
 
 You can define multiple profiles for tasks with different access
@@ -198,3 +254,26 @@ the Debug flag on a task and check `/tmp/krang-debug.log`:
 - **Log entries but krang doesn't react** — the relay script is
   running but can't reach krang's HTTP server. This usually means
   `KRANG_STATEFILE` isn't being passed through.
+
+`krang workspace` fails differently than a stuck hook event — it's a
+foreground command, so it prints its own error instead of failing
+silently. Its exit code says whether the request is safe to retry
+(see `internal/workspaceclient/exit.go`'s `ExitCodeHelp`).
+
+- **"exec denied" running `krang workspace`** — the krang binary
+  itself isn't granted `process-exec`. This is a separate grant from
+  the relay script's `~/.config/krang/hooks/` one, since `krang
+  workspace` runs the krang binary directly. Add the grant from
+  Workspace CLI Access above.
+- **"connection refused" from `krang workspace`** — the CLI's own
+  error names the loopback address and the state file it read it from,
+  and exits 4 (`ExitUnavailable`). Means the TUI isn't running, or the
+  state file names a port from an instance that's since exited. Start
+  krang (or confirm this task's instance is still alive) and retry —
+  exit 4 means nothing was applied, so retrying is safe.
+- **404 on `/api/workspace`** — the running instance predates the
+  workspace API, so its router answers "no such route" before any
+  handler runs; nothing was applied. Quit and relaunch krang from a
+  build that has the endpoint. The CLI names this explicitly and exits
+  1 (`ExitError`), not the "maybe happened" exit 3, because a 404 is a
+  hard guarantee that nothing ran.

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `docs/design/sandboxing.md` documents what a sandboxed task needs to
+  call `krang workspace` on its own: a `process-exec` grant for the
+  krang binary itself (separate from the relay script's), the loopback
+  network grant a tightened safehouse profile needs for the hook
+  server's dynamic port, and troubleshooting entries for the exec,
+  connection-refused, and stale-instance-404 failures the CLI can hit
+  from inside a sandbox.
 - Detail modal lists a task's working copies, grouped under the repo each one
   is a checkout of. The initial checkout reads quietly; every added slot is
   called out with its label and the base it was created from. Directories with
