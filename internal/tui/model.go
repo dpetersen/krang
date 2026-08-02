@@ -83,6 +83,9 @@ type Model struct {
 	// unresumable holds frozen task IDs whose Claude transcript is gone,
 	// refreshed alongside the task list.
 	unresumable map[string]bool
+	// selfResume maps task ID to when an armed wakeup or monitor is
+	// expected to have lapsed. See selfresume.go.
+	selfResume map[string]time.Time
 
 	windowStylesSynced bool
 
@@ -274,6 +277,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Main agent stopped — all subagents are gone.
 			delete(m.subagents, t.ID)
 			delete(m.pendingPerms, t.ID)
+		}
+
+		// Track tools that arrange for Claude to resume on its own, so a
+		// task that stops while a wakeup or monitor is armed isn't shown
+		// as plain idle.
+		switch msg.Event.HookEventName {
+		case "PostToolUse":
+			if until, armed := selfResumeDeadline(msg.Event, time.Now()); armed {
+				if m.selfResume == nil {
+					m.selfResume = make(map[string]time.Time)
+				}
+				m.selfResume[t.ID] = until
+			} else if msg.Event.ToolName == scheduleWakeupTool {
+				// ScheduleWakeup{stop: true} ends the loop.
+				delete(m.selfResume, t.ID)
+			}
+		case "UserPromptSubmit", "SessionEnd":
+			// The user took over, or the session is gone.
+			delete(m.selfResume, t.ID)
 		}
 
 		// Track per-agent pending permissions so that PostToolUse

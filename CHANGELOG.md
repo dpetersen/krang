@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Unfreezing such a task now fails up front with a clear message.
 - Help (`?`) documents the row markers next to task names (☠, ⚠, `+`),
   which were previously undocumented.
+- Tasks that stopped with a `ScheduleWakeup` or `Monitor` armed show a ⏰
+  next to their attention state. Both tools hand control back to the
+  prompt while arranging for Claude to continue on its own, so the task
+  read as plain "done"/"wait" when it was really waiting on a timer or
+  an event stream. The marker expires on the tool's own deadline
+  (`delaySeconds` / `timeout_ms`), since Claude Code emits no hook event
+  when a wakeup fires or a monitor ends.
 
 ### Changed
 

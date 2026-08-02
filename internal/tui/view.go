@@ -507,6 +507,11 @@ func (m Model) attentionWithIndicators(t db.Task) string {
 	if agents := m.subagents[t.ID]; len(agents) > 0 {
 		label += fmt.Sprintf("🤖%d", len(agents))
 	}
+	// Only meaningful once Claude has stopped: it says this task will
+	// carry on by itself, so "wait"/"done" doesn't mean it needs you.
+	if m.selfResuming(t.ID) {
+		label += "⏰"
+	}
 	return label
 }
 
@@ -726,6 +731,7 @@ func (m Model) buildHelpContent() string {
 		{"ERR", "Something went wrong (e.g. stop failure)."},
 		{"⚙N", "N background child processes running."},
 		{"\U0001F916N", "N active subagents running."},
+		{"⏰", "Claude armed a wakeup or monitor — it will resume without you."},
 	} {
 		sb.WriteString("  " + m.renderHint(fmt.Sprintf("%-8s", item.key), item.label) + "\n")
 	}

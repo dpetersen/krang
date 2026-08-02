@@ -206,6 +206,14 @@ On krang exit, parked tasks are offered for freezing. If frozen (or none exist),
 
 Krang listens for: `SessionStart`, `UserPromptSubmit`, `Stop`, `PermissionRequest`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, `TaskCompleted`, `StopFailure`, `Notification`, `SessionEnd`. Events matched to tasks by `session_id`. Resumed sessions adopted via cwd matching on `SessionStart`.
 
+### Self-Resuming Tasks
+
+`ScheduleWakeup` and `Monitor` return to the prompt while arranging for Claude to continue with no user input, so `Stop` fires and the task looks idle when it isn't. Krang watches `PostToolUse` for those tool names and marks the task with ⏰ (`internal/tui/selfresume.go`).
+
+There is no completion event to key off — verified empirically: a Monitor that ran to completion produced `PreToolUse`/`PostToolUse` on arming and **nothing at all** when it ended. `TaskCompleted` is registered but does not fire for monitors. The marker is therefore bounded by a deadline read from the tool's own arguments (`delaySeconds`, or `timeout_ms`/`persistent`), which arrive intact in `tool_input`. `ScheduleWakeup{stop: true}` and `UserPromptSubmit`/`SessionEnd` clear it early.
+
+This depends on tool *names*, so it silently stops working if Claude Code renames or replaces these tools. `TestToolInputDecodesRealMonitorPayload` pins the payload shape against a captured real event.
+
 Events may include `agent_id` and `agent_type` fields identifying which subagent fired them. Krang tracks active subagents per task via `SubagentStart`/`SubagentStop` events and displays a 🤖N indicator in the Attn column. Subagent state is cleared on `Stop` or `SessionEnd` (main agent finished).
 
 Hooks are `type: "command"` entries in `~/.claude/settings.json` pointing to the relay script. The relay script only forwards events when `KRANG_STATEFILE` is set (which krang does for sessions it launches), so standalone Claude sessions are unaffected.
