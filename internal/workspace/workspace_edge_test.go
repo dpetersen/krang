@@ -42,7 +42,7 @@ func TestGitWorktreeDestroyWithUncommittedChanges(t *testing.T) {
 	run(t, result.WorkspaceDir, "git", "add", "staged.txt")
 
 	// Destroy should succeed despite dirty state (--force).
-	if err := Destroy(rs, result.WorkspaceDir); err != nil {
+	if err := Destroy(rs, result.WorkspaceDir, nil); err != nil {
 		t.Fatalf("Destroy with uncommitted changes: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestGitWorktreeDestroyKeepsUnpushedBranch(t *testing.T) {
 	run(t, result.WorkspaceDir, "git", "add", "feature.txt")
 	run(t, result.WorkspaceDir, "git", "commit", "-m", "add feature")
 
-	if err := Destroy(rs, result.WorkspaceDir); err != nil {
+	if err := Destroy(rs, result.WorkspaceDir, nil); err != nil {
 		t.Fatalf("Destroy with unpushed commits: %v", err)
 	}
 

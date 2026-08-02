@@ -154,7 +154,7 @@ func TestDestroyEmptyWorkspace(t *testing.T) {
 				t.Fatalf("Create: %v", err)
 			}
 
-			if err := Destroy(rs, result.WorkspaceDir); err != nil {
+			if err := Destroy(rs, result.WorkspaceDir, nil); err != nil {
 				t.Fatalf("Destroy: %v", err)
 			}
 
@@ -315,7 +315,7 @@ func TestDestroyGitWorkspace(t *testing.T) {
 		t.Fatalf("workspace should exist: %v", err)
 	}
 
-	if err := Destroy(rs, result.WorkspaceDir); err != nil {
+	if err := Destroy(rs, result.WorkspaceDir, nil); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 
@@ -346,7 +346,7 @@ func TestDestroySingleRepoWorkspace(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := Destroy(rs, result.WorkspaceDir); err != nil {
+	if err := Destroy(rs, result.WorkspaceDir, nil); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 
@@ -460,7 +460,7 @@ func TestGitWorktreeDestroy(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := Destroy(rs, result.WorkspaceDir); err != nil {
+	if err := Destroy(rs, result.WorkspaceDir, nil); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 

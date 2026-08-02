@@ -151,6 +151,7 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - Git repos use `git worktree add` with `krang/<task-name>` branches; jj repos use `jj workspace add`
 - `.worktreeinclude` files in source repos specify gitignored files to copy into new worktrees
 - Workspaces destroyed on task complete (git worktree remove + branch -d / jj workspace forget + rm -rf)
+- **Repo provenance** — the `workspace_repos` table records where each working copy in a workspace came from (repo name, dir name, vcs, vcs identity name, slot label, base revision). Cleanup forgets the *recorded* jj workspace name / git branch rather than inferring it from directory names. Workspaces predating the table are backfilled on reconcile (`Manager.backfillWorkspaceRepos`); directories with no row fall back to the directory-name derivation. Rows are dropped in `Manager.Complete` so a reused task name doesn't collide with the `(repo_name, vcs_name)` unique constraint.
 - Unpushed branches are kept on cleanup; completion modal warns about them
 - `W` in the detail modal adds repos to existing multi_repo workspaces
 - Sandbox profiles of type `command` support Go templates (`{{.KrangDir}}`, `{{.TaskCwd}}`, `{{.TaskName}}`, `{{.ReposDir}}`) for granting sandboxed tasks access to metarepo config files

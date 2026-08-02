@@ -106,7 +106,7 @@ func TestJJWorkspaceDestroy(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := Destroy(rs, result.WorkspaceDir); err != nil {
+	if err := Destroy(rs, result.WorkspaceDir, nil); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 

@@ -110,12 +110,13 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	taskStore := db.NewTaskStore(database)
 	eventStore := db.NewEventStore(database)
+	workspaceRepoStore := db.NewWorkspaceRepoStore(database)
 
-	var reposDir string
-	if rs, err := workspace.Load(cwd); err == nil {
-		reposDir = rs.ReposDir
+	repoSets, err := workspace.Load(cwd)
+	if err != nil {
+		repoSets = nil
 	}
-	manager := task.NewManager(taskStore, eventStore, krangSession, parkedSession, cfg.Sandboxes, cfg.DefaultSandbox, stateFilePath, cwd, reposDir)
+	manager := task.NewManager(taskStore, eventStore, workspaceRepoStore, krangSession, parkedSession, cfg.Sandboxes, cfg.DefaultSandbox, stateFilePath, cwd, repoSets)
 
 	if err := manager.Reconcile(); err != nil {
 		return fmt.Errorf("initial reconciliation: %w", err)
@@ -142,7 +143,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 	styles := tui.BuildStyles(theme)
 
-	model := tui.NewModel(manager, taskStore, eventStore, hookEvents, summaryPipeline, krangSession, parkedSession, cfg, styles)
+	model := tui.NewModel(manager, taskStore, eventStore, workspaceRepoStore, hookEvents, summaryPipeline, krangSession, parkedSession, cfg, styles)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := program.Run(); err != nil {

@@ -422,6 +422,46 @@ func TestFindSessionCwdPrefersExistingOverStale(t *testing.T) {
 	}
 }
 
+// Completing frees a task's name for reuse, so its recorded VCS
+// identities have to be released at the same time — the workspace_repos
+// unique constraint would otherwise reject the next task of that name.
+func TestCompleteDropsRecordedWorkspaceRepos(t *testing.T) {
+	f := newBackfillFixture(t)
+
+	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
+	workspaceDir := filepath.Join(f.workspacesDir, "finished")
+	makeRepoDir(t, filepath.Join(workspaceDir, "alpha"), "jj")
+
+	if err := f.tasks.Create(&db.Task{
+		ID: "01DONE", Name: "finished", State: db.StateActive,
+		Attention: db.AttentionOK, Cwd: workspaceDir, WorkspaceDir: workspaceDir,
+	}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	if err := f.manager.Reconcile(); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if err := f.manager.Complete("01DONE"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	rows, err := f.workspaceRepos.ListByTask("01DONE")
+	if err != nil {
+		t.Fatalf("listing workspace repos: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("got %d rows after completing, want 0: %+v", len(rows), rows)
+	}
+
+	// The freed name can be taken by a new task holding the same repo.
+	if err := f.workspaceRepos.Create(&db.WorkspaceRepo{
+		TaskID: "01DONE", RepoName: "alpha", DirName: "alpha", VCS: "jj", VCSName: "finished",
+	}); err != nil {
+		t.Errorf("re-recording the freed identity: %v", err)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

@@ -31,6 +31,7 @@ type Model struct {
 	manager         *task.Manager
 	taskStore       *db.TaskStore
 	eventStore      *db.EventStore
+	workspaceRepos  *db.WorkspaceRepoStore
 	hookEvents      <-chan hooks.HookEvent
 	summaryPipeline *summary.Pipeline
 	activeSession   string
@@ -119,7 +120,7 @@ type Model struct {
 	selectTaskID string
 }
 
-func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, workspaceRepos *db.WorkspaceRepoStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "filter tasks..."
 	filterInput.CharLimit = 40
@@ -152,6 +153,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		manager:           manager,
 		taskStore:         taskStore,
 		eventStore:        eventStore,
+		workspaceRepos:    workspaceRepos,
 		hookEvents:        hookEvents,
 		summaryPipeline:   summaryPipeline,
 		activeSession:     activeSession,
@@ -1718,10 +1720,14 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Build repo list for the checklist (multi_repo only).
 		var entries []repoCloneEntry
 		if rs != nil && rs.WorkspaceStrategy == workspace.StrategyMultiRepo {
-			repos := workspace.DestroyRepoList(t.WorkspaceDir)
-			entries = make([]repoCloneEntry, len(repos))
-			for i, repo := range repos {
-				entries[i] = repoCloneEntry{Repo: repo, VCS: rs.DetectVCS(repo)}
+			targets := workspace.DestroyRepoList(rs, t.WorkspaceDir, m.recordedRepos(t.ID))
+			entries = make([]repoCloneEntry, len(targets))
+			for i, target := range targets {
+				entries[i] = repoCloneEntry{
+					Repo:       target.DirName,
+					VCS:        target.VCS,
+					Provenance: target,
+				}
 			}
 		}
 
@@ -1740,6 +1746,31 @@ func (m Model) handleConfirmCompleteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ModeNormal
 		return m, nil
 	}
+}
+
+// recordedRepos returns the provenance krang recorded for a task's
+// working copies. An empty result is normal for workspaces created
+// before provenance tracking — cleanup then falls back to scanning the
+// workspace directory.
+func (m Model) recordedRepos(taskID string) []workspace.RepoProvenance {
+	if m.workspaceRepos == nil {
+		return nil
+	}
+	rows, err := m.workspaceRepos.ListByTask(taskID)
+	if err != nil {
+		return nil
+	}
+	provenance := make([]workspace.RepoProvenance, len(rows))
+	for i, row := range rows {
+		provenance[i] = workspace.RepoProvenance{
+			DirName:  row.DirName,
+			RepoName: row.RepoName,
+			VCS:      row.VCS,
+			VCSName:  row.VCSName,
+			Recorded: true,
+		}
+	}
+	return provenance
 }
 
 // checkWorkspaceWarnings checks git worktrees in the workspace for
@@ -2648,7 +2679,7 @@ func (m Model) wsForgetRepoCmd(index int, rs *workspace.RepoSets) tea.Cmd {
 	entry := ws.Repos[index]
 	workspaceDir := ws.WorkspaceDir
 	return func() tea.Msg {
-		result := workspace.ForgetRepo(rs, workspaceDir, entry.Repo)
+		result := workspace.ForgetRepo(rs, workspaceDir, entry.Provenance)
 		return wsForgetDoneMsg{
 			Index:  index,
 			Output: result.Output,

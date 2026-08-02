@@ -251,23 +251,70 @@ type DestroyRepoResult struct {
 	Err    error
 }
 
-// ForgetRepo cleans up a single repo's workspace. For jj repos, runs
-// jj workspace forget. For git repos, removes the worktree and branch.
-func ForgetRepo(rs *RepoSets, workspaceDir, repoName string) DestroyRepoResult {
-	vcs := rs.DetectVCS(repoName)
+// RepoProvenance says where a directory inside a task's workspace came
+// from: which repo under ReposDir it was created from, and the VCS
+// identity it was created with. Recorded entries come from the
+// workspace_repos table; entries with Recorded false were derived from
+// a filesystem scan and are only as good as the directory name.
+type RepoProvenance struct {
+	DirName  string // directory name inside the workspace
+	RepoName string // directory name under ReposDir
+	VCS      string // "jj" or "git"
+	VCSName  string // jj workspace name; git branches are krang/<VCSName>
+	Recorded bool
+}
+
+// DeriveProvenance reconstructs provenance for a workspace built before
+// krang recorded it, using the pre-slot derivation: every repo-looking
+// subdirectory is a working copy of the identically named repo, created
+// under a VCS identity named after the workspace directory.
+func DeriveProvenance(rs *RepoSets, workspaceDir string) []RepoProvenance {
+	vcsName := filepath.Base(workspaceDir)
+	var derived []RepoProvenance
+	for _, dirName := range PresentRepos(workspaceDir) {
+		entry := RepoProvenance{
+			DirName:  dirName,
+			RepoName: dirName,
+			VCSName:  vcsName,
+		}
+		if rs != nil {
+			entry.VCS = rs.DetectVCS(dirName)
+		}
+		derived = append(derived, entry)
+	}
+	return derived
+}
+
+// ForgetRepo cleans up a single working copy. For jj it runs jj
+// workspace forget against the recorded workspace name; for git it
+// removes the worktree and branch. Fields left empty on target fall
+// back to the pre-provenance derivation so one-off clones krang never
+// recorded still get cleaned up.
+func ForgetRepo(rs *RepoSets, workspaceDir string, target RepoProvenance) DestroyRepoResult {
+	repoName := target.RepoName
+	if repoName == "" {
+		repoName = target.DirName
+	}
+	vcs := target.VCS
+	if vcs == "" {
+		vcs = rs.DetectVCS(repoName)
+	}
+	vcsName := target.VCSName
+	if vcsName == "" {
+		vcsName = filepath.Base(workspaceDir)
+	}
 	repoSrc := filepath.Join(rs.ReposDir, repoName)
-	workspaceName := filepath.Base(workspaceDir)
 
 	switch vcs {
 	case "jj":
-		output, err := forgetJJWorkspaceOutput(repoSrc, workspaceName)
+		output, err := forgetJJWorkspaceOutput(repoSrc, vcsName)
 		return DestroyRepoResult{Repo: repoName, VCS: vcs, Output: output, Err: err}
 	default:
-		worktreePath := filepath.Join(workspaceDir, repoName)
+		worktreePath := filepath.Join(workspaceDir, target.DirName)
 		if rs.WorkspaceStrategy == StrategySingleRepo {
 			worktreePath = workspaceDir
 		}
-		output, err := removeGitWorktree(repoSrc, worktreePath, workspaceName)
+		output, err := removeGitWorktree(repoSrc, worktreePath, vcsName)
 		return DestroyRepoResult{Repo: repoName, VCS: vcs, Output: output, Err: err}
 	}
 }
@@ -301,25 +348,29 @@ func RemoveWorkspaceDir(workspaceDir string) error {
 	return os.RemoveAll(workspaceDir)
 }
 
-// DestroyRepoList returns the list of repo subdirectories in a
-// multi_repo workspace that need cleanup. Only directories that
-// look like repo clones (contain .git or .jj) are included.
-func DestroyRepoList(workspaceDir string) []string {
-	entries, err := os.ReadDir(workspaceDir)
-	if err != nil {
-		return nil
+// DestroyRepoList returns the working copies in a multi_repo workspace
+// that need cleanup. Recorded rows are authoritative — they carry the
+// repo and VCS identity a directory name can no longer imply once a
+// task holds several working copies of one repo. The filesystem scan
+// is a best-effort fallback covering directories with no row, such as
+// one-off clones made by hand inside the workspace.
+func DestroyRepoList(rs *RepoSets, workspaceDir string, recorded []RepoProvenance) []RepoProvenance {
+	targets := make([]RepoProvenance, 0, len(recorded))
+	recordedDirs := make(map[string]bool, len(recorded))
+	for _, row := range recorded {
+		row.Recorded = true
+		recordedDirs[row.DirName] = true
+		targets = append(targets, row)
 	}
-	var repos []string
-	for _, e := range entries {
-		if !e.IsDir() {
+
+	for _, derived := range DeriveProvenance(rs, workspaceDir) {
+		if recordedDirs[derived.DirName] {
 			continue
 		}
-		sub := filepath.Join(workspaceDir, e.Name())
-		if isRepoDir(sub) {
-			repos = append(repos, e.Name())
-		}
+		targets = append(targets, derived)
 	}
-	return repos
+
+	return targets
 }
 
 func isRepoDir(dir string) bool {
@@ -331,64 +382,42 @@ func isRepoDir(dir string) bool {
 	return false
 }
 
-// Destroy removes a workspace directory. For jj repos, it forgets
-// the workspace first. For git repos, it removes the worktree and
-// branch. The RepoSets parameter is needed to find source repos;
-// pass nil to skip VCS cleanup.
-func Destroy(rs *RepoSets, workspaceDir string) error {
+// Destroy removes a workspace directory, forgetting each working copy
+// it holds first. Recorded rows drive the cleanup; directories with no
+// row fall back to the filesystem scan. The RepoSets parameter is
+// needed to find source repos; pass nil to skip VCS cleanup.
+func Destroy(rs *RepoSets, workspaceDir string, recorded []RepoProvenance) error {
 	if rs != nil {
-		workspaceName := filepath.Base(workspaceDir)
-
-		// Multi-repo: clean up each repo subdirectory.
-		entries, err := os.ReadDir(workspaceDir)
-		if err == nil {
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-				repoName := entry.Name()
-				repoSrc := filepath.Join(rs.ReposDir, repoName)
-				switch rs.DetectVCS(repoName) {
-				case "jj":
-					_ = forgetJJWorkspace(repoSrc, workspaceName)
-				default:
-					worktreePath := filepath.Join(workspaceDir, repoName)
-					_, _ = removeGitWorktree(repoSrc, worktreePath, workspaceName)
-				}
-			}
+		for _, target := range DestroyRepoList(rs, workspaceDir, recorded) {
+			_ = ForgetRepo(rs, workspaceDir, target)
 		}
 
-		// For single_repo mode, the workspace dir itself is the repo.
+		// For single_repo mode, the workspace dir itself is the repo,
+		// so there is no subdirectory to have found above.
 		if rs.WorkspaceStrategy == StrategySingleRepo {
-			repos, _ := rs.ListRepos()
-			for _, repo := range repos {
-				repoSrc := filepath.Join(rs.ReposDir, repo)
-				switch rs.DetectVCS(repo) {
-				case "jj":
-					_ = forgetJJWorkspace(repoSrc, workspaceName)
-				default:
-					_, _ = removeGitWorktree(repoSrc, workspaceDir, workspaceName)
-				}
-			}
+			_ = ForgetSingleRepoWorkspace(rs, workspaceDir)
 		}
 	}
 
 	return os.RemoveAll(workspaceDir)
 }
 
-func forgetJJWorkspace(repoSrc, workspaceName string) error {
-	_, err := forgetJJWorkspaceOutput(repoSrc, workspaceName)
-	return err
+func forgetJJWorkspaceOutput(repoSrc, workspaceName string) (string, error) {
+	output, err := runVCSCommand(repoSrc, "jj", "workspace", "forget", workspaceName)
+	if err != nil {
+		return output, fmt.Errorf("jj workspace forget: %w: %s", err, output)
+	}
+	return output, nil
 }
 
-func forgetJJWorkspaceOutput(repoSrc, workspaceName string) (string, error) {
-	cmd := exec.Command("jj", "workspace", "forget", workspaceName)
-	cmd.Dir = repoSrc
+// runVCSCommand runs a VCS command in dir and returns its combined
+// output. Cleanup goes through this seam so tests can assert on the
+// commands krang builds without standing up real repositories.
+var runVCSCommand = func(dir, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(output), fmt.Errorf("jj workspace forget: %w: %s", err, output)
-	}
-	return string(output), nil
+	return string(output), err
 }
 
 // CreateWorkspaceDir creates the workspace directory structure. For
@@ -838,31 +867,23 @@ func removeGitWorktree(repoSrc, worktreePath, taskName string) (string, error) {
 
 	// If the worktree directory is already gone, prune stale entries.
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
-		pruneCmd := exec.Command("git", "worktree", "prune")
-		pruneCmd.Dir = repoSrc
-		_ = pruneCmd.Run()
+		_, _ = runVCSCommand(repoSrc, "git", "worktree", "prune")
 	} else {
-		rmCmd := exec.Command("git", "worktree", "remove", "--force", worktreePath)
-		rmCmd.Dir = repoSrc
-		rmOut, err := rmCmd.CombinedOutput()
-		allOutput.WriteString(string(rmOut))
+		rmOut, err := runVCSCommand(repoSrc, "git", "worktree", "remove", "--force", worktreePath)
+		allOutput.WriteString(rmOut)
 		if err != nil {
 			// If removal fails, try pruning then force remove.
-			pruneCmd := exec.Command("git", "worktree", "prune")
-			pruneCmd.Dir = repoSrc
-			_ = pruneCmd.Run()
+			_, _ = runVCSCommand(repoSrc, "git", "worktree", "prune")
 		}
 	}
 
 	// Try to delete the branch. Use -d (not -D) so git refuses to
 	// delete branches with unpushed commits.
-	delCmd := exec.Command("git", "branch", "-d", branchName)
-	delCmd.Dir = repoSrc
-	delOut, err := delCmd.CombinedOutput()
-	allOutput.WriteString(string(delOut))
+	delOut, err := runVCSCommand(repoSrc, "git", "branch", "-d", branchName)
+	allOutput.WriteString(delOut)
 	if err != nil {
 		// Branch has unpushed commits or doesn't exist — not fatal.
-		allOutput.WriteString(fmt.Sprintf("(branch %s kept: %s)", branchName, strings.TrimSpace(string(delOut))))
+		allOutput.WriteString(fmt.Sprintf("(branch %s kept: %s)", branchName, strings.TrimSpace(delOut)))
 	}
 
 	return allOutput.String(), nil

@@ -79,3 +79,26 @@ ALTER TABLE tasks ADD COLUMN sandbox_profile TEXT NOT NULL DEFAULT '';
 const schemaV7 = `
 ALTER TABLE tasks ADD COLUMN source_task_id TEXT NOT NULL DEFAULT '';
 `
+
+// schemaV8 records where every working copy inside a task's workspace
+// directory came from. Cleanup used to infer that from directory names,
+// which stops working once a task holds more than one working copy of
+// the same repo (slots). The events table can't serve as the record —
+// it's trimmed on every reconcile.
+const schemaV8 = `
+CREATE TABLE IF NOT EXISTS workspace_repos (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id       TEXT NOT NULL REFERENCES tasks(id),
+	repo_name     TEXT NOT NULL,
+	dir_name      TEXT NOT NULL,
+	vcs           TEXT NOT NULL CHECK(vcs IN ('jj', 'git')),
+	vcs_name      TEXT NOT NULL,
+	slot_label    TEXT NOT NULL DEFAULT '',
+	base_revision TEXT NOT NULL DEFAULT '',
+	created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	UNIQUE(task_id, dir_name),
+	UNIQUE(repo_name, vcs_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_repos_task ON workspace_repos(task_id);
+`

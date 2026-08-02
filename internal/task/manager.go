@@ -16,6 +16,7 @@ import (
 	"github.com/dpetersen/krang/internal/db"
 	"github.com/dpetersen/krang/internal/pathutil"
 	"github.com/dpetersen/krang/internal/tmux"
+	"github.com/dpetersen/krang/internal/workspace"
 	"github.com/google/uuid"
 	"github.com/oklog/ulid/v2"
 )
@@ -25,17 +26,27 @@ const gracefulShutdownTimeout = 15 * time.Second
 type Manager struct {
 	tasks           *db.TaskStore
 	events          *db.EventStore
+	workspaceRepos  *db.WorkspaceRepoStore
 	activeSession   string
 	parkedSession   string
 	sandboxProfiles map[string]config.SandboxProfile
 	defaultSandbox  string
 	stateFilePath   string
 	metarepoDir     string
-	reposDir        string
+	repoSets        *workspace.RepoSets
 }
 
-func NewManager(tasks *db.TaskStore, events *db.EventStore, activeSession, parkedSession string, sandboxProfiles map[string]config.SandboxProfile, defaultSandbox, stateFilePath, metarepoDir, reposDir string) *Manager {
-	return &Manager{tasks: tasks, events: events, activeSession: activeSession, parkedSession: parkedSession, sandboxProfiles: sandboxProfiles, defaultSandbox: defaultSandbox, stateFilePath: stateFilePath, metarepoDir: metarepoDir, reposDir: reposDir}
+func NewManager(tasks *db.TaskStore, events *db.EventStore, workspaceRepos *db.WorkspaceRepoStore, activeSession, parkedSession string, sandboxProfiles map[string]config.SandboxProfile, defaultSandbox, stateFilePath, metarepoDir string, repoSets *workspace.RepoSets) *Manager {
+	return &Manager{tasks: tasks, events: events, workspaceRepos: workspaceRepos, activeSession: activeSession, parkedSession: parkedSession, sandboxProfiles: sandboxProfiles, defaultSandbox: defaultSandbox, stateFilePath: stateFilePath, metarepoDir: metarepoDir, repoSets: repoSets}
+}
+
+// reposDir is the directory holding the source repos workspaces are
+// created from. Empty when the metarepo has no krang.yaml.
+func (m *Manager) reposDir() string {
+	if m.repoSets == nil {
+		return ""
+	}
+	return m.repoSets.ReposDir
 }
 
 func (m *Manager) resolveSandboxCommand(profileName string) string {
@@ -58,7 +69,7 @@ func (m *Manager) templateData(taskName, taskCwd string) sandboxTemplateData {
 		KrangDir: m.metarepoDir,
 		TaskCwd:  taskCwd,
 		TaskName: taskName,
-		ReposDir: m.reposDir,
+		ReposDir: m.reposDir(),
 	}
 }
 
@@ -541,6 +552,16 @@ func (m *Manager) Complete(taskID string) error {
 	}
 	if err := m.tasks.UpdateTmuxWindow(task.ID, ""); err != nil {
 		return err
+	}
+
+	// Drop recorded workspace provenance. Callers destroying the
+	// workspace have already read the rows they need, and leaving them
+	// behind would keep the task's VCS identities reserved after its
+	// name has been freed for reuse.
+	if m.workspaceRepos != nil {
+		if err := m.workspaceRepos.DeleteByTask(task.ID); err != nil {
+			_ = m.events.Log(task.ID, "workspace_repos_delete_failed", err.Error())
+		}
 	}
 
 	// Clean up any source session file copied into this task's project

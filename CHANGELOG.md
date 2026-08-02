@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Workspace repo provenance. A new `workspace_repos` table records, for
+  every working copy inside a task's workspace directory, which repo it
+  was created from and which jj workspace / git branch it owns. Cleanup
+  now forgets the recorded identity instead of inferring both from the
+  directory name, which is a prerequisite for holding more than one
+  working copy of the same repo in a task. Workspaces created before
+  the table are backfilled on reconcile using the old derivation, and
+  directories with no row keep the old behavior as a fallback.
+
 - `KRANG_TMUX_SOCKET` pins krang to a specific tmux server. Unset (the
   default) targets the default server exactly as before; the integration
   harness sets it per-test.

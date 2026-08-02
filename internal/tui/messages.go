@@ -5,6 +5,7 @@ import (
 	"github.com/dpetersen/krang/internal/hooks"
 	"github.com/dpetersen/krang/internal/proctree"
 	"github.com/dpetersen/krang/internal/usage"
+	"github.com/dpetersen/krang/internal/workspace"
 )
 
 type TasksRefreshedMsg struct {
@@ -105,6 +106,10 @@ type repoCloneEntry struct {
 	Status repoCloneStatus
 	Output string // clone output (on success or failure)
 	Err    error
+
+	// Provenance identifies the working copy to forget during a
+	// destroy. Unset for clone and fork entries.
+	Provenance workspace.RepoProvenance
 }
 
 // wsProgressState holds the full state for the workspace progress modal.
