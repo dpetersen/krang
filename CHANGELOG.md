@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Workspace requests are serialized through the TUI process. The hook
+  HTTP server can now hand a typed `WorkspaceRequest` to the Bubble Tea
+  model over a channel the model consumes the way it consumes hook
+  events. The Update loop never blocks: it queues the request, runs it
+  as a `tea.Cmd`, and replies on completion. Exactly one workspace
+  mutation is in flight at a time — requests arriving while another
+  runs, or while the human has a workspace modal open, queue FIFO, and
+  the keyboard flows are refused while an agent request holds the slot.
+  Every completed request writes an events-table row and a debug-log
+  line. HTTP callers get a bounded wait and a machine-readable JSON
+  failure (`{"status":"error","reason":…,"applied":…}`); a timeout is
+  503 with `applied: "unknown"`, because abandoning the wait does not
+  cancel the work. A scaffolding `POST /api/workspace/ping` endpoint
+  exercises the path end to end until the real endpoints land.
+
 - Unified slot creation. Every working copy krang makes for a task now
   goes through one path that gives it an explicit `SlotIdentity`
   (task, repo, label) and derives its directory name, jj workspace

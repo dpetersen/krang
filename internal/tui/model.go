@@ -118,12 +118,19 @@ type Model struct {
 	// then clears the field. Set after creating/forking a task so the
 	// new row gets focus as soon as it appears.
 	selectTaskID string
+
+	// Workspace mutations requested over HTTP. See workspacereq.go:
+	// arrivals queue FIFO and run one at a time, sharing the in-flight
+	// guard with the human's own workspace flows.
+	workspaceRequests <-chan hooks.WorkspaceRequest
+	workspaceQueue    []hooks.WorkspaceRequest
+	workspaceRequest  *hooks.WorkspaceRequest
 }
 
 // NewModel builds the TUI. The RepoSets is the one the manager was
 // built with — nil means no workspace mode — so slot creation resolves
 // repos exactly the way the picker displays them.
-func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, workspaceRepos *db.WorkspaceRepoStore, rs *workspace.RepoSets, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
+func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, workspaceRepos *db.WorkspaceRepoStore, rs *workspace.RepoSets, hookEvents <-chan hooks.HookEvent, workspaceRequests <-chan hooks.WorkspaceRequest, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "filter tasks..."
 	filterInput.CharLimit = 40
@@ -136,6 +143,7 @@ func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.Eve
 		eventStore:        eventStore,
 		workspaceRepos:    workspaceRepos,
 		hookEvents:        hookEvents,
+		workspaceRequests: workspaceRequests,
 		summaryPipeline:   summaryPipeline,
 		activeSession:     activeSession,
 		parkedSession:     parkedSession,
@@ -160,6 +168,7 @@ func (m Model) Init() tea.Cmd {
 		m.refreshTasks,
 		m.reconcileTick(),
 		m.waitForHookEvent(),
+		m.waitForWorkspaceRequest(),
 		m.summaryTick(),
 		m.processTick(),
 		m.sparklineTick(),
@@ -167,7 +176,26 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
+// Update handles the message, then gives the workspace request queue a
+// chance to start its next entry. Draining here — rather than at every
+// place a workspace flow finishes — is what makes "queued behind the
+// human's modal" deterministic: the request starts on the very next
+// message after the modal closes.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.update(msg)
+
+	next, ok := updated.(Model)
+	if !ok {
+		return updated, cmd
+	}
+	next, drain := next.startNextWorkspaceRequest()
+	if drain == nil {
+		return next, cmd
+	}
+	return next, tea.Batch(cmd, drain)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -883,6 +911,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case workspaceRequestMsg:
+		next, cmd := m.handleWorkspaceRequest(msg.Request)
+		return next, cmd
+
+	case workspaceRequestDoneMsg:
+		next, cmd := m.handleWorkspaceRequestDone(msg)
+		return next, cmd
+
 	case pendingOpDoneMsg:
 		delete(m.pendingOps, msg.TaskID)
 		return m, m.refreshTasks
@@ -992,6 +1028,13 @@ func (m Model) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "n":
+		// An agent's workspace request holds the same in-flight slot
+		// this flow will need, so don't let the human start filling
+		// out a form that would have to be refused on submit.
+		if m.workspaceRequest != nil && m.repoSets != nil && m.repoSets.WorkspaceStrategy != "" {
+			m.noteWorkspaceRequestBusy()
+			return m, nil
+		}
 		baseDir, err := os.Getwd()
 		if err != nil {
 			return m, func() tea.Msg { return ErrorMsg{Err: err} }
@@ -1898,6 +1941,12 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "c":
+		// Completing a workspace task destroys working copies, which
+		// must not overlap an agent's in-flight workspace request.
+		if t.WorkspaceDir != "" && m.workspaceRequest != nil {
+			m.noteWorkspaceRequestBusy()
+			return m, nil
+		}
 		m.confirmUncommittedRepos = nil
 		m.confirmUnpushedRepos = nil
 		if t.WorkspaceDir != "" {
@@ -1918,6 +1967,11 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if t.SessionID == "" {
 			return m, nil
 		}
+		// Forking creates working copies — same in-flight slot.
+		if m.workspaceRequest != nil {
+			m.noteWorkspaceRequestBusy()
+			return m, nil
+		}
 		if t.State == db.StateCompleted || t.State == db.StateFailed {
 			return m, nil
 		}
@@ -1925,6 +1979,12 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "e":
 		if t.State == db.StateCompleted || t.State == db.StateFailed {
+			return m, nil
+		}
+		// The edit wizard can add repos to the workspace, so it needs
+		// the in-flight slot an agent request may be holding.
+		if m.workspaceRequest != nil {
+			m.noteWorkspaceRequestBusy()
 			return m, nil
 		}
 		var excludeRepos map[string]bool

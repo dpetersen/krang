@@ -24,13 +24,33 @@ type Server struct {
 	onEvent       EventCallback
 	stateFilePath string
 	listener      net.Listener
+
+	// workspaceRequests carries mutation requests to the TUI process,
+	// which executes them one at a time. Nil disables the
+	// /api/workspace/* endpoints.
+	workspaceRequests chan<- WorkspaceRequest
+
+	// WorkspaceTimeout bounds how long a workspace request handler
+	// waits for the TUI. Set before Start; zero means
+	// DefaultWorkspaceTimeout.
+	WorkspaceTimeout time.Duration
 }
 
-func NewServer(stateFilePath string, onEvent EventCallback) *Server {
-	s := &Server{onEvent: onEvent, stateFilePath: stateFilePath}
+// NewServer builds the hook server. workspaceRequests is the channel
+// the Bubble Tea model reads workspace mutation requests from; pass nil
+// to run without the workspace API.
+func NewServer(stateFilePath string, onEvent EventCallback, workspaceRequests chan<- WorkspaceRequest) *Server {
+	s := &Server{
+		onEvent:           onEvent,
+		stateFilePath:     stateFilePath,
+		workspaceRequests: workspaceRequests,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/event", s.handleEvent)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	// Scaffolding endpoint proving the workspace request path. The
+	// real endpoints (add-repo, create-slot) register alongside it.
+	mux.HandleFunc("POST /api/workspace/ping", s.handleWorkspacePing)
 
 	s.httpServer = &http.Server{
 		Handler: mux,

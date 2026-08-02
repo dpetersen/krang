@@ -124,9 +124,13 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 
 	hookEvents := make(chan hooks.HookEvent, 64)
+	// Workspace mutations requested over HTTP are serialized by the
+	// TUI process. The buffer only smooths bursts — the model runs one
+	// request at a time regardless.
+	workspaceRequests := make(chan hooks.WorkspaceRequest, 16)
 	hookServer := hooks.NewServer(stateFilePath, func(event hooks.HookEvent) {
 		hookEvents <- event
-	})
+	}, workspaceRequests)
 	if err := hookServer.Start(); err != nil {
 		return fmt.Errorf("starting hook server: %w", err)
 	}
@@ -144,7 +148,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	}
 	styles := tui.BuildStyles(theme)
 
-	model := tui.NewModel(manager, taskStore, eventStore, workspaceRepoStore, repoSets, hookEvents, summaryPipeline, krangSession, parkedSession, cfg, styles)
+	model := tui.NewModel(manager, taskStore, eventStore, workspaceRepoStore, repoSets, hookEvents, workspaceRequests, summaryPipeline, krangSession, parkedSession, cfg, styles)
 	program := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := program.Run(); err != nil {

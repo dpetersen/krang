@@ -49,7 +49,9 @@ Expose krang's task state to external agents (e.g. a workload manager Claude tha
 
 Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented. Remaining ideas:
 
-- **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI. All mutations go through the HTTP server for serialization.
+- **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI.
+
+  The request plumbing exists: mutations are serialized through the TUI process (see [architecture.md](architecture.md#workspace-request-serialization) and `internal/tui/workspacereq.go`), with `POST /api/workspace/ping` as a scaffolding operation. What's left per endpoint is a parameter decoder in front of `submitWorkspaceRequest`, a `WorkspaceOp` case in `Model.executeWorkspaceRequest`, and the CLI subcommand.
 
 ## Sandbox Configuration
 

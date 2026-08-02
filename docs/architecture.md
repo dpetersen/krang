@@ -126,6 +126,39 @@ The hook server runs alongside the TUI in the same process, bound to a dynamic p
 
 **Hook installation:** `krang setup` writes the relay script and merges command hook entries into `~/.claude/settings.json` idempotently, preserving existing user hooks. It also removes any legacy HTTP-type krang hooks from before multi-instance support. `krang teardown` removes only krang-owned entries (identified by the relay script path).
 
+## Workspace Request Serialization
+
+Hook events flow one way: the relay script posts, krang records. Workspace mutations need an answer, and they need to not collide with each other or with what the user is doing in the TUI. Both requirements land on the same fact — the Bubble Tea process is the only writer of workspace state — so requests are funneled through it.
+
+```
+POST /api/workspace/…      hook server        Bubble Tea process
+  ────────────────────►  decode params  ──►  chan WorkspaceRequest
+                         wait (bounded)         │
+                                                ▼
+                                          FIFO queue ─► one tea.Cmd at a time
+                                                │            │
+  ◄──── JSON response ◄──── Reply chan ◄────────┴────────────┘
+```
+
+**Non-blocking Update.** The model receives requests with a self-re-arming `tea.Cmd`, the same pattern as hook events, and only ever *queues* them in `Update`. A drain step runs after every message and starts the head of the queue when the workspace is free, so a request held behind a modal starts on the first message after the modal closes.
+
+**One mutation in flight.** The busy check covers the agent's request, the workspace progress modal that the create/add-repos/fork/complete flows drive, and the interactive modals that are about to start one of those flows. The keyboard flows are refused while an agent request holds the slot, which makes the two sources mutually exclusive rather than merely ordered.
+
+**Bounded waits, uncancelled work.** The HTTP side waits with a deadline and answers with a machine-readable JSON envelope (`status`, `reason`, `applied`, `message`, `data`). The `applied` field is the one callers branch on:
+
+| Situation | HTTP | reason | applied |
+|-----------|------|--------|---------|
+| Request never accepted by the TUI | 503 | `not_accepted` | `no` |
+| Queued past its deadline, dropped | 503 | `expired` | `no` |
+| Accepted, no answer in time | 503 | `timeout` | `unknown` |
+| Ran and failed | 4xx/5xx | operation-specific | operation-specific |
+
+A timeout abandons the *wait*, not the work: the TUI still runs the operation to completion, records provenance, writes the events row, and logs it. Nothing is left half-applied because the operation — not the HTTP round trip — is the unit of atomicity. Requests still sitting in the queue at their deadline are dropped instead of started, so an operation can never begin after its caller was told nothing happened.
+
+**Observability.** Every request that resolved a task writes a `workspace_<op>` row to the events table before replying, plus a debug-log line in the TUI on completion.
+
+`POST /api/workspace/ping` is scaffolding that exercises this path without mutating anything; it goes away when the real endpoints arrive.
+
 ## Graceful Shutdown
 
 When completing, killing, or freezing a task:

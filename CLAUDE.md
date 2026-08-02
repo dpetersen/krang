@@ -81,7 +81,7 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 - `internal/pathutil/` — instance ID, XDG path helpers, Claude path encoding
 - `internal/tmux/` — session/window/pane operations via `tmux` CLI
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
-- `internal/hooks/` — HTTP server for Claude Code hook events, relay script + settings.json installer
+- `internal/hooks/` — HTTP server for Claude Code hook events and workspace requests, relay script + settings.json installer
 - `internal/classify/` — Haiku-based attention classification (done vs waiting) on Stop events
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
 - `internal/proctree/` — process tree walking, noise/age filtering, leaf-only display for background child process awareness
@@ -161,6 +161,21 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - **GitHub repo discovery** — the repo picker has a tabbed interface (`Tab` toggles Local / Remote). The Remote tab searches GitHub orgs via `gh` CLI and clones repos into the repos dir. Config orgs show as a selectable list; "Other..." allows manual entry. Search is debounced (300ms). After cloning, the Local tab refreshes to show the new repo.
 - **`default_vcs`** — configurable in `config.yaml` (user-level) or `krang.yaml` (project-level, takes precedence). Controls whether remote clones use `git clone` or `jj git clone`. Defaults to `git`.
 - **`github_orgs`** — configurable in both `config.yaml` and `krang.yaml`, merged with dedup. Saved orgs appear in the org select list on the Remote tab.
+
+## Workspace Requests
+
+Workspace mutations asked for from outside the TUI (a Claude session, a
+CLI subcommand) go through the hook HTTP server and are serialized by
+the Bubble Tea process, which is the single writer. See
+`internal/hooks/workspace.go` and `internal/tui/workspacereq.go`.
+
+- **Request type** — `hooks.WorkspaceRequest{Op, TaskName, Repo, Label, Deadline, Reply}`. New operations add typed fields rather than a generic map, so handlers and the TUI executor can't drift. Callers name the *task*, not its ID.
+- **Delivery** — the server puts the request on a channel; `Model.waitForWorkspaceRequest` receives it inside a `tea.Cmd` and re-arms, exactly like `waitForHookEvent`.
+- **The Update loop never blocks.** It appends the request to a FIFO queue. `startNextWorkspaceRequest` runs after every message (via the `Update` wrapper around `update`) and launches the head of the queue as a `tea.Cmd` when nothing else is mutating a workspace. Completion arrives as `workspaceRequestDoneMsg`, which frees the slot and lets the next one start.
+- **One at a time, across both sources.** `workspaceBusy()` is true for an in-flight request, an unfinished `wsProgress`, or an open workspace modal (wizard, repo picker, fork dialog, complete confirmation). The keyboard flows share the guard in the other direction: `n`, `e`, `d`, and `c`-on-a-workspace-task are refused (with a debug-log line) while an agent request is in flight.
+- **Timeouts don't cancel work.** The HTTP helper `submitWorkspaceRequest` waits a bounded time (`Server.WorkspaceTimeout`, default 60s). Before the TUI accepts the request, a timeout means it definitely never ran (`not_accepted`/`expired`, `applied: "no"`). After acceptance, giving up returns 503 `{"reason":"timeout","applied":"unknown"}` — the operation runs to completion anyway and still records its provenance, events row, and log line. A queued request past its deadline is dropped rather than started, so work never begins after the caller was told nothing happened.
+- **Observability** — every request that resolved a task writes a `workspace_<op>` events row (before the reply, so abandoned callers still leave a trail) and a debug-log line on completion.
+- **Scaffolding** — `POST /api/workspace/ping` and `WorkspaceOpPing` exist only to make the mechanism testable before the real endpoints (add-repo, create-slot) land. Remove or repurpose them then.
 
 ## Changelog
 
