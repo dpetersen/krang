@@ -97,12 +97,56 @@ type TestEnv struct {
 	krangSession    string
 	parkedSession   string
 	krangPaneTarget string
+	tmuxSocket      string
 	hookPort        int
 	db              *sql.DB
 }
 
 type hookStateFile struct {
 	Port int `json:"port"`
+}
+
+// newTmuxSocket returns a unique tmux server socket name for one test.
+//
+// Every tmux command the suite runs — and every tmux command the krang
+// binary under test runs — is pinned to this server. Without it the
+// suite shares the developer's default tmux server, where
+// "set-environment -g" leaks the test HOME and the fake Claude binary
+// into their real krang instance and cleanup kills sessions out from
+// under them.
+func newTmuxSocket(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("krang-test-%d-%d", os.Getpid(), time.Now().UnixNano())
+}
+
+// tmuxOn builds a tmux command targeting a specific server. The socket
+// is a required parameter rather than a default so there is no way to
+// spell a call that lands on the user's default server.
+func tmuxOn(socket string, args ...string) *exec.Cmd {
+	return exec.Command("tmux", append([]string{"-L", socket}, args...)...)
+}
+
+// tmux builds a tmux command targeting this test's private server.
+func (e *TestEnv) tmux(args ...string) *exec.Cmd {
+	return tmuxOn(e.tmuxSocket, args...)
+}
+
+// registerTmuxServerCleanup tears down the test's tmux server when the
+// test ends. Killing the server takes every session and its global
+// environment with it, so there is nothing to unset individually. The
+// socket path is resolved while the server is still up because tmux
+// leaves the socket file behind after kill-server.
+func registerTmuxServerCleanup(t *testing.T, socket string) {
+	t.Helper()
+	out, _ := tmuxOn(socket, "display-message", "-p", "#{socket_path}").Output()
+	socketPath := strings.TrimSpace(string(out))
+
+	t.Cleanup(func() {
+		tmuxOn(socket, "kill-server").Run()
+		if socketPath != "" {
+			os.Remove(socketPath)
+		}
+	})
 }
 
 // NewTestEnv creates a fully isolated test environment with krang running
@@ -138,18 +182,20 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	// Create a temporary tmux session with krang as the shell command.
 	// This is more reliable than send-keys because there's no shell
 	// initialization race.
+	socket := newTmuxSocket(t)
 	tempSession := fmt.Sprintf("krang-test-%d", time.Now().UnixNano())
 	krangShellCmd := fmt.Sprintf(
-		"env HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s %s; sleep 999",
+		"env HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s KRANG_TMUX_SOCKET=%s %s; sleep 999",
 		shellQuote(homeDir),
 		shellQuote(dbPath),
 		shellQuote(configPath),
 		shellQuote(fakeClaudeBinPath),
 		shellQuote(fakeClaudeDir),
+		shellQuote(socket),
 		shellQuote(krangBinPath),
 	)
 
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", tempSession,
+	cmd := tmuxOn(socket, "new-session", "-d", "-s", tempSession,
 		"-x", "120", "-y", "40", "-c", projectDir,
 		"sh", "-c", krangShellCmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -159,25 +205,19 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	// Set env vars at both session and global level so child windows
 	// (Claude/fakeclaude processes) created by krang inherit them.
 	// Global env is needed because tmux new-window may not always
-	// inherit session env on all platforms.
+	// inherit session env on all platforms. Both are scoped to this
+	// test's private server, so neither escapes to the user's tmux.
 	for _, kv := range [][2]string{
 		{"HOME", homeDir},
 		{"KRANG_CLAUDE_CMD", fakeClaudeBinPath},
 		{"FAKECLAUDE_CONTROLDIR", fakeClaudeDir},
+		{"KRANG_TMUX_SOCKET", socket},
 	} {
-		exec.Command("tmux", "set-environment", "-t", tempSession, kv[0], kv[1]).Run()
-		exec.Command("tmux", "set-environment", "-g", kv[0], kv[1]).Run()
+		tmuxOn(socket, "set-environment", "-t", tempSession, kv[0], kv[1]).Run()
+		tmuxOn(socket, "set-environment", "-g", kv[0], kv[1]).Run()
 	}
 
-	t.Cleanup(func() {
-		exec.Command("tmux", "kill-session", "-t", krangSession).Run()
-		exec.Command("tmux", "kill-session", "-t", parkedSession).Run()
-		exec.Command("tmux", "kill-session", "-t", tempSession).Run()
-		// Clean up global env vars.
-		for _, key := range []string{"HOME", "KRANG_CLAUDE_CMD", "FAKECLAUDE_CONTROLDIR"} {
-			exec.Command("tmux", "set-environment", "-g", "-u", key).Run()
-		}
-	})
+	registerTmuxServerCleanup(t, socket)
 
 	env := &TestEnv{
 		t:             t,
@@ -189,6 +229,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 		fakeClaudeDir: fakeClaudeDir,
 		krangSession:  krangSession,
 		parkedSession: parkedSession,
+		tmuxSocket:    socket,
 	}
 
 	// Wait for krang to start: the state file appears when the hook server is ready.
@@ -211,7 +252,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 
 	// Wait for the krang session to exist (after rename).
 	env.WaitFor("krang session exists", 10*time.Second, func() bool {
-		return exec.Command("tmux", "has-session", "-t", krangSession).Run() == nil
+		return env.tmux("has-session", "-t", krangSession).Run() == nil
 	})
 	env.krangPaneTarget = krangSession + ":0.0"
 
@@ -232,7 +273,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 // SendKeys sends keystrokes to krang's TUI pane.
 func (e *TestEnv) SendKeys(keys string) {
 	e.t.Helper()
-	cmd := exec.Command("tmux", "send-keys", "-t", e.krangPaneTarget, keys)
+	cmd := e.tmux("send-keys", "-t", e.krangPaneTarget, keys)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		e.t.Fatalf("send-keys %q: %v: %s", keys, err, out)
 	}
@@ -375,7 +416,7 @@ func (e *TestEnv) TaskSourceID(name string) string {
 
 // TmuxWindowExists checks if a window with the given name exists in a session.
 func (e *TestEnv) TmuxWindowExists(session, windowName string) bool {
-	cmd := exec.Command("tmux", "list-windows", "-t", session, "-F", "#{window_name}")
+	cmd := e.tmux("list-windows", "-t", session, "-F", "#{window_name}")
 	out, err := cmd.Output()
 	if err != nil {
 		return false
@@ -390,7 +431,7 @@ func (e *TestEnv) TmuxWindowExists(session, windowName string) bool {
 
 // CapturePane returns the current text content of krang's pane.
 func (e *TestEnv) CapturePane() string {
-	cmd := exec.Command("tmux", "capture-pane", "-t", e.krangPaneTarget, "-p")
+	cmd := e.tmux("capture-pane", "-t", e.krangPaneTarget, "-p")
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -548,18 +589,20 @@ func NewWorkspaceTestEnv(t *testing.T, strategy, vcs string, repoNames []string)
 	krangSession := "k-" + iid
 	parkedSession := krangSession + "-parked"
 
+	socket := newTmuxSocket(t)
 	tempSession := fmt.Sprintf("krang-test-%d", time.Now().UnixNano())
 	krangShellCmd := fmt.Sprintf(
-		"env HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s %s; sleep 999",
+		"env HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s KRANG_TMUX_SOCKET=%s %s; sleep 999",
 		shellQuote(homeDir),
 		shellQuote(dbPath),
 		shellQuote(configPath),
 		shellQuote(fakeClaudeBinPath),
 		shellQuote(fakeClaudeDir),
+		shellQuote(socket),
 		shellQuote(krangBinPath),
 	)
 
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", tempSession,
+	cmd := tmuxOn(socket, "new-session", "-d", "-s", tempSession,
 		"-x", "120", "-y", "40", "-c", projectDir,
 		"sh", "-c", krangShellCmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -570,19 +613,13 @@ func NewWorkspaceTestEnv(t *testing.T, strategy, vcs string, repoNames []string)
 		{"HOME", homeDir},
 		{"KRANG_CLAUDE_CMD", fakeClaudeBinPath},
 		{"FAKECLAUDE_CONTROLDIR", fakeClaudeDir},
+		{"KRANG_TMUX_SOCKET", socket},
 	} {
-		exec.Command("tmux", "set-environment", "-t", tempSession, kv[0], kv[1]).Run()
-		exec.Command("tmux", "set-environment", "-g", kv[0], kv[1]).Run()
+		tmuxOn(socket, "set-environment", "-t", tempSession, kv[0], kv[1]).Run()
+		tmuxOn(socket, "set-environment", "-g", kv[0], kv[1]).Run()
 	}
 
-	t.Cleanup(func() {
-		exec.Command("tmux", "kill-session", "-t", krangSession).Run()
-		exec.Command("tmux", "kill-session", "-t", parkedSession).Run()
-		exec.Command("tmux", "kill-session", "-t", tempSession).Run()
-		for _, key := range []string{"HOME", "KRANG_CLAUDE_CMD", "FAKECLAUDE_CONTROLDIR"} {
-			exec.Command("tmux", "set-environment", "-g", "-u", key).Run()
-		}
-	})
+	registerTmuxServerCleanup(t, socket)
 
 	env := &TestEnv{
 		t:             t,
@@ -594,6 +631,7 @@ func NewWorkspaceTestEnv(t *testing.T, strategy, vcs string, repoNames []string)
 		fakeClaudeDir: fakeClaudeDir,
 		krangSession:  krangSession,
 		parkedSession: parkedSession,
+		tmuxSocket:    socket,
 	}
 
 	stateFilePath := filepath.Join(homeDir, ".local", "state", "krang", "instances", encodePath(projectDir), "krang-state.json")
@@ -613,7 +651,7 @@ func NewWorkspaceTestEnv(t *testing.T, strategy, vcs string, repoNames []string)
 	env.hookPort = sf.Port
 
 	env.WaitFor("krang session exists", 10*time.Second, func() bool {
-		return exec.Command("tmux", "has-session", "-t", krangSession).Run() == nil
+		return env.tmux("has-session", "-t", krangSession).Run() == nil
 	})
 	env.krangPaneTarget = krangSession + ":0.0"
 

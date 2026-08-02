@@ -184,7 +184,11 @@ Development uses `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.ya
 
 Unit tests (`mise run test`) cover business logic, config, DB, workspace operations (including git worktree and jj workspace edge cases), and command building. They run fast and don't require tmux.
 
-Integration tests (`mise run test:integration`) exercise the full TUI lifecycle in real tmux with a fake Claude binary. They test task creation, hook event routing, park/unpark, freeze/unfreeze, complete, reconciliation, and forking. These must be run inside tmux and take ~30 seconds.
+Integration tests (`mise run test:integration`) exercise the full TUI lifecycle in real tmux with a fake Claude binary. They test task creation, hook event routing, park/unpark, freeze/unfreeze, complete, reconciliation, and forking. These must be run inside tmux and take ~80 seconds.
+
+**Each test gets its own tmux server**, created with `tmux -L krang-test-<pid>-<nanos>` and destroyed via `kill-server` on cleanup. The harness passes the socket name to the krang binary as `KRANG_TMUX_SOCKET`, and `internal/tmux` routes every invocation through `command()`, which adds `-L` when that variable is set. This is what makes it safe to run the suite from inside a live krang instance: the tests set `HOME` and `KRANG_CLAUDE_CMD` in the server's *global* environment, which on a shared server would be inherited by every window opened afterwards.
+
+Two guard tests enforce the invariant — `internal/tmux.TestNoDirectTmuxInvocations` and `internal/integration.TestNoDirectTmuxInvocations` — by scanning package sources for bare `exec.Command("tmux", ...)` calls. Add new tmux calls via `command()`, `env.tmux(...)`, or `tmuxOn(socket, ...)`; never `exec.Command` directly.
 
 **Run both unit and integration tests before considering a feature complete.** The integration tests catch bugs that unit tests can't (e.g., tmux version-specific behavior, key sequence regressions, session adoption races).
 

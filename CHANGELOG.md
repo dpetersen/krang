@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Integration tests no longer run against the default tmux server. Each
+  test now gets a private server via `tmux -L`, so a test run can't
+  disturb a live krang instance on the same machine. Previously the
+  harness set `HOME`, `KRANG_CLAUDE_CMD`, and `FAKECLAUDE_CONTROLDIR` in
+  the shared server's *global* environment, which every window opened
+  afterwards inherited — a real krang task launched during a test run
+  would start the fake Claude binary against the test's temp-dir `HOME`.
+  Teardown also killed sessions by name and unset those globals outright.
+
+### Added
+
+- `KRANG_TMUX_SOCKET` pins krang to a specific tmux server. Unset (the
+  default) targets the default server exactly as before; the integration
+  harness sets it per-test.
+
 ## [1.0.0-beta.3] - 2026-04-16
 
 ### Fixed

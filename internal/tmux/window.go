@@ -2,7 +2,6 @@ package tmux
 
 import (
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -20,8 +19,8 @@ func WindowName(taskName string) string {
 }
 
 func CreateWindow(session, name, cwd, shellCommand string) (string, error) {
-	cmd := exec.Command(
-		"tmux", "new-window",
+	cmd := command(
+		"new-window",
 		"-a",
 		"-c", cwd,
 		"-t", session+":",
@@ -40,7 +39,7 @@ func MoveWindow(windowID, targetSession string) error {
 	if windowID == "" {
 		return fmt.Errorf("refusing to move window: empty window ID (tmux would move the current window)")
 	}
-	cmd := exec.Command("tmux", "move-window", "-s", windowID, "-t", targetSession+":")
+	cmd := command("move-window", "-s", windowID, "-t", targetSession+":")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("moving window %s to %s: %s: %w", windowID, targetSession, strings.TrimSpace(string(out)), err)
 	}
@@ -51,7 +50,7 @@ func KillWindow(windowID string) error {
 	if windowID == "" {
 		return fmt.Errorf("refusing to kill window: empty window ID (tmux would kill the current window)")
 	}
-	cmd := exec.Command("tmux", "kill-window", "-t", windowID)
+	cmd := command("kill-window", "-t", windowID)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("killing window %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
 	}
@@ -59,8 +58,8 @@ func KillWindow(windowID string) error {
 }
 
 func ListWindows(session string) ([]WindowInfo, error) {
-	cmd := exec.Command(
-		"tmux", "list-windows",
+	cmd := command(
+		"list-windows",
 		"-t", session,
 		"-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{@krang-task}\t#{@krang-companion}",
 	)
@@ -126,8 +125,8 @@ func FindCompanions(session, taskName string) []string {
 
 // CreateWindowAfter creates a new window immediately after the given window.
 func CreateWindowAfter(afterWindowID, name, cwd string) (string, error) {
-	cmd := exec.Command(
-		"tmux", "new-window",
+	cmd := command(
+		"new-window",
 		"-a",
 		"-c", cwd,
 		"-t", afterWindowID,
@@ -143,7 +142,7 @@ func CreateWindowAfter(afterWindowID, name, cwd string) (string, error) {
 
 // CompactWindows renumbers all windows in the session sequentially.
 func CompactWindows(session string) error {
-	cmd := exec.Command("tmux", "move-window", "-r", "-t", session+":")
+	cmd := command("move-window", "-r", "-t", session+":")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compacting windows in %s: %s: %w", session, strings.TrimSpace(string(out)), err)
 	}
@@ -151,7 +150,7 @@ func CompactWindows(session string) error {
 }
 
 func SetWindowOption(windowID, option, value string) error {
-	cmd := exec.Command("tmux", "set-option", "-w", "-t", windowID, "@"+option, value)
+	cmd := command("set-option", "-w", "-t", windowID, "@"+option, value)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("setting @%s on %s: %s: %w", option, windowID, strings.TrimSpace(string(out)), err)
 	}
@@ -163,7 +162,7 @@ var fgColorPattern = regexp.MustCompile(`fg=[^],]*`)
 func SetWindowStyle(windowID, fgColor string) error {
 	// Set window-status-style for simple/default themes.
 	style := "fg=" + fgColor
-	cmd := exec.Command("tmux", "set-window-option", "-t", windowID, "window-status-style", style)
+	cmd := command("set-window-option", "-t", windowID, "window-status-style", style)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("setting window-status-style on %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
 	}
@@ -174,7 +173,7 @@ func SetWindowStyle(windowID, fgColor string) error {
 	globalFormat, err := globalOption("window-status-format")
 	if err == nil && fgColorPattern.MatchString(globalFormat) {
 		modified := fgColorPattern.ReplaceAllString(globalFormat, "fg="+fgColor)
-		cmd = exec.Command("tmux", "set-window-option", "-t", windowID, "window-status-format", modified)
+		cmd = command("set-window-option", "-t", windowID, "window-status-format", modified)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("setting window-status-format on %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
 		}
@@ -185,7 +184,7 @@ func SetWindowStyle(windowID, fgColor string) error {
 
 func ClearWindowStyle(windowID string) error {
 	for _, option := range []string{"window-status-style", "window-status-format"} {
-		cmd := exec.Command("tmux", "set-window-option", "-u", "-t", windowID, option)
+		cmd := command("set-window-option", "-u", "-t", windowID, option)
 		// Ignore errors — the option may not have been set.
 		_ = cmd.Run()
 	}
@@ -193,7 +192,7 @@ func ClearWindowStyle(windowID string) error {
 }
 
 func globalOption(name string) (string, error) {
-	cmd := exec.Command("tmux", "show-options", "-gv", name)
+	cmd := command("show-options", "-gv", name)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -202,7 +201,7 @@ func globalOption(name string) (string, error) {
 }
 
 func RenameWindow(windowID, newName string) error {
-	cmd := exec.Command("tmux", "rename-window", "-t", windowID, newName)
+	cmd := command("rename-window", "-t", windowID, newName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("renaming window %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
 	}

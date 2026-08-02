@@ -2,7 +2,6 @@ package tmux
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -17,12 +16,12 @@ func ParkedSessionName(instanceID string) string {
 }
 
 func SessionExists(name string) bool {
-	err := exec.Command("tmux", "has-session", "-t", "="+name).Run()
+	err := command("has-session", "-t", "="+name).Run()
 	return err == nil
 }
 
 func CreateSession(name string) error {
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", name)
+	cmd := command("new-session", "-d", "-s", name)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("creating session %s: %s: %w", name, strings.TrimSpace(string(out)), err)
 	}
@@ -37,7 +36,7 @@ func EnsureParkedSession(parkedSession string) error {
 }
 
 func CurrentSession() (string, error) {
-	out, err := exec.Command("tmux", "display-message", "-p", "#{session_name}").Output()
+	out, err := command("display-message", "-p", "#{session_name}").Output()
 	if err != nil {
 		return "", fmt.Errorf("getting current session: %w", err)
 	}
@@ -45,7 +44,7 @@ func CurrentSession() (string, error) {
 }
 
 func SelectWindow(windowID string) error {
-	cmd := exec.Command("tmux", "select-window", "-t", windowID)
+	cmd := command("select-window", "-t", windowID)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("selecting window %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
 	}
@@ -53,7 +52,7 @@ func SelectWindow(windowID string) error {
 }
 
 func RenameSession(oldName, newName string) error {
-	cmd := exec.Command("tmux", "rename-session", "-t", oldName, newName)
+	cmd := command("rename-session", "-t", oldName, newName)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("renaming session %s to %s: %s: %w", oldName, newName, strings.TrimSpace(string(out)), err)
 	}
@@ -61,7 +60,7 @@ func RenameSession(oldName, newName string) error {
 }
 
 func KillSession(name string) error {
-	cmd := exec.Command("tmux", "kill-session", "-t", "="+name)
+	cmd := command("kill-session", "-t", "="+name)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("killing session %s: %s: %w", name, strings.TrimSpace(string(out)), err)
 	}
@@ -69,6 +68,6 @@ func KillSession(name string) error {
 }
 
 func InsideTmux() bool {
-	cmd := exec.Command("tmux", "display-message", "-p", "#{session_name}")
+	cmd := command("display-message", "-p", "#{session_name}")
 	return cmd.Run() == nil
 }

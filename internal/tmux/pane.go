@@ -3,14 +3,13 @@ package tmux
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 )
 
 func CapturePane(windowID string, lines int) (string, error) {
 	startLine := fmt.Sprintf("-%d", lines)
-	cmd := exec.Command(
-		"tmux", "capture-pane",
+	cmd := command(
+		"capture-pane",
 		"-p",
 		"-t", windowID,
 		"-S", startLine,
@@ -23,7 +22,7 @@ func CapturePane(windowID string, lines int) (string, error) {
 }
 
 func SendKeys(windowID, keys string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", windowID, keys, "Enter")
+	cmd := command("send-keys", "-t", windowID, keys, "Enter")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sending keys to %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
 	}
@@ -31,7 +30,7 @@ func SendKeys(windowID, keys string) error {
 }
 
 func SendEnter(windowID string) error {
-	cmd := exec.Command("tmux", "send-keys", "-t", windowID, "Enter")
+	cmd := command("send-keys", "-t", windowID, "Enter")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sending enter to %s: %s: %w", windowID, strings.TrimSpace(string(out)), err)
 	}
@@ -39,8 +38,8 @@ func SendEnter(windowID string) error {
 }
 
 func WindowExists(windowID string) bool {
-	cmd := exec.Command(
-		"tmux", "display-message",
+	cmd := command(
+		"display-message",
 		"-t", windowID,
 		"-p", "#{window_id}",
 	)
@@ -55,8 +54,8 @@ func WindowExists(windowID string) bool {
 }
 
 func PanePID(windowID string) (int, error) {
-	cmd := exec.Command(
-		"tmux", "display-message",
+	cmd := command(
+		"display-message",
 		"-t", windowID,
 		"-p", "#{pane_pid}",
 	)
@@ -78,8 +77,8 @@ func CurrentWindowID() (string, error) {
 	if paneID == "" {
 		return "", fmt.Errorf("TMUX_PANE not set")
 	}
-	cmd := exec.Command(
-		"tmux", "display-message",
+	cmd := command(
+		"display-message",
 		"-t", paneID,
 		"-p", "#{window_id}",
 	)
@@ -91,8 +90,8 @@ func CurrentWindowID() (string, error) {
 }
 
 func PaneDead(windowID string) bool {
-	cmd := exec.Command(
-		"tmux", "display-message",
+	cmd := command(
+		"display-message",
 		"-t", windowID,
 		"-p", "#{pane_dead}",
 	)
@@ -104,8 +103,8 @@ func PaneDead(windowID string) bool {
 }
 
 func ActiveWindowID(session string) (string, error) {
-	cmd := exec.Command(
-		"tmux", "display-message",
+	cmd := command(
+		"display-message",
 		"-t", session,
 		"-p", "#{window_id}",
 	)

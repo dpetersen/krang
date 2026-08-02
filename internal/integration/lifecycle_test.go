@@ -412,7 +412,7 @@ func TestReconcileVanishedWindow(t *testing.T) {
 
 	// Kill the task window by session:name target.
 	killTarget := env.krangSession + ":reconcile-test"
-	if out, err := exec.Command("tmux", "kill-window", "-t", killTarget).CombinedOutput(); err != nil {
+	if out, err := env.tmux("kill-window", "-t", killTarget).CombinedOutput(); err != nil {
 		t.Fatalf("killing window: %v: %s", err, out)
 	}
 
