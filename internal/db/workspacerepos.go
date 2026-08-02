@@ -83,6 +83,27 @@ func (s *WorkspaceRepoStore) DeleteByTask(taskID string) error {
 	return nil
 }
 
+// ReassignTask hands one task's provenance rows to another. It exists
+// for the one case where a task ends but its working copies do not:
+// completing a task whose workspace directory another task still shares.
+// Deleting the rows there would strand the identities — the surviving
+// task would eventually destroy the directory with nothing left to say
+// which jj workspaces and git branches to forget — and keeping them
+// under the completed task would hold its name hostage forever.
+//
+// A row the target already has an equivalent of (same dir_name) loses
+// the race to the UNIQUE constraint and is dropped rather than
+// duplicated: the target's own record is the more authoritative one.
+func (s *WorkspaceRepoStore) ReassignTask(fromTaskID, toTaskID string) error {
+	if _, err := s.db.Exec(
+		`UPDATE OR IGNORE workspace_repos SET task_id = ? WHERE task_id = ?`,
+		toTaskID, fromTaskID,
+	); err != nil {
+		return fmt.Errorf("reassigning workspace repos: %w", err)
+	}
+	return s.DeleteByTask(fromTaskID)
+}
+
 // DeleteByDir removes the row for a single working copy, for when one
 // slot is torn down without completing the task.
 func (s *WorkspaceRepoStore) DeleteByDir(taskID, dirName string) error {

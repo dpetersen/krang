@@ -462,6 +462,206 @@ func TestCompleteDropsRecordedWorkspaceRepos(t *testing.T) {
 	}
 }
 
+// AC: completion releases EVERY recorded identity, not one per repo.
+// Two checkouts of one repo are two rows, and both have to go or the
+// next task of that name collides on the surviving one.
+func TestCompleteReleasesEveryRecordedSlotIdentity(t *testing.T) {
+	f := newManagerFixture(t)
+
+	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
+	workspaceDir := filepath.Join(f.workspacesDir, "slotty")
+	for _, dir := range []string{"alpha", "alpha--tests"} {
+		makeRepoDir(t, filepath.Join(workspaceDir, dir), "jj")
+	}
+
+	if err := f.tasks.Create(&db.Task{
+		ID: "01SLOTS", Name: "slotty", State: db.StateActive,
+		Attention: db.AttentionOK, Cwd: workspaceDir, WorkspaceDir: workspaceDir,
+	}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	for _, row := range []db.WorkspaceRepo{
+		{TaskID: "01SLOTS", RepoName: "alpha", DirName: "alpha", VCS: "jj", VCSName: "slotty"},
+		{TaskID: "01SLOTS", RepoName: "alpha", DirName: "alpha--tests", VCS: "jj",
+			VCSName: "slotty--alpha--tests", SlotLabel: "tests"},
+	} {
+		if err := f.workspaceRepos.Create(&row); err != nil {
+			t.Fatalf("recording %s: %v", row.DirName, err)
+		}
+	}
+
+	if err := f.manager.Complete("01SLOTS"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	rows, err := f.workspaceRepos.ListByTask("01SLOTS")
+	if err != nil {
+		t.Fatalf("listing workspace repos: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("got %d rows after completing, want 0: %+v", len(rows), rows)
+	}
+
+	// Both identities are free again, including the slot's.
+	for _, row := range []db.WorkspaceRepo{
+		{TaskID: "01SLOTS", RepoName: "alpha", DirName: "alpha", VCS: "jj", VCSName: "slotty"},
+		{TaskID: "01SLOTS", RepoName: "alpha", DirName: "alpha--tests", VCS: "jj",
+			VCSName: "slotty--alpha--tests", SlotLabel: "tests"},
+	} {
+		if err := f.workspaceRepos.Create(&row); err != nil {
+			t.Errorf("re-recording %s: %v", row.VCSName, err)
+		}
+	}
+}
+
+// A workspace another task still shares is not destroyed, so its
+// provenance must not be destroyed either: the surviving task is the one
+// that will eventually tear the directory down, and without the rows it
+// would have nothing to say which slots to forget.
+func TestCompleteHandsProvenanceToASurvivingWorkspaceSharer(t *testing.T) {
+	f := newManagerFixture(t)
+
+	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
+	workspaceDir := filepath.Join(f.workspacesDir, "owner")
+	for _, dir := range []string{"alpha", "alpha--tests"} {
+		makeRepoDir(t, filepath.Join(workspaceDir, dir), "jj")
+	}
+
+	for _, task := range []db.Task{
+		{ID: "01OWNER", Name: "owner", State: db.StateActive, Attention: db.AttentionOK,
+			Cwd: workspaceDir, WorkspaceDir: workspaceDir},
+		{ID: "01FORK", Name: "owner-fork", State: db.StateActive, Attention: db.AttentionOK,
+			Cwd: workspaceDir, WorkspaceDir: workspaceDir, SourceTaskID: "01OWNER"},
+	} {
+		if err := f.tasks.Create(&task); err != nil {
+			t.Fatalf("creating %s: %v", task.Name, err)
+		}
+	}
+	for _, row := range []db.WorkspaceRepo{
+		{TaskID: "01OWNER", RepoName: "alpha", DirName: "alpha", VCS: "jj", VCSName: "owner"},
+		{TaskID: "01OWNER", RepoName: "alpha", DirName: "alpha--tests", VCS: "jj",
+			VCSName: "owner--alpha--tests", SlotLabel: "tests"},
+	} {
+		if err := f.workspaceRepos.Create(&row); err != nil {
+			t.Fatalf("recording %s: %v", row.DirName, err)
+		}
+	}
+
+	if err := f.manager.Complete("01OWNER"); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if rows, err := f.workspaceRepos.ListByTask("01OWNER"); err != nil {
+		t.Fatalf("listing the completed task's rows: %v", err)
+	} else if len(rows) != 0 {
+		t.Errorf("the completed task kept %d rows: %+v", len(rows), rows)
+	}
+
+	rows, err := f.workspaceRepos.ListByTask("01FORK")
+	if err != nil {
+		t.Fatalf("listing the survivor's rows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("the survivor holds %d rows, want both: %+v", len(rows), rows)
+	}
+	if rows[0].VCSName != "owner" || rows[1].VCSName != "owner--alpha--tests" {
+		t.Errorf("rows = %+v, want the owner's identities intact", rows)
+	}
+}
+
+// AC: freezing is not a teardown. It closes a window; the working
+// copies, their VCS identities, and the rows recording them all stay
+// exactly where the task left them, because unfreezing has to find them.
+func TestFreezingLeavesWorkingCopiesAndTheirRowsAlone(t *testing.T) {
+	f := newManagerFixture(t)
+
+	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
+	workspaceDir := filepath.Join(f.workspacesDir, "chilly")
+	for _, dir := range []string{"alpha", "alpha--tests"} {
+		makeRepoDir(t, filepath.Join(workspaceDir, dir), "jj")
+	}
+
+	if err := f.tasks.Create(&db.Task{
+		ID: "01FREEZE", Name: "chilly", State: db.StateActive, Attention: db.AttentionOK,
+		SessionID: "session-1", Cwd: workspaceDir, WorkspaceDir: workspaceDir,
+	}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	for _, row := range []db.WorkspaceRepo{
+		{TaskID: "01FREEZE", RepoName: "alpha", DirName: "alpha", VCS: "jj", VCSName: "chilly"},
+		{TaskID: "01FREEZE", RepoName: "alpha", DirName: "alpha--tests", VCS: "jj",
+			VCSName: "chilly--alpha--tests", SlotLabel: "tests"},
+	} {
+		if err := f.workspaceRepos.Create(&row); err != nil {
+			t.Fatalf("recording %s: %v", row.DirName, err)
+		}
+	}
+
+	if err := f.manager.Dormify("01FREEZE"); err != nil {
+		t.Fatalf("Dormify: %v", err)
+	}
+
+	rows, err := f.workspaceRepos.ListByTask("01FREEZE")
+	if err != nil {
+		t.Fatalf("listing workspace repos: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("freezing left %d rows, want both: %+v", len(rows), rows)
+	}
+	for _, dir := range []string{"alpha", "alpha--tests"} {
+		if _, err := os.Stat(filepath.Join(workspaceDir, dir)); err != nil {
+			t.Errorf("freezing removed %s: %v", dir, err)
+		}
+	}
+}
+
+// The reconciler's "failed" is a diagnosis, not a teardown: it leaves
+// the rows alone deliberately, because the working copies are still
+// there. Completing the task later is what releases them.
+func TestCompletingAFailedTaskStillReleasesItsIdentities(t *testing.T) {
+	f := newManagerFixture(t)
+
+	makeRepoDir(t, filepath.Join(f.reposDir, "alpha"), "jj")
+	workspaceDir := filepath.Join(f.workspacesDir, "crashed")
+	makeRepoDir(t, filepath.Join(workspaceDir, "alpha"), "jj")
+
+	if err := f.tasks.Create(&db.Task{
+		ID: "01CRASH", Name: "crashed", State: db.StateActive, Attention: db.AttentionOK,
+		Cwd: workspaceDir, WorkspaceDir: workspaceDir,
+		// A window tmux does not have, which is what the reconciler
+		// notices. No session ID, so the verdict is failed, not dormant.
+		TmuxWindow: "@99999",
+	}); err != nil {
+		t.Fatalf("creating task: %v", err)
+	}
+	if err := f.workspaceRepos.Create(&db.WorkspaceRepo{
+		TaskID: "01CRASH", RepoName: "alpha", DirName: "alpha", VCS: "jj", VCSName: "crashed",
+	}); err != nil {
+		t.Fatalf("recording the working copy: %v", err)
+	}
+
+	if err := f.manager.Reconcile(); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	failed, err := f.tasks.Get("01CRASH")
+	if err != nil || failed == nil {
+		t.Fatalf("loading the reconciled task: %v", err)
+	}
+	if failed.State != db.StateFailed {
+		t.Fatalf("state = %q, want failed", failed.State)
+	}
+	if rows, err := f.workspaceRepos.ListByTask("01CRASH"); err != nil || len(rows) != 1 {
+		t.Fatalf("reconcile changed the rows (%+v, %v); marking failed must not release identities", rows, err)
+	}
+
+	if err := f.manager.Complete("01CRASH"); err != nil {
+		t.Fatalf("Complete on a failed task: %v", err)
+	}
+	if rows, err := f.workspaceRepos.ListByTask("01CRASH"); err != nil || len(rows) != 0 {
+		t.Errorf("rows after completing the failed task = %+v (%v), want none", rows, err)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

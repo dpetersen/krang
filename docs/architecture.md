@@ -186,7 +186,19 @@ Four endpoints ride the serialization path above.
 
 A per-task cap of `workspace.MaxSlotsPerTask` (4) working copies bounds sprawl on the API path, with the refusal naming what could be removed to make room. The human's repo picker is not capped.
 
-**Removal order.** Forget the recorded VCS identity, remove the directory, drop the row — stopping at the first failure so all three stay in step and the identical request can be retried. Removing a repo's last slot is not special-cased: it is how a repo leaves a task, through the same gates, and the response says `data.repo_dropped`. In `single_repo` the workspace directory *is* the initial checkout and *is* the task's cwd, so removing that slot would be a task teardown; it is refused with `workspace_root` regardless of `force`. In `multi_repo` — what this API is really for — the task's cwd is the workspace container and no slot is ever the cwd root.
+**Removal order.** Forget the recorded VCS identity, remove the directory, drop the row — stopping at the first failure so all three stay in step and the identical request can be retried. Removing a repo's last slot is not special-cased: it is how a repo leaves a task, through the same gates, and the response says `data.repo_dropped`. In `single_repo` the workspace directory *is* the initial checkout and *is* the task's cwd, so removing that slot would be a task teardown; it is refused with `workspace_root` (409, like the other refusals over the state of the world — completing the task is what resolves it) regardless of `force`. In `multi_repo` — what this API is really for — the task's cwd is the workspace container and no slot is ever the cwd root.
+
+## Task teardown
+
+Removing one slot is the API's job; removing all of them is completion's. `Manager.Complete` is the only path to a terminal state a human drives — the reconciler's `failed` is a diagnosis of a vanished window, not a teardown, and deliberately leaves everything on disk and in `workspace_repos` so a later completion of that same task still knows what to forget.
+
+**One forget per working copy.** `DestroyRepoList` returns the recorded rows in row order, then the directories no row covers. Slots make the distinction load-bearing: a task holding three checkouts of one repo owns three jj workspace names, and only the initial one is named after the task, so a loop over *repos* would forget the first identity three times and the other two never. A recorded row whose directory is already gone stays in the list, because the identity it names is still claimed in the source repo.
+
+**The container assumption.** The directory scan behind the rows only makes sense where the workspace directory holds working copies. In `single_repo` it *is* the working copy, so its subdirectories are that repo's own contents and scanning them could aim cleanup at a vendored checkout. `single_repo` sits outside the slot system entirely; its cleanup still asks every repo in turn (`ForgetSingleRepoWorkspace`).
+
+**Shared directories keep their rows.** A workspace another task still holds is not destroyed, so `Manager.Complete` hands its provenance to the oldest surviving sharer rather than deleting it. The survivor is the one that will eventually tear the directory down, and without the rows it would fall back to a derivation that cannot name a slot — leaking one `jj workspace` per slot into the source repo. Deleting was also the only thing keeping the completed task's name reserved for no reason. This is what makes completing a *fork* safe: forking is not slot-aware, and the sharing suppression is what stops a fork's completion from reaching the owner's slots.
+
+**Freezing and parking touch nothing.** They move or close a tmux window. The working copies, their VCS identities, and their rows are all exactly where the task left them.
 
 ## Workspace CLI
 

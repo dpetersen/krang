@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // callWorkspaceAPI hits a workspace endpoint on the live krang instance
@@ -244,6 +245,78 @@ func TestWorkspaceAddListRemoveRoundTripsThroughTUI(t *testing.T) {
 	_, body = callWorkspaceAPI(env, http.MethodGet, "/api/workspace?task=wsapi", nil)
 	if slots = workspaceSlots(t, body); len(slots) != 1 || slots[0]["dir"] != "alpha" {
 		t.Errorf("final listing = %v, want just the initial slot", slots)
+	}
+}
+
+// AC: completing a task forgets every VCS identity it holds, slots
+// included. The slot is added through the real API rather than seeded,
+// because the identity cleanup has to forget is the one creation
+// recorded — this is the only test where the whole chain runs: HTTP add
+// → provenance row → keyboard completion → jj workspace forget.
+func TestCompletingATaskForgetsEverySlotIdentity(t *testing.T) {
+	env := NewWorkspaceTestEnv(t, "multi_repo", "jj", []string{"alpha", "beta"})
+
+	env.CreateMultiRepoTask("slotty", 2)
+	workspaceDir := env.TaskWorkspaceDir("slotty")
+	alphaSrc := filepath.Join(env.ReposDir(), "alpha")
+	betaSrc := filepath.Join(env.ReposDir(), "beta")
+
+	status, body := callWorkspaceAPI(env, http.MethodPost, "/api/workspace/add", map[string]any{
+		"task": "slotty", "repo": "alpha", "label": "tests",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("add status = %d, want 200 (body %v)", status, body)
+	}
+	env.WaitForEvent("slotty", "workspace_add")
+
+	// Three working copies, two of them checkouts of alpha under
+	// identities that differ only because the slot has a label.
+	for _, want := range []string{"slotty", "slotty--alpha--tests"} {
+		if listed := jjWorkspaceList(t, alphaSrc); !strings.Contains(listed, want) {
+			t.Fatalf("jj does not know workspace %q before completion:\n%s", want, listed)
+		}
+	}
+	slotDir := filepath.Join(workspaceDir, "alpha--tests")
+	if _, err := os.Stat(slotDir); err != nil {
+		t.Fatalf("the slot is not on disk: %v", err)
+	}
+
+	// Complete from the keyboard: detail modal, c, confirm.
+	env.SendKeys("Tab")
+	time.Sleep(300 * time.Millisecond)
+	env.SendKeys("c")
+	time.Sleep(500 * time.Millisecond)
+
+	// The confirmation counts every working copy, the slot included.
+	env.WaitForPaneContent("3 working copies")
+	env.SendKeys("y")
+
+	env.WaitForTaskState("slotty", "completed")
+	env.WaitFor("workspace removed", 25*time.Second, func() bool {
+		_, err := os.Stat(workspaceDir)
+		return os.IsNotExist(err)
+	})
+
+	// The source repos are clean: no leftover jj workspace for either
+	// the task's initial checkout or its slot. "slotty" is a prefix of
+	// "slotty--alpha--tests", so one absence check covers both.
+	if listed := jjWorkspaceList(t, alphaSrc); strings.Contains(listed, "slotty") {
+		t.Errorf("alpha still lists a workspace of the completed task:\n%s", listed)
+	}
+	if listed := jjWorkspaceList(t, betaSrc); strings.Contains(listed, "slotty") {
+		t.Errorf("beta still lists a workspace of the completed task:\n%s", listed)
+	}
+
+	// And the provenance went with it, so the name is free again.
+	var rows int
+	if err := env.db.QueryRow(`
+		SELECT COUNT(*) FROM workspace_repos wr
+		JOIN tasks t ON t.id = wr.task_id
+		WHERE t.name = 'slotty'`).Scan(&rows); err != nil {
+		t.Fatalf("counting workspace_repos: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("%d provenance rows survived the completion, want 0", rows)
 	}
 }
 

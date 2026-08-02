@@ -89,9 +89,14 @@ func (s SlotIdentity) VCSName() string {
 	return s.TaskName + slotSeparator + s.RepoName + slotSeparator + s.Label
 }
 
+// gitBranchPrefix namespaces every branch krang creates. Creation,
+// cleanup, and the warnings the completion modal renders all have to
+// agree on it, so it lives in one place.
+const gitBranchPrefix = "krang/"
+
 // GitBranch returns the branch a git slot is checked out on.
 func (s SlotIdentity) GitBranch() string {
-	return "krang/" + s.VCSName()
+	return gitBranchPrefix + s.VCSName()
 }
 
 // Validate rejects identities that can't be given names safely. Passing

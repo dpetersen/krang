@@ -850,6 +850,13 @@ func (m Model) buildHelpContent() string {
 	return sb.String()
 }
 
+func pluralWorkingCopies(n int) string {
+	if n == 1 {
+		return "1 working copy"
+	}
+	return fmt.Sprintf("%d working copies", n)
+}
+
 func (m Model) renderConfirmComplete(t *db.Task) string {
 	var content strings.Builder
 
@@ -858,37 +865,42 @@ func (m Model) renderConfirmComplete(t *db.Task) string {
 	content.WriteString(m.styles.ModalContent.Render("  • Claude process will be stopped"))
 	if t.WorkspaceDir != "" {
 		shared, _ := m.taskStore.TasksSharingWorkspace(t.WorkspaceDir, t.ID)
+		wsPath := tildeify(t.WorkspaceDir)
+		// The count is the point of the line, not decoration: a task can
+		// hold several checkouts of one repo, and "the workspace" alone
+		// no longer tells the human how much is about to go.
+		copies := pluralWorkingCopies(m.confirmWorkingCopies)
+		content.WriteString("\n")
 		if len(shared) > 0 {
 			var names []string
 			for _, s := range shared {
 				names = append(names, s.Name)
 			}
-			content.WriteString("\n")
-			content.WriteString(m.styles.ModalContent.Render(
-				fmt.Sprintf("  • Workspace shared with %s — will NOT be deleted", strings.Join(names, ", "))))
+			content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf(
+				"  • Workspace at %s (%s) shared with %s — will NOT be deleted",
+				wsPath, copies, strings.Join(names, ", "))))
 		} else {
-			content.WriteString("\n")
-			wsPath := tildeify(t.WorkspaceDir)
-			content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf("  • Workspace at %s will be deleted", wsPath)))
+			content.WriteString(m.styles.ModalContent.Render(fmt.Sprintf(
+				"  • Workspace at %s (%s) will be deleted", wsPath, copies)))
 		}
 	}
-	branchName := "krang/" + t.Name
-	if len(m.confirmUncommittedRepos) > 0 {
+	if len(m.confirmUncommitted) > 0 {
 		content.WriteString("\n")
 		content.WriteString(m.styles.WarningText.Render(
 			"  • Uncommitted changes will be lost:"))
-		for _, repo := range m.confirmUncommittedRepos {
+		for _, warning := range m.confirmUncommitted {
 			content.WriteString("\n")
-			content.WriteString(m.styles.WarningText.Render("      " + repo))
+			content.WriteString(m.styles.WarningText.Render("      " + warning.Dir))
 		}
 	}
-	if len(m.confirmUnpushedRepos) > 0 {
+	if len(m.confirmUnpushed) > 0 {
 		content.WriteString("\n")
 		content.WriteString(m.styles.WarningText.Render(
-			fmt.Sprintf("  • Unpushed commits — %s branch preserved in local source repo:", branchName)))
-		for _, repo := range m.confirmUnpushedRepos {
+			"  • Unpushed commits — these branches are preserved in the local source repo:"))
+		for _, warning := range m.confirmUnpushed {
 			content.WriteString("\n")
-			content.WriteString(m.styles.WarningText.Render("      " + repo))
+			content.WriteString(m.styles.WarningText.Render(
+				fmt.Sprintf("      %s (%s)", warning.Dir, warning.Branch)))
 		}
 	}
 	content.WriteString("\n\n")

@@ -285,32 +285,49 @@ func DeriveProvenance(rs *RepoSets, workspaceDir string) []RepoProvenance {
 // back to the pre-provenance derivation so one-off clones krang never
 // recorded still get cleaned up.
 func ForgetRepo(rs *RepoSets, workspaceDir string, target RepoProvenance) DestroyRepoResult {
-	repoName := target.RepoName
-	if repoName == "" {
-		repoName = target.DirName
-	}
-	vcs := target.VCS
-	if vcs == "" {
-		vcs = rs.DetectVCS(repoName)
-	}
-	vcsName := target.VCSName
-	if vcsName == "" {
-		vcsName = filepath.Base(workspaceDir)
-	}
-	repoSrc := filepath.Join(rs.ReposDir, repoName)
+	resolved := ResolveProvenance(rs, workspaceDir, target)
+	repoSrc := filepath.Join(rs.ReposDir, resolved.RepoName)
 
-	switch vcs {
+	switch resolved.VCS {
 	case "jj":
-		output, err := forgetJJWorkspaceOutput(repoSrc, vcsName)
-		return DestroyRepoResult{Repo: repoName, VCS: vcs, Output: output, Err: err}
+		output, err := forgetJJWorkspaceOutput(repoSrc, resolved.VCSName)
+		return DestroyRepoResult{Repo: resolved.RepoName, VCS: resolved.VCS, Output: output, Err: err}
 	default:
 		worktreePath := filepath.Join(workspaceDir, target.DirName)
 		if rs.WorkspaceStrategy == StrategySingleRepo {
 			worktreePath = workspaceDir
 		}
-		output, err := removeGitWorktree(repoSrc, worktreePath, vcsName)
-		return DestroyRepoResult{Repo: repoName, VCS: vcs, Output: output, Err: err}
+		output, err := removeGitWorktree(repoSrc, worktreePath, resolved.VCSName)
+		return DestroyRepoResult{Repo: resolved.RepoName, VCS: resolved.VCS, Output: output, Err: err}
 	}
+}
+
+// ResolveProvenance fills in whatever a provenance entry leaves empty
+// with the pre-provenance derivation, so an unrecorded directory — a
+// one-off clone somebody made by hand — still resolves to a repo and a
+// VCS identity. Cleanup and anything that has to *describe* cleanup
+// before running it go through here, so the branch a warning names is
+// the branch the removal will actually try to delete.
+func ResolveProvenance(rs *RepoSets, workspaceDir string, target RepoProvenance) RepoProvenance {
+	resolved := target
+	if resolved.RepoName == "" {
+		resolved.RepoName = target.DirName
+	}
+	if resolved.VCS == "" && rs != nil {
+		resolved.VCS = rs.DetectVCS(resolved.RepoName)
+	}
+	if resolved.VCSName == "" {
+		resolved.VCSName = filepath.Base(workspaceDir)
+	}
+	return resolved
+}
+
+// GitBranchFor names the branch cleanup will try to delete for a working
+// copy. Slots make this worth asking for rather than deriving from the
+// task name: a task holding three checkouts of one repo has three
+// branches, and only the initial one is named after the task.
+func GitBranchFor(rs *RepoSets, workspaceDir string, target RepoProvenance) string {
+	return gitBranchPrefix + ResolveProvenance(rs, workspaceDir, target).VCSName
 }
 
 // ForgetSingleRepoWorkspace cleans up a single_repo workspace by
@@ -342,12 +359,20 @@ func RemoveWorkspaceDir(workspaceDir string) error {
 	return os.RemoveAll(workspaceDir)
 }
 
-// DestroyRepoList returns the working copies in a multi_repo workspace
-// that need cleanup. Recorded rows are authoritative — they carry the
-// repo and VCS identity a directory name can no longer imply once a
-// task holds several working copies of one repo. The filesystem scan
-// is a best-effort fallback covering directories with no row, such as
-// one-off clones made by hand inside the workspace.
+// DestroyRepoList returns the working copies in a workspace that need
+// cleanup, one entry per working copy — a task holding three checkouts
+// of one repo gets three, because each owns a VCS identity of its own.
+// Recorded rows are authoritative and come first, in row order: they
+// carry the repo and the identity a directory name can no longer imply
+// once slots exist. A recorded row whose directory is already gone stays
+// in the list, since the identity it names still has to be forgotten.
+//
+// The filesystem scan behind them is a best-effort fallback covering
+// directories with no row, such as one-off clones made by hand inside
+// the workspace. It only applies where the workspace directory is a
+// *container* of working copies: in single_repo the workspace directory
+// IS the checkout, so its subdirectories are that repo's own contents
+// and scanning them would invent slots out of vendored checkouts.
 func DestroyRepoList(rs *RepoSets, workspaceDir string, recorded []RepoProvenance) []RepoProvenance {
 	targets := make([]RepoProvenance, 0, len(recorded))
 	recordedDirs := make(map[string]bool, len(recorded))
@@ -355,6 +380,10 @@ func DestroyRepoList(rs *RepoSets, workspaceDir string, recorded []RepoProvenanc
 		row.Recorded = true
 		recordedDirs[row.DirName] = true
 		targets = append(targets, row)
+	}
+
+	if rs != nil && rs.WorkspaceStrategy == StrategySingleRepo {
+		return targets
 	}
 
 	for _, derived := range DeriveProvenance(rs, workspaceDir) {
@@ -382,13 +411,16 @@ func isRepoDir(dir string) bool {
 // needed to find source repos; pass nil to skip VCS cleanup.
 func Destroy(rs *RepoSets, workspaceDir string, recorded []RepoProvenance) error {
 	if rs != nil {
-		for _, target := range DestroyRepoList(rs, workspaceDir, recorded) {
+		targets := DestroyRepoList(rs, workspaceDir, recorded)
+		for _, target := range targets {
 			_ = ForgetRepo(rs, workspaceDir, target)
 		}
 
-		// For single_repo mode, the workspace dir itself is the repo,
-		// so there is no subdirectory to have found above.
-		if rs.WorkspaceStrategy == StrategySingleRepo {
+		// In single_repo mode the workspace dir itself is the checkout,
+		// so there is no subdirectory the scan could have found. With no
+		// recorded row there is nothing to say which repo it came from
+		// either, and the only way left is to ask every repo in turn.
+		if rs.WorkspaceStrategy == StrategySingleRepo && len(targets) == 0 {
 			_ = ForgetSingleRepoWorkspace(rs, workspaceDir)
 		}
 	}
@@ -898,7 +930,7 @@ func resolveGitWorktreeSource(worktreeDir string) (string, error) {
 // branch. Uses git branch -d (not -D) so unpushed branches are kept.
 func removeGitWorktree(repoSrc, worktreePath, taskName string) (string, error) {
 	var allOutput strings.Builder
-	branchName := "krang/" + taskName
+	branchName := gitBranchPrefix + taskName
 
 	// If the worktree directory is already gone, prune stale entries.
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {

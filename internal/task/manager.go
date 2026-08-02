@@ -554,15 +554,7 @@ func (m *Manager) Complete(taskID string) error {
 		return err
 	}
 
-	// Drop recorded workspace provenance. Callers destroying the
-	// workspace have already read the rows they need, and leaving them
-	// behind would keep the task's VCS identities reserved after its
-	// name has been freed for reuse.
-	if m.workspaceRepos != nil {
-		if err := m.workspaceRepos.DeleteByTask(task.ID); err != nil {
-			_ = m.events.Log(task.ID, "workspace_repos_delete_failed", err.Error())
-		}
-	}
+	m.releaseWorkspaceRepos(task)
 
 	// Clean up any source session file copied into this task's project
 	// dir at fork time. On happy-path adoption this already ran; this
@@ -576,6 +568,47 @@ func (m *Manager) Complete(taskID string) error {
 	}
 
 	return nil
+}
+
+// releaseWorkspaceRepos lets go of the provenance a finished task
+// recorded for its working copies. Complete is the only path into a
+// terminal state a human drives — the reconciler's "failed" is a
+// diagnosis, not a teardown, and deliberately leaves the rows alone so a
+// later completion of that same task still knows what to forget.
+//
+// Which way to let go depends on whether the working copies outlive the
+// task. Normally they don't: the caller has already read the rows it
+// needs to forget every VCS identity, and leaving them behind would keep
+// those identities reserved after the task's name was freed for reuse.
+// But a workspace directory another task still shares is not destroyed,
+// so its rows have to survive the completion — they move to the
+// surviving task, which is the one that will eventually tear the
+// directory down and needs to know every identity to forget, slots
+// included.
+func (m *Manager) releaseWorkspaceRepos(task *db.Task) {
+	if m.workspaceRepos == nil {
+		return
+	}
+
+	// The task is already marked completed by this point, so it excludes
+	// itself from the query either way.
+	sharers, err := m.tasks.TasksSharingWorkspace(task.WorkspaceDir, task.ID)
+	if err != nil {
+		_ = m.events.Log(task.ID, "workspace_repos_release_failed", err.Error())
+		return
+	}
+	if len(sharers) > 0 {
+		// Oldest first, which is the task most likely to be the one the
+		// workspace directory is named after.
+		if err := m.workspaceRepos.ReassignTask(task.ID, sharers[0].ID); err != nil {
+			_ = m.events.Log(task.ID, "workspace_repos_reassign_failed", err.Error())
+		}
+		return
+	}
+
+	if err := m.workspaceRepos.DeleteByTask(task.ID); err != nil {
+		_ = m.events.Log(task.ID, "workspace_repos_delete_failed", err.Error())
+	}
 }
 
 // gracefulCloseWindow finds the Claude process in the tmux pane, sends

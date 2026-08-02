@@ -109,10 +109,13 @@ type Model struct {
 	// original task's state.
 	contestedSessions map[string]string
 
-	// Set when entering ModeConfirmComplete for a workspace task.
-	// Each entry is a repo name (multi_repo) or empty for single_repo.
-	confirmUncommittedRepos []string
-	confirmUnpushedRepos    []string
+	// Set when entering ModeConfirmComplete for a workspace task. The
+	// count is every working copy the workspace holds, slots included,
+	// and the two lists name the ones holding work completion would
+	// affect.
+	confirmWorkingCopies int
+	confirmUncommitted   []completionWarning
+	confirmUnpushed      []completionWarning
 
 	// One-shot: next TasksRefreshedMsg moves the cursor to this task,
 	// then clears the field. Set after creating/forking a task so the
@@ -1819,36 +1822,62 @@ func (m Model) recordedRepos(taskID string) []workspace.RepoProvenance {
 	return provenance
 }
 
-// checkWorkspaceWarnings checks git worktrees in the workspace for
-// uncommitted changes and unpushed commits. Returns the working-copy
-// directory names that have each condition — a task holding two slots
-// of one repo needs to know which slot the warning is about.
-func checkWorkspaceWarnings(rs *workspace.RepoSets, t *db.Task, recorded []workspace.RepoProvenance) (uncommittedRepos, unpushedRepos []string) {
+// completionWarning names one working copy completion would take with
+// it, along with the branch cleanup leaves behind for it. The branch has
+// to travel with the name: a task holding several slots of one repo has
+// a branch per slot, and only the initial checkout's is named after the
+// task, so "krang/<task>" is no longer something the modal can say.
+type completionWarning struct {
+	Dir    string
+	Branch string
+}
+
+// checkWorkspaceWarnings counts the working copies a task's workspace
+// holds and checks the git ones for uncommitted changes and unpushed
+// commits. Slots count and are named individually — a task with two
+// checkouts of one repo needs to know which of them the warning is
+// about.
+//
+// Only git working copies can lose anything, the same line the removal
+// API's blockers draw: forgetting a jj workspace leaves its commits,
+// working-copy commit included, in the source repo's store.
+func checkWorkspaceWarnings(rs *workspace.RepoSets, t *db.Task, recorded []workspace.RepoProvenance) (workingCopies int, uncommitted, unpushed []completionWarning) {
 	if rs == nil || t.WorkspaceDir == "" {
-		return nil, nil
+		return 0, nil, nil
 	}
 
-	checkRepo := func(worktreeDir, repoName string) {
+	check := func(worktreeDir string, slot workspace.RepoProvenance) {
+		warning := completionWarning{
+			Dir:    slot.DirName,
+			Branch: workspace.GitBranchFor(rs, t.WorkspaceDir, slot),
+		}
 		if workspace.HasUncommittedChanges(worktreeDir) {
-			uncommittedRepos = append(uncommittedRepos, repoName)
+			uncommitted = append(uncommitted, warning)
 		}
 		if workspace.HasUnpushedCommits(worktreeDir) {
-			unpushedRepos = append(unpushedRepos, repoName)
+			unpushed = append(unpushed, warning)
 		}
 	}
 
 	switch rs.WorkspaceStrategy {
 	case workspace.StrategySingleRepo:
-		checkRepo(t.WorkspaceDir, t.Name)
+		workingCopies = 1
+		slot := workspace.RepoProvenance{DirName: t.Name}
+		if len(recorded) > 0 {
+			slot = recorded[0]
+		}
+		check(t.WorkspaceDir, slot)
 	case workspace.StrategyMultiRepo:
-		for _, slot := range workspace.PresentSlots(rs, t.WorkspaceDir, recorded) {
+		slots := workspace.PresentSlots(rs, t.WorkspaceDir, recorded)
+		workingCopies = len(slots)
+		for _, slot := range slots {
 			if slot.VCS != "jj" {
-				checkRepo(filepath.Join(t.WorkspaceDir, slot.DirName), slot.DirName)
+				check(filepath.Join(t.WorkspaceDir, slot.DirName), slot)
 			}
 		}
 	}
 
-	return uncommittedRepos, unpushedRepos
+	return workingCopies, uncommitted, unpushed
 }
 
 func (m Model) handleConfirmFreezeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1958,10 +1987,12 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.noteWorkspaceRequestBusy()
 			return m, nil
 		}
-		m.confirmUncommittedRepos = nil
-		m.confirmUnpushedRepos = nil
+		m.confirmWorkingCopies = 0
+		m.confirmUncommitted = nil
+		m.confirmUnpushed = nil
 		if t.WorkspaceDir != "" {
-			m.confirmUncommittedRepos, m.confirmUnpushedRepos = checkWorkspaceWarnings(m.repoSets, t, m.recordedRepos(t.ID))
+			m.confirmWorkingCopies, m.confirmUncommitted, m.confirmUnpushed =
+				checkWorkspaceWarnings(m.repoSets, t, m.recordedRepos(t.ID))
 		}
 		m.mode = ModeConfirmComplete
 		return m, nil

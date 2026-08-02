@@ -214,3 +214,77 @@ func TestWorkspaceRepoRejectsUnknownVCS(t *testing.T) {
 		t.Error("expected an unknown VCS to be rejected")
 	}
 }
+
+func TestReassignTaskMovesEveryRow(t *testing.T) {
+	database := openTestDB(t)
+	seedTask(t, database, "01ABC", "owner")
+	seedTask(t, database, "01DEF", "sharer")
+	store := NewWorkspaceRepoStore(database)
+
+	for _, row := range []WorkspaceRepo{
+		{TaskID: "01ABC", RepoName: "krang", DirName: "krang", VCS: "jj", VCSName: "owner"},
+		{TaskID: "01ABC", RepoName: "krang", DirName: "krang--tests", VCS: "jj",
+			VCSName: "owner--krang--tests", SlotLabel: "tests"},
+	} {
+		if err := store.Create(&row); err != nil {
+			t.Fatalf("creating %s: %v", row.DirName, err)
+		}
+	}
+
+	if err := store.ReassignTask("01ABC", "01DEF"); err != nil {
+		t.Fatalf("ReassignTask: %v", err)
+	}
+
+	if rows, err := store.ListByTask("01ABC"); err != nil || len(rows) != 0 {
+		t.Errorf("source still holds %+v (%v)", rows, err)
+	}
+	rows, err := store.ListByTask("01DEF")
+	if err != nil {
+		t.Fatalf("listing the target: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("target holds %d rows, want 2: %+v", len(rows), rows)
+	}
+	// The identities travel intact — that is the whole point of moving
+	// the rows rather than re-deriving them.
+	if rows[0].VCSName != "owner" || rows[1].VCSName != "owner--krang--tests" {
+		t.Errorf("rows = %+v, want the original identities", rows)
+	}
+}
+
+// A row the target already has an equivalent of would violate
+// UNIQUE(task_id, dir_name). The target's own record wins and the
+// duplicate is dropped, rather than the whole reassignment failing and
+// stranding every row on a completed task.
+func TestReassignTaskDropsRowsTheTargetAlreadyHas(t *testing.T) {
+	database := openTestDB(t)
+	seedTask(t, database, "01ABC", "owner")
+	seedTask(t, database, "01DEF", "sharer")
+	store := NewWorkspaceRepoStore(database)
+
+	if err := store.Create(&WorkspaceRepo{
+		TaskID: "01ABC", RepoName: "krang", DirName: "krang", VCS: "jj", VCSName: "owner",
+	}); err != nil {
+		t.Fatalf("creating the owner's row: %v", err)
+	}
+	if err := store.Create(&WorkspaceRepo{
+		TaskID: "01DEF", RepoName: "krang", DirName: "krang", VCS: "jj", VCSName: "sharer",
+	}); err != nil {
+		t.Fatalf("creating the sharer's row: %v", err)
+	}
+
+	if err := store.ReassignTask("01ABC", "01DEF"); err != nil {
+		t.Fatalf("ReassignTask: %v", err)
+	}
+
+	if rows, err := store.ListByTask("01ABC"); err != nil || len(rows) != 0 {
+		t.Errorf("source still holds %+v (%v)", rows, err)
+	}
+	rows, err := store.ListByTask("01DEF")
+	if err != nil {
+		t.Fatalf("listing the target: %v", err)
+	}
+	if len(rows) != 1 || rows[0].VCSName != "sharer" {
+		t.Errorf("target rows = %+v, want only its own record", rows)
+	}
+}

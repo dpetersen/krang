@@ -39,7 +39,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `--help` names its endpoint, its defaults, and the whole exit-code
   table, because an agent reads one `--help`, not the tree.
 
+### Changed
+
+- The completion confirmation states how many working copies are about to be
+  deleted — slots included — and names the *slot* holding uncommitted or
+  unpushed work rather than the task. Each unpushed warning now reports the
+  branch that will actually survive in the source repo
+  (`krang/<task>--<repo>--<label>` for a slot), where before it reported
+  `krang/<task>` for every entry, which was only ever right for a task's
+  initial checkout.
+
 ### Fixed
+
+- Completing a task whose workspace directory another task still shares no
+  longer deletes the provenance rows for the working copies in it. The
+  directory survives the completion, so its rows now move to the surviving
+  task — the one that will eventually tear it down and needs to know every
+  VCS identity to forget. Previously the rows were dropped and the last task
+  out fell back to deriving identities from directory names, which cannot
+  name a slot, leaking a `jj workspace` per slot into the source repo.
+
+- `workspace_root` refusals from `DELETE /api/workspace/slot` now answer 409
+  instead of falling through to 500. It is a deliberate refusal like
+  `unsaved_work` and `shared_workspace`, and completing the task resolves it;
+  a 500 said krang had broken. The CLI branches on `reason`, so its exit
+  codes are unchanged.
+
+- `DestroyRepoList` no longer scans a `single_repo` workspace's
+  subdirectories for working copies. There the workspace directory *is* the
+  checkout, so its subdirectories are that repo's own contents; a vendored
+  checkout inside one could be mistaken for a slot and aim cleanup at a repo
+  nobody asked it to touch.
 
 - `workspace_repos.base_revision` is now actually written. The column
   existed but every row got an empty string, so "where did this working

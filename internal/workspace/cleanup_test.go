@@ -209,6 +209,122 @@ func TestDestroyRepoListMergesRecordedAndScannedDirs(t *testing.T) {
 	}
 }
 
+// AC: completing a task forgets EVERY recorded VCS identity it holds,
+// not one per repo. Two checkouts of one repo are two jj workspaces, and
+// the second is exactly the one a per-repo loop would drop.
+func TestDestroyForgetsEveryRecordedSlotIdentity(t *testing.T) {
+	rs, reposDir, workspacesDir := multiRepoSets(t)
+
+	markRepoDir(t, filepath.Join(reposDir, "alpha"), "jj")
+	markRepoDir(t, filepath.Join(reposDir, "beta"), "git")
+	workspaceDir := filepath.Join(workspacesDir, "slotty")
+	for _, dir := range []string{"alpha", "alpha--tests", "alpha--docs", "beta"} {
+		markRepoDir(t, filepath.Join(workspaceDir, dir), "jj")
+	}
+
+	recorded := []RepoProvenance{
+		{DirName: "alpha", RepoName: "alpha", VCS: "jj", VCSName: "slotty"},
+		{DirName: "alpha--tests", RepoName: "alpha", VCS: "jj", VCSName: "slotty--alpha--tests"},
+		{DirName: "alpha--docs", RepoName: "alpha", VCS: "jj", VCSName: "slotty--alpha--docs"},
+		{DirName: "beta", RepoName: "beta", VCS: "git", VCSName: "slotty"},
+	}
+
+	commands := captureVCSCommands(t)
+	if err := Destroy(rs, workspaceDir, recorded); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+
+	alphaSrc := filepath.Join(reposDir, "alpha")
+	betaSrc := filepath.Join(reposDir, "beta")
+	want := []recordedCommand{
+		{Dir: alphaSrc, Args: []string{"jj", "workspace", "forget", "slotty"}},
+		{Dir: alphaSrc, Args: []string{"jj", "workspace", "forget", "slotty--alpha--tests"}},
+		{Dir: alphaSrc, Args: []string{"jj", "workspace", "forget", "slotty--alpha--docs"}},
+		{Dir: betaSrc, Args: []string{"git", "worktree", "remove", "--force", filepath.Join(workspaceDir, "beta")}},
+		{Dir: betaSrc, Args: []string{"git", "branch", "-d", "krang/slotty"}},
+	}
+	if !reflect.DeepEqual(*commands, want) {
+		t.Errorf("commands = %v, want %v", *commands, want)
+	}
+
+	if _, err := os.Stat(workspaceDir); !os.IsNotExist(err) {
+		t.Errorf("workspace directory survived Destroy: %v", err)
+	}
+}
+
+// A recorded slot whose directory somebody already deleted still owns a
+// jj workspace name in the source repo, so cleanup still has to forget
+// it. Dropping it because the scan can't see it would leak the identity
+// and block a task of the same name from ever being created again.
+func TestDestroyRepoListKeepsRecordedSlotsWithNoDirectory(t *testing.T) {
+	rs, reposDir, workspacesDir := multiRepoSets(t)
+
+	markRepoDir(t, filepath.Join(reposDir, "alpha"), "jj")
+	workspaceDir := filepath.Join(workspacesDir, "slotty")
+	markRepoDir(t, filepath.Join(workspaceDir, "alpha"), "jj")
+
+	recorded := []RepoProvenance{
+		{DirName: "alpha", RepoName: "alpha", VCS: "jj", VCSName: "slotty"},
+		{DirName: "alpha--gone", RepoName: "alpha", VCS: "jj", VCSName: "slotty--alpha--gone"},
+	}
+
+	targets := DestroyRepoList(rs, workspaceDir, recorded)
+	if len(targets) != 2 || targets[1].VCSName != "slotty--alpha--gone" {
+		t.Fatalf("DestroyRepoList = %+v, want both recorded rows", targets)
+	}
+}
+
+// In single_repo the workspace directory IS the checkout, so its
+// subdirectories are that repo's own contents. Scanning them the way a
+// multi_repo container is scanned would invent slots out of vendored
+// checkouts and aim cleanup at repos nobody asked it to touch.
+func TestDestroyRepoListDoesNotScanInsideASingleRepoWorkspace(t *testing.T) {
+	rs, reposDir, workspacesDir := multiRepoSets(t)
+	rs.WorkspaceStrategy = StrategySingleRepo
+
+	markRepoDir(t, filepath.Join(reposDir, "alpha"), "jj")
+	markRepoDir(t, filepath.Join(reposDir, "vendored"), "jj")
+	workspaceDir := filepath.Join(workspacesDir, "solo")
+	markRepoDir(t, workspaceDir, "jj")
+	markRepoDir(t, filepath.Join(workspaceDir, "vendored"), "git")
+
+	recorded := []RepoProvenance{
+		{DirName: "alpha", RepoName: "alpha", VCS: "jj", VCSName: "solo"},
+	}
+
+	targets := DestroyRepoList(rs, workspaceDir, recorded)
+	if len(targets) != 1 || targets[0].RepoName != "alpha" {
+		t.Errorf("DestroyRepoList = %+v, want only the recorded checkout", targets)
+	}
+}
+
+// The branch a warning names has to be the branch the removal will try
+// to delete — which for a slot is not krang/<task>.
+func TestGitBranchForNamesEachSlotsOwnBranch(t *testing.T) {
+	rs, reposDir, workspacesDir := multiRepoSets(t)
+	markRepoDir(t, filepath.Join(reposDir, "alpha"), "git")
+	workspaceDir := filepath.Join(workspacesDir, "slotty")
+
+	cases := []struct {
+		target RepoProvenance
+		want   string
+	}{
+		{RepoProvenance{DirName: "alpha", RepoName: "alpha", VCS: "git", VCSName: "slotty"}, "krang/slotty"},
+		{
+			RepoProvenance{DirName: "alpha--tests", RepoName: "alpha", VCS: "git", VCSName: "slotty--alpha--tests"},
+			"krang/slotty--alpha--tests",
+		},
+		// An unrecorded directory falls back to the pre-slot derivation,
+		// which is also what ForgetRepo will use on it.
+		{RepoProvenance{DirName: "oneoff"}, "krang/slotty"},
+	}
+	for _, tc := range cases {
+		if got := GitBranchFor(rs, workspaceDir, tc.target); got != tc.want {
+			t.Errorf("GitBranchFor(%+v) = %q, want %q", tc.target, got, tc.want)
+		}
+	}
+}
+
 func TestDeriveProvenanceUsesPreSlotDerivation(t *testing.T) {
 	rs, reposDir, workspacesDir := multiRepoSets(t)
 

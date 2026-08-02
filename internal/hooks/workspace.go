@@ -293,10 +293,13 @@ func workspaceHTTPStatus(resp WorkspaceResponse) int {
 		return http.StatusBadRequest
 	case ReasonUnknownTask, ReasonUnknownSlot:
 		return http.StatusNotFound
-	case ReasonUnsavedWork, ReasonSharedWorkspace, ReasonSlotMissing:
+	case ReasonUnsavedWork, ReasonSharedWorkspace, ReasonSlotMissing, ReasonWorkspaceRoot:
 		// Conflicts with the current state of the world, not with the
 		// request itself. A caller that resolves the conflict — pushes,
-		// forces, stops sharing — can send the very same request again.
+		// forces, stops sharing, completes the task — can send the very
+		// same request again. workspace_root is a deliberate refusal
+		// like the rest; falling through to 500 would have read as krang
+		// breaking rather than krang declining.
 		return http.StatusConflict
 	case ReasonUnavailable, ReasonNotAccepted, ReasonExpired, ReasonTimeout:
 		return http.StatusServiceUnavailable

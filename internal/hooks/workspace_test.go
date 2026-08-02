@@ -458,11 +458,14 @@ func TestWorkspaceStatusCodesCoverEveryReason(t *testing.T) {
 		ReasonUnsavedWork:          http.StatusConflict,
 		ReasonSharedWorkspace:      http.StatusConflict,
 		ReasonSlotMissing:          http.StatusConflict,
-		ReasonUnavailable:          http.StatusServiceUnavailable,
-		ReasonNotAccepted:          http.StatusServiceUnavailable,
-		ReasonExpired:              http.StatusServiceUnavailable,
-		ReasonTimeout:              http.StatusServiceUnavailable,
-		ReasonOperationFailed:      http.StatusInternalServerError,
+		// A deliberate refusal, not a krang failure: 500 would have told
+		// the caller krang broke when it had simply declined.
+		ReasonWorkspaceRoot:   http.StatusConflict,
+		ReasonUnavailable:     http.StatusServiceUnavailable,
+		ReasonNotAccepted:     http.StatusServiceUnavailable,
+		ReasonExpired:         http.StatusServiceUnavailable,
+		ReasonTimeout:         http.StatusServiceUnavailable,
+		ReasonOperationFailed: http.StatusInternalServerError,
 	}
 
 	for reason, want := range cases {
