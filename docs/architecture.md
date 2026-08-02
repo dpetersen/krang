@@ -118,7 +118,7 @@ Orthogonal to task state. Driven by Claude Code hook events.
 
 Claude Code hooks are `type: "command"` entries in `~/.claude/settings.json` pointing to a static relay script at `~/.config/krang/hooks/relay.sh`. The relay script reads `KRANG_STATEFILE` (set by krang in each tmux window it creates) to find the current port, then forwards the event via HTTP. Standalone Claude sessions (without `KRANG_STATEFILE`) are unaffected.
 
-The hook server runs alongside the TUI in the same process, bound to a dynamic port on `127.0.0.1`.
+The hook server runs alongside the TUI in the same process, bound to a dynamic port on `127.0.0.1`. It is unauthenticated — see [Trust Boundary](#trust-boundary), which matters more now that the same server also mutates directories and source repos.
 
 **Task correlation:** Krang pre-assigns a UUID via `claude --session-id <uuid>` when creating tasks. Hook payloads include `session_id` which matches.
 
@@ -187,6 +187,25 @@ Four endpoints ride the serialization path above.
 A per-task cap of `workspace.MaxSlotsPerTask` (4) working copies bounds sprawl on the API path, with the refusal naming what could be removed to make room. The human's repo picker is not capped.
 
 **Removal order.** Forget the recorded VCS identity, remove the directory, drop the row — stopping at the first failure so all three stay in step and the identical request can be retried. Removing a repo's last slot is not special-cased: it is how a repo leaves a task, through the same gates, and the response says `data.repo_dropped`. In `single_repo` the workspace directory *is* the initial checkout and *is* the task's cwd, so removing that slot would be a task teardown; it is refused with `workspace_root` (409, like the other refusals over the state of the world — completing the task is what resolves it) regardless of `force`. In `multi_repo` — what this API is really for — the task's cwd is the workspace container and no slot is ever the cwd root.
+
+## Trust Boundary
+
+**There isn't one.** The hook server is unauthenticated HTTP on a loopback port, and every endpoint on it — hook events and the four workspace endpoints alike — will serve anything that can connect. Anything running as the user can connect: the port is discoverable by scanning loopback or by reading the state file, and the state file is a plain unencrypted JSON file at a predictable path under `~/.local/state/krang/`. There is no token, no header check, and no verification that the caller is one of krang's own task windows.
+
+What that used to buy an attacker was the ability to fake hook events: to make the task table lie about which task was waiting on a permission prompt. Annoying, and confined to krang's own display.
+
+The workspace API changed the size of that. The same unauthenticated port now:
+
+- **creates directories** anywhere `repos_dir` and a task's `workspace_dir` reach, via `POST /api/workspace/add`
+- **writes to source repos** — `jj workspace add` and `git worktree add` both mutate the canonical repo under `repos_dir`, registering a workspace or a worktree and a branch
+- **deletes working copies and their VCS identities**, via `DELETE /api/workspace/slot`, including `{"force": true}` to walk past the unsaved-work gate that exists precisely to stop uncommitted work from being destroyed
+- **reads the layout of the metarepo** — `GET /api/workspace/repos` enumerates every repo the user has cloned
+
+The `unsaved_work` and `slot_limit` refusals are guardrails against an *honest* caller doing something regrettable. They are not access control, and `force` is a documented flag rather than a barrier.
+
+**Why this is accepted today.** Krang is a single-user developer tool, and the process on the other end of that socket is a Claude Code session the user launched, running as the user, with a shell. Anything that can reach the loopback port can already run `rm -rf` on the same directories directly, so the API grants no privilege its callers lack. The exposure is real but not an escalation: it widens what a *confused* local process can do by accident, not what a malicious one can do at all.
+
+**The noted future hardening is a statefile token.** Krang would generate a random token at startup, write it into the state file alongside the port, and require it on every request. The state file already has exactly the right distribution: it is only readable by the user, krang already exports its path as `KRANG_STATEFILE` into every task window, and the relay script and `krang workspace` CLI already read it to find the port. Adding a field costs a header on the client side and one comparison on the server side, and it draws the boundary at "processes the user handed the state file to" rather than "processes running as the user" — which is what the sandbox profiles' `--env-pass KRANG_STATEFILE` was already assuming. See [future.md](future.md#workspace-enhancements).
 
 ## Task teardown
 

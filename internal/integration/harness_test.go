@@ -185,7 +185,7 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	socket := newTmuxSocket(t)
 	tempSession := fmt.Sprintf("krang-test-%d", time.Now().UnixNano())
 	krangShellCmd := fmt.Sprintf(
-		"env HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s KRANG_TMUX_SOCKET=%s %s; sleep 999",
+		"env -u KRANG_STATEFILE HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s KRANG_TMUX_SOCKET=%s %s; sleep 999",
 		shellQuote(homeDir),
 		shellQuote(dbPath),
 		shellQuote(configPath),
@@ -216,6 +216,15 @@ func NewTestEnv(t *testing.T) *TestEnv {
 		tmuxOn(socket, "set-environment", "-t", tempSession, kv[0], kv[1]).Run()
 		tmuxOn(socket, "set-environment", "-g", kv[0], kv[1]).Run()
 	}
+
+	// The developer running the suite may be doing so from inside a krang
+	// task window, where KRANG_STATEFILE points at their live instance. The
+	// tmux server inherits it from the client that started it, so drop it:
+	// the launch above already unsets it for krang itself, and this keeps
+	// any process in a window krang opens from posting hook events to the
+	// developer's real krang.
+	tmuxOn(socket, "set-environment", "-t", tempSession, "-u", "KRANG_STATEFILE").Run()
+	tmuxOn(socket, "set-environment", "-gu", "KRANG_STATEFILE").Run()
 
 	registerTmuxServerCleanup(t, socket)
 
@@ -592,7 +601,7 @@ func NewWorkspaceTestEnv(t *testing.T, strategy, vcs string, repoNames []string)
 	socket := newTmuxSocket(t)
 	tempSession := fmt.Sprintf("krang-test-%d", time.Now().UnixNano())
 	krangShellCmd := fmt.Sprintf(
-		"env HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s KRANG_TMUX_SOCKET=%s %s; sleep 999",
+		"env -u KRANG_STATEFILE HOME=%s KRANG_DB=%s KRANG_CONFIG=%s KRANG_CLAUDE_CMD=%s FAKECLAUDE_CONTROLDIR=%s KRANG_TMUX_SOCKET=%s %s; sleep 999",
 		shellQuote(homeDir),
 		shellQuote(dbPath),
 		shellQuote(configPath),
@@ -618,6 +627,15 @@ func NewWorkspaceTestEnv(t *testing.T, strategy, vcs string, repoNames []string)
 		tmuxOn(socket, "set-environment", "-t", tempSession, kv[0], kv[1]).Run()
 		tmuxOn(socket, "set-environment", "-g", kv[0], kv[1]).Run()
 	}
+
+	// The developer running the suite may be doing so from inside a krang
+	// task window, where KRANG_STATEFILE points at their live instance. The
+	// tmux server inherits it from the client that started it, so drop it:
+	// the launch above already unsets it for krang itself, and this keeps
+	// any process in a window krang opens from posting hook events to the
+	// developer's real krang.
+	tmuxOn(socket, "set-environment", "-t", tempSession, "-u", "KRANG_STATEFILE").Run()
+	tmuxOn(socket, "set-environment", "-gu", "KRANG_STATEFILE").Run()
 
 	registerTmuxServerCleanup(t, socket)
 

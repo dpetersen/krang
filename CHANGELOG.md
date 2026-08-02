@@ -39,59 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `--help` names its endpoint, its defaults, and the whole exit-code
   table, because an agent reads one `--help`, not the tree.
 
-### Changed
-
-- The completion confirmation states how many working copies are about to be
-  deleted — slots included — and names the *slot* holding uncommitted or
-  unpushed work rather than the task. Each unpushed warning now reports the
-  branch that will actually survive in the source repo
-  (`krang/<task>--<repo>--<label>` for a slot), where before it reported
-  `krang/<task>` for every entry, which was only ever right for a task's
-  initial checkout.
-
-### Fixed
-
-- Completing a task whose workspace directory another task still shares no
-  longer deletes the provenance rows for the working copies in it. The
-  directory survives the completion, so its rows now move to the surviving
-  task — the one that will eventually tear it down and needs to know every
-  VCS identity to forget. Previously the rows were dropped and the last task
-  out fell back to deriving identities from directory names, which cannot
-  name a slot, leaking a `jj workspace` per slot into the source repo.
-
-- `workspace_root` refusals from `DELETE /api/workspace/slot` now answer 409
-  instead of falling through to 500. It is a deliberate refusal like
-  `unsaved_work` and `shared_workspace`, and completing the task resolves it;
-  a 500 said krang had broken. The CLI branches on `reason`, so its exit
-  codes are unchanged.
-
-- `DestroyRepoList` no longer scans a `single_repo` workspace's
-  subdirectories for working copies. There the workspace directory *is* the
-  checkout, so its subdirectories are that repo's own contents; a vendored
-  checkout inside one could be mistaken for a slot and aim cleanup at a repo
-  nobody asked it to touch.
-
-- `workspace_repos.base_revision` is now actually written. The column
-  existed but every row got an empty string, so "where did this working
-  copy start?" was unanswerable. The base is resolved before the working
-  copy is created — the caller's `--base` when given, otherwise the
-  detected remote default branch — and the same value that was handed to
-  `jj workspace add -r` / `git worktree add` is what gets recorded.
-  Recording the bookmark name afterwards would have been worse than
-  nothing, since it points wherever the bookmark has since moved. Rows
-  written before this change keep their empty value.
-
-- Integration tests no longer run against the default tmux server. Each
-  test now gets a private server via `tmux -L`, so a test run can't
-  disturb a live krang instance on the same machine. Previously the
-  harness set `HOME`, `KRANG_CLAUDE_CMD`, and `FAKECLAUDE_CONTROLDIR` in
-  the shared server's *global* environment, which every window opened
-  afterwards inherited — a real krang task launched during a test run
-  would start the fake Claude binary against the test's temp-dir `HOME`.
-  Teardown also killed sessions by name and unset those globals outright.
-
-### Added
-
 - Workspace HTTP API. Four endpoints let a Claude session (or a future
   CLI subcommand) inspect and change a task's workspace without the user
   switching to the TUI:
@@ -191,6 +138,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Bare `krang` refuses to launch inside a krang task window. A task window
+  has `KRANG_STATEFILE` set, and starting the TUI there renamed the tmux
+  session to the new instance's name — after which the instance that owns
+  the window was hunting for its windows in a session that no longer
+  answered to the name it knew, and neither one worked again without manual
+  tmux surgery. The refusal is unconditional and there is no override flag:
+  a krang inside a krang has no use case, and a flag for it would only ever
+  be found by accident. The message points a deliberate caller at
+  `env -u KRANG_STATEFILE krang`, and everyone else at the `krang workspace`
+  subcommands, which talk to the running instance rather than starting a
+  second one.
+
+- The completion confirmation states how many working copies are about to be
+  deleted — slots included — and names the *slot* holding uncommitted or
+  unpushed work rather than the task. Each unpushed warning now reports the
+  branch that will actually survive in the source repo
+  (`krang/<task>--<repo>--<label>` for a slot), where before it reported
+  `krang/<task>` for every entry, which was only ever right for a task's
+  initial checkout.
+
 - Reusing a task name no longer force-deletes the leftover
   `krang/<task>` branch. Cleanup goes out of its way to keep branches
   holding unpushed work, and creation then threw them away. Krang now
@@ -207,6 +174,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   modal targets the task you just made instead of the previously-
   selected row. Applies to plain creation, workspace creation, and both
   fork modes.
+
+### Fixed
+
+- Nothing mutates before krang knows it can start. Startup validated in the
+  wrong order: it renamed the caller's tmux session, created the parked
+  session, ran first-time config setup, opened the database, and bound the
+  hook server's port — and only then found out whether it had a terminal to
+  draw on, because the terminal was never checked at all. Bubble Tea's
+  `Run()` failing with "could not open a new TTY" *was* the check, and it
+  ran last. Every launch precondition, the new nested-launch guard
+  included, is now answered ahead of the first rename; the terminal one
+  asks exactly what Bubble Tea asks (stdin, then `/dev/tty`).
+
+- The integration harness no longer leaks the developer's own
+  `KRANG_STATEFILE` into the test tmux server. The server inherits the
+  environment of the client that starts it, so running the suite from
+  inside a krang task window handed every test's krang — and every window
+  it opened — a statefile pointing at the live instance. The launch now
+  goes through `env -u KRANG_STATEFILE`, and the variable is unset in the
+  test server's session and global environments alongside the `HOME` and
+  `KRANG_CLAUDE_CMD` pins.
+
+- Completing a task whose workspace directory another task still shares no
+  longer deletes the provenance rows for the working copies in it. The
+  directory survives the completion, so its rows now move to the surviving
+  task — the one that will eventually tear it down and needs to know every
+  VCS identity to forget. Previously the rows were dropped and the last task
+  out fell back to deriving identities from directory names, which cannot
+  name a slot, leaking a `jj workspace` per slot into the source repo.
+
+- `workspace_root` refusals from `DELETE /api/workspace/slot` now answer 409
+  instead of falling through to 500. It is a deliberate refusal like
+  `unsaved_work` and `shared_workspace`, and completing the task resolves it;
+  a 500 said krang had broken. The CLI branches on `reason`, so its exit
+  codes are unchanged.
+
+- `DestroyRepoList` no longer scans a `single_repo` workspace's
+  subdirectories for working copies. There the workspace directory *is* the
+  checkout, so its subdirectories are that repo's own contents; a vendored
+  checkout inside one could be mistaken for a slot and aim cleanup at a repo
+  nobody asked it to touch.
+
+- `workspace_repos.base_revision` is now actually written. The column
+  existed but every row got an empty string, so "where did this working
+  copy start?" was unanswerable. The base is resolved before the working
+  copy is created — the caller's `--base` when given, otherwise the
+  detected remote default branch — and the same value that was handed to
+  `jj workspace add -r` / `git worktree add` is what gets recorded.
+  Recording the bookmark name afterwards would have been worse than
+  nothing, since it points wherever the bookmark has since moved. Rows
+  written before this change keep their empty value.
+
+- Integration tests no longer run against the default tmux server. Each
+  test now gets a private server via `tmux -L`, so a test run can't
+  disturb a live krang instance on the same machine. Previously the
+  harness set `HOME`, `KRANG_CLAUDE_CMD`, and `FAKECLAUDE_CONTROLDIR` in
+  the shared server's *global* environment, which every window opened
+  afterwards inherited — a real krang task launched during a test run
+  would start the fake Claude binary against the test's temp-dir `HOME`.
+  Teardown also killed sessions by name and unset those globals outright.
 
 ## [1.0.0-beta.3] - 2026-04-16
 

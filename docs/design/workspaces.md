@@ -23,17 +23,25 @@ The feature has three tiers of adoption:
 ### multi_repo
 
 ```
-~/code/myproject/               # metarepo root, krang runs here
+~/code/myproject/                  # metarepo root, krang runs here
 ├── repos/                         # source repos (configurable name)
 │   ├── api-server/
 │   ├── web-app/
 │   └── payments/
 ├── workspaces/                    # workspaces (configurable name)
 │   └── auth-refactor/             # named after task
-│       ├── api-server/              # jj workspace or git clone
+│       ├── api-server/            # initial working copy — <repo>
+│       ├── api-server--tests/     # slot — <repo>--<label>
+│       ├── api-server--2/         # slot — auto-numbered label
 │       └── web-app/
 └── krang.yaml
 ```
+
+A task's workspace directory is a *container* of working copies, and a
+task may hold more than one working copy of the same repo. The first one
+krang makes for a repo is the **initial** working copy and is named after
+the repo; every one after it is a **slot** and carries a label in its
+directory name. See [Slots](#slots) for how the names are derived.
 
 ### single_repo
 
@@ -47,6 +55,13 @@ The feature has three tiers of adoption:
 │       └── src/
 └── krang.yaml
 ```
+
+`single_repo` sits outside the slot system. The workspace directory *is*
+the working copy, so there is nowhere to put a second one, and the
+subdirectories under it are that repo's own contents rather than
+checkouts. Nothing scans them, and the removal API refuses to remove the
+root (`workspace_root`) because doing so would be a task teardown wearing
+a slot removal's clothes.
 
 ## krang.yaml
 
@@ -92,13 +107,88 @@ of set membership.
 **Repo deduplication:** When sets overlap, the resolved repo list
 is deduplicated.
 
+## Slots
+
+Every working copy krang creates goes through one path
+(`workspace.CloneRepoAs`) under a `SlotIdentity`, which is the single
+source of all three names the working copy needs. Nothing else derives
+them.
+
+```go
+type SlotIdentity struct {
+    TaskName string
+    RepoName string
+    Label    string  // "" means the task's initial working copy
+    Base     string  // revset/commit-ish; takes no part in any name
+}
+```
+
+### Naming scheme
+
+| Derived name | Empty label (initial) | Non-empty label (slot) |
+|---|---|---|
+| `DirName()` — directory under the workspace dir | `<repo>` | `<repo>--<label>` |
+| `VCSName()` — jj workspace name | `<task>` | `<task>--<repo>--<label>` |
+| `GitBranch()` — git branch in the source repo | `krang/<task>` | `krang/<task>--<repo>--<label>` |
+
+Worked example, task `auth-refactor`, repo `api-server`, label `tests`:
+
+| | Directory | jj workspace | git branch |
+|---|---|---|---|
+| initial | `api-server` | `auth-refactor` | `krang/auth-refactor` |
+| slot | `api-server--tests` | `auth-refactor--api-server--tests` | `krang/auth-refactor--api-server--tests` |
+
+**Initial slots keep the legacy names on purpose.** An empty label means
+the working copy predates — or would have predated — the slot system, so
+it gets the names krang has always used. Nothing on disk is renamed and
+no jj workspace or git branch created before slots existed has to be
+migrated.
+
+**Why the jj name carries the repo.** jj workspace names are unique per
+*source repo*, not per task. Two different tasks may both label a slot
+`tests`, and both labels land in the same source repo's workspace list;
+including the repo and the task keeps them apart. The `(repo_name,
+vcs_name)` unique constraint on `workspace_repos` is the same invariant
+written down in SQL.
+
+**Labels** are lowercase alphanumerics with single dashes
+(`ValidateSlotLabel`, `^[a-z0-9]+(-[a-z0-9]+)*$`). `--` is reserved as
+the separator so any derived name can be split back apart —
+`ParseSlotDirName` relies on it to read a repo and label out of a
+directory name when no provenance row exists.
+
+**Auto-numbering.** `ResolveSlotIdentity` picks the first free
+discriminator (`2`, `3`, …) when the caller gives no label. That is fine
+for the human's repo picker, where the result is visible. The HTTP API
+refuses instead (`label_required`) and suggests a free label, because an
+agent handed `api-server--2` unasked cannot tell its checkouts apart.
+
+**Refusal, not overwrite.** Before anything is written, the computed jj
+workspace name is checked against `jj workspace list` in the source repo,
+the computed git branch against `git branch --list`, and a computed slot
+directory that would spell a managed repo's name is rejected outright.
+The one reclaim krang still does is a leftover `krang/<task>` branch on
+task-name reuse, and only when `git branch -d` agrees nothing is lost —
+cleanup goes out of its way to keep unpushed branches, so creation must
+not force-delete them.
+
+**Cap.** `workspace.MaxSlotsPerTask` (4) working copies per task, enforced
+on the API path only; the human's repo picker is trusted.
+
 ## VCS Operations
 
 ### jj (workspace add)
 
 ```
 cd ~/code/myproject/repos/api-server
-jj workspace add ../../workspaces/auth-refactor/api-server --name auth-refactor
+
+# initial working copy
+jj workspace add ../../workspaces/auth-refactor/api-server \
+  --name auth-refactor -r <base>
+
+# a second slot of the same repo
+jj workspace add ../../workspaces/auth-refactor/api-server--tests \
+  --name auth-refactor--api-server--tests -r <base>
 ```
 
 Creates a linked working copy. Shared object store, space-efficient.
@@ -107,12 +197,28 @@ Creates a linked working copy. Shared object store, space-efficient.
 
 ```
 cd ~/code/myproject/repos/api-server
-git worktree add ../../workspaces/auth-refactor/api-server -b krang/auth-refactor
+
+# initial working copy
+git worktree add ../../workspaces/auth-refactor/api-server \
+  -b krang/auth-refactor <base>
+
+# a second slot of the same repo
+git worktree add ../../workspaces/auth-refactor/api-server--tests \
+  -b krang/auth-refactor--api-server--tests <base>
 ```
 
 Creates a git worktree (lightweight linked working copy). Shared
 object store, no file copying. The branch is namespaced under
 `krang/` so it's clearly identifiable for cleanup.
+
+**Base.** Slots are always created from the canonical repo under
+`repos_dir`, never from a sibling working copy: branching off a neighbour
+would inherit its in-progress state and tie the new slot's lifetime to
+the neighbour's VCS identity. `<base>` is the caller's `--base` when it
+named one, otherwise the detected remote default branch. Whichever it is,
+the *effective* value — the one actually handed to the VCS — is what
+lands in `base_revision`, because recording a bookmark name after the
+fact points wherever the bookmark has since moved.
 
 ### .worktreeinclude
 
@@ -186,6 +292,13 @@ repos. The tabbed picker opens with the Local tab showing only repos
 not already present in the workspace. The Remote tab can clone new
 repos from GitHub. Uses the same VCS operations as initial creation.
 
+The "already present" filter is slot-aware: it hides the *repos*
+(`PresentRepos`) a workspace holds rather than the directory names, so a
+second slot of a repo doesn't read as an unknown repo of its own. The
+picker is how a human adds a repo the task doesn't have; adding a second
+checkout of a repo it already has is an API-side operation
+(`POST /api/workspace/add` with a `label`, or `krang workspace add`).
+
 ### Progress Modal
 
 Workspace creation and destruction render as centered modal overlays
@@ -203,41 +316,90 @@ forget is a separate `tea.Cmd`, so the UI updates between operations.
 **Completion/destruction progress** shows:
 - "Stopping Claude" with spinner (waiting for graceful SIGINT shutdown,
   up to 5 seconds).
-- Per-repo `jj workspace forget` checklist (multi_repo only).
+- A forget checklist with one line per *working copy*, not per repo
+  (multi_repo only), so a task holding three checkouts of one repo shows
+  three lines under three identities.
 - Workspace directory removal.
 - No cancel — destruction runs to completion.
 
 ## Task Lifecycle Integration
 
-| Action   | Workspace behavior |
-|----------|-------------------|
-| Create   | Create workspace or pick cwd |
-| Park     | No change |
-| Unpark   | No change |
-| Freeze   | No change (preserve uncommitted work) |
-| Wake     | No change (workspace dir still exists) |
-| Complete | Destroy workspace (jj forget + rm -rf) |
-| Kill     | Destroy workspace (jj forget + rm -rf) |
-| Relaunch | No change |
+| Action   | Workspace behavior | `workspace_repos` rows |
+|----------|-------------------|------------------------|
+| Create   | Create workspace or pick cwd | One row per working copy, initial ones included |
+| Park     | No change | No change |
+| Unpark   | No change | No change |
+| Freeze   | No change (preserve uncommitted work) | No change |
+| Wake     | No change (workspace dir still exists) | No change |
+| Complete | Destroy workspace (forget + rm -rf) | Deleted, or reassigned if the dir is shared |
+| Failed   | No change — a diagnosis, not a teardown | No change |
+| Relaunch | No change | No change |
+
+**Freeze and park are no-ops here.** They move or close a tmux window.
+The working copies, their VCS identities, and their provenance rows are
+all exactly where the task left them, which is the whole point of
+freezing: uncommitted work survives.
+
+**`failed` is not a teardown.** Only the reconciler sets it, and only as
+a diagnosis of a window that vanished. It deliberately leaves the
+directories and the rows alone so that a later `Complete` on that same
+task still knows every identity it has to forget. `Manager.Complete` is
+the only path to a terminal state a human drives, and therefore the only
+place identities are released.
 
 ### Workspace Destruction
 
-1. Claude is stopped via SIGINT with a 5-second graceful shutdown
-   timeout (falls back to tmux kill-window).
-2. For multi_repo: enumerate subdirectories that contain `.git` or
-   `.jj`; for each jj repo, run `jj workspace forget` from the
-   source repo; for each git repo, run `git worktree remove` then
-   `git branch -d krang/<task-name>` from the source repo.
-   For single_repo: try the appropriate cleanup against all known
-   repos.
+1. Claude is stopped via SIGINT with a graceful shutdown timeout (falls
+   back to tmux kill-window).
+2. `DestroyRepoList` builds **one entry per working copy**, not per repo:
+   the recorded `workspace_repos` rows first in row order, then any
+   repo-looking directory no row covers. For each entry, `jj workspace
+   forget <recorded vcs_name>` or `git worktree remove` +
+   `git branch -d <recorded branch>`, run from the source repo.
 3. `rm -rf` the workspace directory (unconditional, removes
    everything including non-repo files).
 4. Errors are logged but don't block the state transition.
 
+**Per working copy, via the recorded rows.** A task holding three
+checkouts of one repo owns three jj workspace names, and only the initial
+one is named after the task. A loop over *repos* would forget the first
+identity three times and the other two never, leaking a `jj workspace`
+per slot into the source repo. Cleanup therefore forgets the identity the
+row *records* rather than one derived from the directory name — a
+derivation cannot name a slot.
+
+**A row with no directory still counts.** A recorded row whose directory
+is already gone stays in the destroy list, because the identity it names
+is still claimed in the source repo.
+
+**A directory with no row falls back.** One-off clones made by hand, and
+workspaces predating the table that the backfill skipped, get the old
+directory-name derivation as a best effort. The filesystem scan behind
+the rows only runs where the workspace directory is a *container* — in
+`single_repo` it is the checkout itself, so cleanup goes through
+`ForgetSingleRepoWorkspace`, which asks every repo in turn.
+
+**Shared directories reassign their rows.** When another task still
+shares the workspace directory, nothing is destroyed and nothing is
+forgotten — but the rows are not deleted either. `releaseWorkspaceRepos`
+hands them to the oldest surviving sharer, which is the task that will
+eventually tear the directory down and needs every VCS identity to do it.
+Deleting them would strand the identities behind a derivation that cannot
+name a slot. (Deleting is the right move when the directory *is*
+destroyed: it releases the task's name and its identities from the
+`(repo_name, vcs_name)` unique constraint so the name can be reused.)
+
+This is also what makes completing a *fork* safe. Forking is not
+slot-aware, but a fork that shares its owner's workspace destroys nothing
+and forgets nothing, so the owner's slots — which the fork never had a
+claim on — survive it.
+
 **Branch safety:** `git branch -d` (not `-D`) refuses to delete
 branches with unpushed commits. If a branch has unpushed work,
 it's kept as a safety net and the completion confirmation modal
-warns about it. Surviving branches are findable via
+warns about it, naming the branch that will actually survive
+(`workspace.GitBranchFor`, so a slot's own branch rather than
+`krang/<task>`). Surviving branches are findable via
 `git branch | grep krang/`.
 
 ## Sandbox Integration
@@ -286,14 +448,80 @@ Falls back to the raw string on template parse errors.
 Migration V5 adds `workspace_dir TEXT NOT NULL DEFAULT ''` to the
 tasks table. Empty string = no workspace (backward compatible).
 
+Migration V8 adds `workspace_repos`, which records where each working
+copy in a task's workspace directory came from and which VCS identity it
+owns:
+
+```sql
+CREATE TABLE IF NOT EXISTS workspace_repos (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	task_id       TEXT NOT NULL REFERENCES tasks(id),
+	repo_name     TEXT NOT NULL,
+	dir_name      TEXT NOT NULL,
+	vcs           TEXT NOT NULL CHECK(vcs IN ('jj', 'git')),
+	vcs_name      TEXT NOT NULL,
+	slot_label    TEXT NOT NULL DEFAULT '',
+	base_revision TEXT NOT NULL DEFAULT '',
+	created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	UNIQUE(task_id, dir_name),
+	UNIQUE(repo_name, vcs_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_repos_task ON workspace_repos(task_id);
+```
+
+| Column | Holds |
+|---|---|
+| `repo_name` | The repo under `repos_dir` this working copy was made from |
+| `dir_name` | `SlotIdentity.DirName()` — the directory inside the workspace dir |
+| `vcs` | `jj` or `git`, as detected on the source repo at creation |
+| `vcs_name` | `VCSName()` for jj, `GitBranch()` for git — what cleanup forgets |
+| `slot_label` | `SlotIdentity.Label`; empty for a task's initial working copy |
+| `base_revision` | The effective base the working copy started from; empty on rows written before it was recorded, and on backfilled rows |
+
+**`UNIQUE(task_id, dir_name)`** is one working copy per directory.
+**`UNIQUE(repo_name, vcs_name)`** is the jj/git invariant: identities are
+unique per source repo, across all tasks. Completing a task releases its
+rows so a reused task name doesn't collide with it.
+
+**Every working copy gets a row, including initial ones.** The reconcile
+backfill (`Manager.backfillWorkspaceRepos`) only fires for tasks with
+*zero* rows, so a partially recorded task would never have the rest
+filled in. `Manager.CreateSlot` creates and records in one step; the
+TUI's task-creation flow builds the workspace before the task row exists,
+so provenance rides on the progress entries and is written via
+`Manager.RecordSlot` once the task is created.
+
+The events table cannot serve this purpose — it is trimmed on every
+reconcile.
+
+## Reading a Workspace Back
+
+| Function | Answers |
+|---|---|
+| `PresentDirs` | The raw directory scan — names only |
+| `PresentSlots` | Each directory resolved to the repo it holds, preferring recorded rows and falling back to `ParseSlotDirName` |
+| `PresentRepos` | The *distinct* repos, which is what the repo picker hides |
+
+`PresentRepos` is the one the "already present" filter uses: a second
+slot of a repo must not read as an unknown repo of its own.
+
 ## Packages
 
 | Package | Key types/functions |
 |---------|-------------------|
 | `internal/workspace/reposets.go` | `RepoSets`, `Load()`, `ListRepos()`, `DetectVCS()`, `ResolveRepos()` |
-| `internal/workspace/workspace.go` | `Create()`, `AddRepos()`, `Destroy()`, `PresentRepos()`, `CreateWorkspaceDir()`, `CloneRepo()`, `ForgetRepo()`, `DestroyRepoList()` |
+| `internal/workspace/slot.go` | `SlotIdentity`, `DirName()`, `VCSName()`, `GitBranch()`, `ValidateSlotLabel()`, `ResolveSlotIdentity()`, `SuggestSlotLabel()`, `ParseSlotDirName()`, `PresentSlots()`, `PresentRepos()`, `MaxSlotsPerTask` |
+| `internal/workspace/workspace.go` | `Create()`, `AddRepos()`, `Destroy()`, `PresentDirs()`, `CreateWorkspaceDir()`, `CloneRepoAs()`, `RepoProvenance`, `ForgetRepo()`, `DestroyRepoList()`, `GitBranchFor()`, `ForgetSingleRepoWorkspace()` |
+| `internal/db/workspacerepos.go` | `WorkspaceRepoStore` — insert, list by task, reassign, delete |
+| `internal/task/slots.go` | `Manager.CreateSlot()`, `Manager.RecordSlot()` |
 | `internal/tui/repopicker.go` | `repoPicker` — custom toggle-list component |
 | `internal/tui/forms.go` | `newWorkspaceTaskForm()` |
+
+The HTTP API and CLI that sit on top of this
+(`GET /api/workspace`, `POST /api/workspace/add`,
+`DELETE /api/workspace/slot`, and `krang workspace`) are documented in
+[architecture.md](../architecture.md#workspace-api).
 
 ## Edge Cases
 
@@ -307,3 +535,16 @@ tasks table. Empty string = no workspace (backward compatible).
 - **No repos in repos dir:** Fall back to CWD picker.
 - **Template parse error in sandbox command:** Fall back to raw
   string.
+- **Slot name already taken in the source repo:** Refuse before writing
+  anything. Never overwrite an existing jj workspace or git branch.
+- **Slot directory would spell a managed repo's name:** Rejected
+  outright — `ParseSlotDirName` could no longer tell the two apart.
+- **Directory with no provenance row:** Cleanup falls back to the
+  directory-name derivation; the API lists it with `recorded: false`.
+- **Provenance row with no directory:** Still listed (`exists: false`)
+  and still forgotten on cleanup — the identity is real either way.
+- **Independent fork of a workspace holding labeled slots:** A gap, not
+  a feature. `ForkRepo` treats each directory name as a repo name, so
+  `api-server--tests` resolves to a repo that doesn't exist and the fork
+  fails at creation rather than producing something cleanup would
+  mishandle.

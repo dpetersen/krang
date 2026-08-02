@@ -47,11 +47,17 @@ Expose krang's task state to external agents (e.g. a workload manager Claude tha
 
 ## Workspace Enhancements
 
-Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented, as is the workspace HTTP API — `GET /api/workspace`, `GET /api/workspace/repos`, `POST /api/workspace/add`, `DELETE /api/workspace/slot` — and the `krang workspace list|repos|add|remove` CLI in front of it. See [architecture.md](architecture.md#workspace-api) and [architecture.md](architecture.md#workspace-cli). Remaining ideas:
+Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented, as is the slot system — unified slot creation under `SlotIdentity`, `workspace_repos` provenance, and per-working-copy teardown — the workspace HTTP API (`GET /api/workspace`, `GET /api/workspace/repos`, `POST /api/workspace/add`, `DELETE /api/workspace/slot`), and the `krang workspace list|repos|add|remove` CLI in front of it. See [workspaces.md](design/workspaces.md), [architecture.md](architecture.md#workspace-api), and [architecture.md](architecture.md#workspace-cli). Remaining ideas:
 
 - **A skill file for the CLI** — the subcommands document themselves in `--help` (endpoint, defaults, exit-code table), which is enough for an agent that thinks to look. A skill in `.claude/commands/` would tell it to look in the first place, and is the piece still missing.
 
+- **Slot-aware forking** — `ForkRepo` still treats every directory in a workspace as a repo name, so an independent fork of a task holding `api-server--tests` looks up a repo called `api-server--tests`, doesn't find it, and fails at creation; teaching the fork path to read `workspace_repos` the way cleanup does is what fixes it.
+
 - **Shared-workspace slot ownership** — adding a slot to a workspace two tasks share is refused (`shared_workspace`), because nothing in the data model says which task owns a slot: the `workspace_repos` row names one task, and completing that task forgets a VCS identity the other may still be working in. Answering this properly means either co-owned rows (a join table, and a rule for when the last owner leaves) or making shared forks own their workspace jointly at fork time. Refusing is the honest v1; the ambiguity is real and predates the API.
+
+- **A statefile token on the hook server** — the loopback port is unauthenticated and now mutates directories and source repos, so any process running as the user can drive it; writing a random per-startup token into the state file next to the port and requiring it on every request would move the boundary to "processes the user handed the state file to". See [architecture.md](architecture.md#trust-boundary).
+
+- **Slots for `single_repo`** — a `single_repo` workspace directory *is* the checkout, so there is nowhere to put a second one; supporting slots there means changing the layout to a container with the initial checkout inside it, which is a migration for every existing `single_repo` task and is why it hasn't been done.
 
 - **jj unsaved-work gate** — the removal gate is git-only. That is correct today, because forgetting a jj workspace leaves its commits (including the working-copy commit) in the source repo's store. It would stop being correct if krang ever started abandoning those commits on cleanup, at which point removal needs a jj-side check.
 

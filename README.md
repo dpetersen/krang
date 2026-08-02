@@ -80,6 +80,13 @@ krang setup   # installs hooks into ~/.claude/settings.json
 krang         # launch the TUI (must be inside tmux)
 ```
 
+Launch it from an ordinary tmux window, not from a window krang is
+already running a task in. Krang refuses the latter — `KRANG_STATEFILE`
+is set there, and starting a second TUI would rename the tmux session out
+from under the instance that owns the window. To act on a task's
+workspace from inside its own window, use `krang workspace` instead,
+which talks to the instance already running.
+
 `krang setup` writes a relay script to `~/.config/krang/hooks/relay.sh`
 and adds hook entries to `~/.claude/settings.json` so Claude Code
 reports events back to krang. It will show you exactly what it plans

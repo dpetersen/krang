@@ -49,7 +49,7 @@ Hints are placed in three zones below the table:
 
 **Command palette** (`:`): modal overlay listing rare commands (sit rep, import, compact windows). Navigate with `j/k`, run with `enter`, close with `esc`.
 
-**Detail modal** (`Tab` on a selected task): centered overlay showing task info (cwd, age, flags, fork lineage, shared workspace info, background processes) and context-sensitive actions. Toggle keys: `f` freeze/unfreeze, `p` park/unpark. Also: `c` complete, `d` fork, `+` companion, `F` flags, `W` add repos, `Enter` focus. Closes with `Esc`/`Tab`.
+**Detail modal** (`Tab` on a selected task): centered overlay showing task info (cwd, age, flags, fork lineage, shared workspace info, background processes, and every working copy the workspace holds — grouped under the repo each is a checkout of, with slot labels and bases, `unrecorded` for directories with no provenance row and `missing` for rows with nothing on disk) and context-sensitive actions. Toggle keys: `f` freeze/unfreeze, `p` park/unpark. Also: `c` complete, `d` fork, `+` companion, `F` flags, `W` add repos, `Enter` focus. Closes with `Esc`/`Tab`.
 
 **Complete** (`c`, from the detail modal): unified action replacing the former separate kill/complete — it is the *only* path to a terminal state a human drives, so it is the only place identities are released. Shows a consequence-aware confirmation modal stating what will happen: process stop, and the workspace path with a count of every working copy it holds (slots included, since "the workspace" stopped being an answer once a task could hold three checkouts of one repo). Uncommitted and unpushed work is named per *slot directory*, and each unpushed warning reports that slot's own surviving branch (`workspace.GitBranchFor`) rather than `krang/<task>`, which is only the initial checkout's. Only git working copies are checked, the same line the removal API's blockers draw. For shared workspaces, the confirmation shows which other tasks share the workspace and that it will NOT be deleted. Sets `StateCompleted` + `AttentionDone`. `StateFailed` is only set by the reconciler when windows vanish unexpectedly — a diagnosis, not a teardown, so it deliberately leaves provenance rows alone and a later `Complete` on that failed task still releases them.
 
@@ -77,7 +77,7 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 
 ## Key Packages
 
-- `internal/db/` — SQLite schema, task CRUD, event log
+- `internal/db/` — SQLite schema, task CRUD, event log, `workspace_repos` slot provenance
 - `internal/pathutil/` — instance ID, XDG path helpers, Claude path encoding
 - `internal/tmux/` — session/window/pane operations via `tmux` CLI
 - `internal/task/` — high-level lifecycle (create, park, freeze, etc.), reconciliation, import, session cwd decoder
@@ -85,7 +85,8 @@ The `#` column shows the actual tmux window index for active tasks (so users can
 - `internal/classify/` — Haiku-based attention classification (done vs waiting) on Stop events
 - `internal/summary/` — ANSI stripping, `claude -p` wrapper, summary pipeline
 - `internal/proctree/` — process tree walking, noise/age filtering, leaf-only display for background child process awareness
-- `internal/workspace/` — `krang.yaml` parsing, workspace creation/destruction, VCS operations (jj workspace add, git worktree add)
+- `internal/workspace/` — `krang.yaml` parsing, `SlotIdentity` and its derived names, workspace creation/destruction, VCS operations (jj workspace add, git worktree add)
+- `internal/workspaceclient/` — the `krang workspace` CLI's transport, rendering, and exit-code mapping (`cmd/workspace.go` is flags and help)
 - `internal/github/` — GitHub repo discovery via `gh` CLI (search, clone)
 - `internal/tui/` — Bubble Tea model, view, keybindings, messages, theming
 
@@ -148,7 +149,7 @@ Optional per-task isolated directories configured via `krang.yaml` at the metare
 - **`workspace_strategy: single_repo`** — pick one repo, workspace dir is a worktree/workspace
 - **`workspace_strategy: multi_repo`** — pick multiple repos (with optional set grouping via a custom toggle-list component), workspace dir contains worktrees/workspaces
 - **No strategy** — CWD picker (original behavior)
-- Git repos use `git worktree add` with `krang/<task-name>` branches; jj repos use `jj workspace add`
+- Git repos use `git worktree add`, jj repos use `jj workspace add`. The branch/workspace name is derived from the slot identity below — `krang/<task>` and `<task>` only for a task's *initial* working copy of a repo
 - `.worktreeinclude` files in source repos specify gitignored files to copy into new worktrees
 - Workspaces destroyed on task complete (git worktree remove + branch -d / jj workspace forget + rm -rf)
 - **Slots** — a task may hold more than one working copy of the same repo. Every working copy is created through `workspace.CloneRepoAs` under a `SlotIdentity{TaskName, RepoName, Label}`, which derives all its names: `DirName()`, `VCSName()` (jj workspace name), and `GitBranch()` (`krang/<VCSName>`). An **empty label means the task's initial working copy** and keeps the pre-slot names (dir `<repo>`, VCS identity `<task>`) so nothing existing is renamed. A labeled slot gets dir `<repo>--<label>`, jj workspace `<task>--<repo>--<label>`, branch `krang/<task>--<repo>--<label>`. Labels are lowercase alnum with single dashes (`ValidateSlotLabel`); `--` is reserved as the separator so a name can always be split back apart. `ResolveSlotIdentity` auto-numbers (2, 3, …) to the first free discriminator when no label is given.
@@ -169,6 +170,15 @@ Workspace mutations asked for from outside the TUI (a Claude session, a
 CLI subcommand) go through the hook HTTP server and are serialized by
 the Bubble Tea process, which is the single writer. See
 `internal/hooks/workspace.go` and `internal/tui/workspacereq.go`.
+
+**Trust boundary:** there isn't one. The hook server is unauthenticated
+HTTP on a loopback port, and these endpoints now create directories,
+write to the canonical source repos, and delete working copies (`force`
+walks past the unsaved-work gate). Anything running as the user can call
+them — the port is in a plain state file at a predictable path. Accepted
+because those callers already have a shell as the user, so the API grants
+no privilege they lack; a statefile token is the noted future hardening.
+See `docs/architecture.md#trust-boundary`.
 
 ### Endpoints
 
@@ -232,11 +242,25 @@ resolved name is echoed back as `task` on every response.
 
 When fixing a bug or adding a feature, add an entry to the `[Unreleased]` section of `CHANGELOG.md` under the appropriate category (`Added`, `Changed`, `Fixed`, etc.). See `README.md > Cutting a Release` for the full release process.
 
+**Add to the existing heading; never append a second one.** `[Unreleased]` holds at most one `### Added`, one `### Changed`, one `### Fixed`, in Keep a Changelog order. Appending a fresh `### Added` at the bottom of the section is what agents working in parallel do by default, and it produces a changelog with two of each that a reader has to reconcile by hand.
+
 ## Debugging Live Instances
 
 **Never interact with a live krang instance's tmux sessions when debugging.** Krang manages sessions by name (`k-<instanceID>`). If the session gets renamed or a second krang process starts in the same session, window management breaks silently — tasks can't be focused, new windows don't appear, and the instance becomes unrecoverable without manual tmux surgery.
 
 Safe debugging approaches: query the SQLite DB directly, read source code, read log files. Do NOT run tmux commands targeting krang-managed sessions/windows, and never start krang (including via `mise run run`) inside a window managed by another krang instance.
+
+Bare `krang` now refuses that last one on its own — see Launch Guards — but the refusal is a backstop, not permission to try.
+
+## Launch Guards
+
+`runTUI` answers three questions before it changes anything. They live in `launchGuards` in `cmd/root.go` and run in this order, ahead of the first tmux call:
+
+1. **`KRANG_STATEFILE` set** → refuse. This is a krang task window; starting the TUI here renames the tmux session out from under the instance that owns the window, and neither works again without manual tmux surgery. **There is no override flag** — a krang inside a krang has no use case, so a flag for it would only ever be found by accident. The message points a deliberate caller at `env -u KRANG_STATEFILE krang`, and everyone else at `krang workspace`, which talks to the running instance rather than starting a second one.
+2. **No terminal** → refuse. `interactiveTerminalAvailable` asks exactly what Bubble Tea asks inside `Run()`: stdin if stdin is a terminal, otherwise `/dev/tty`.
+3. **Not inside tmux** → refuse. This is the first probe that shells out, which is why it is last: a refused launch runs zero tmux commands.
+
+The ordering is the point. Startup used to rename the session, create the parked session, run first-time config setup, open the database, and bind the hook port *before* discovering it had no terminal — because the terminal was never checked at all, and Bubble Tea's `Run()` failing at the very end was the check. `TerminalAvailable` and `InsideTmux` are injectable probes so the guard can be tested without a terminal or a tmux server, and `cmd/root_test.go` asserts the refusals leave no state directory, no database, and no tmux socket behind.
 
 ## Building and Running
 
@@ -248,7 +272,7 @@ mise run build            # build binary only
 mise run setup            # install Claude Code hooks only
 ```
 
-Must be run inside tmux. Uses `jj` for version control, not `git`.
+Must be run inside tmux, with a terminal, and not from inside a krang task window (see Launch Guards). Uses `jj` for version control, not `git`.
 
 Development uses `KRANG_DB=.krang-dev.db` and `KRANG_CONFIG=.krang-dev-config.yaml` (set in mise.toml) to isolate from production paths.
 
