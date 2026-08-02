@@ -595,7 +595,6 @@ func (tp *tabbedRepoPicker) handleSearchKey(msg tea.KeyMsg) tea.Cmd {
 		r.phase = remotePhaseOrgEntry
 		r.orgInput.Focus()
 		return r.orgInput.Cursor.BlinkCmd()
-		return nil // caller handles cancel
 	default:
 		var cmd tea.Cmd
 		r.searchInput, cmd = r.searchInput.Update(msg)
