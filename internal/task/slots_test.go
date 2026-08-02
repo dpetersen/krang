@@ -53,7 +53,7 @@ func TestCreateSlotRecordsProvenance(t *testing.T) {
 	initGitRepo(t, filepath.Join(f.reposDir, "alpha"))
 	workspaceDir := slotTask(t, f, "01SLOT", "slots")
 
-	result, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "")
+	result, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "", "")
 	if err != nil {
 		t.Fatalf("CreateSlot: %v", err)
 	}
@@ -85,10 +85,10 @@ func TestCreateSlotAutoNumbersSecondCopyOfRepo(t *testing.T) {
 	initGitRepo(t, filepath.Join(f.reposDir, "alpha"))
 	workspaceDir := slotTask(t, f, "01SLOT", "slots")
 
-	if _, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", ""); err != nil {
+	if _, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "", ""); err != nil {
 		t.Fatalf("first CreateSlot: %v", err)
 	}
-	second, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "")
+	second, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "", "")
 	if err != nil {
 		t.Fatalf("second CreateSlot: %v", err)
 	}
@@ -121,11 +121,11 @@ func TestCreateSlotRefusesLabelAlreadyInUse(t *testing.T) {
 	initGitRepo(t, filepath.Join(f.reposDir, "alpha"))
 	workspaceDir := slotTask(t, f, "01SLOT", "slots")
 
-	if _, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "tests"); err != nil {
+	if _, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "tests", ""); err != nil {
 		t.Fatalf("first CreateSlot: %v", err)
 	}
 
-	_, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "tests")
+	_, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "tests", "")
 	if err == nil {
 		t.Fatal("CreateSlot reused a slot label that already has a working copy")
 	}
@@ -139,12 +139,59 @@ func TestCreateSlotRefusesLabelAlreadyInUse(t *testing.T) {
 	}
 }
 
+// AC (add --base): the revset the caller asked for reaches the VCS, and
+// the row records it. base_revision used to be written empty always,
+// which made "where did this slot start?" unanswerable after the
+// bookmark moved.
+func TestCreateSlotRecordsRequestedBase(t *testing.T) {
+	f := newManagerFixture(t)
+	repoDir := filepath.Join(f.reposDir, "alpha")
+	initGitRepo(t, repoDir)
+
+	firstCommit := gitRevParse(t, repoDir, "HEAD")
+	runGit(t, repoDir, "commit", "--allow-empty", "-m", "second")
+
+	workspaceDir := slotTask(t, f, "01SLOT", "slots")
+
+	if _, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "", firstCommit); err != nil {
+		t.Fatalf("CreateSlot: %v", err)
+	}
+
+	if head := gitRevParse(t, filepath.Join(workspaceDir, "alpha"), "HEAD"); head != firstCommit {
+		t.Errorf("slot HEAD = %s, want the requested base %s", head, firstCommit)
+	}
+
+	rows, _ := f.workspaceRepos.ListByTask("01SLOT")
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	if rows[0].BaseRevision != firstCommit {
+		t.Errorf("base_revision = %q, want %q", rows[0].BaseRevision, firstCommit)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v: %s", args, dir, err, output)
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func gitRevParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	return runGit(t, dir, "rev-parse", ref)
+}
+
 func TestCreateSlotRejectsInvalidLabel(t *testing.T) {
 	f := newManagerFixture(t)
 	initGitRepo(t, filepath.Join(f.reposDir, "alpha"))
 	workspaceDir := slotTask(t, f, "01SLOT", "slots")
 
-	if _, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "Not Valid"); err == nil {
+	if _, err := f.manager.CreateSlot("01SLOT", "slots", workspaceDir, "alpha", "Not Valid", ""); err == nil {
 		t.Fatal("CreateSlot accepted a label that can't be a branch name")
 	}
 	if entries, _ := os.ReadDir(workspaceDir); len(entries) != 0 {

@@ -18,6 +18,15 @@ const slotSeparator = "--"
 // a hundred working copies of one repo is a mistake, not a workflow.
 const maxSlotDiscriminator = 100
 
+// MaxSlotsPerTask caps how many working copies one task's workspace may
+// hold. Each slot is a full checkout on disk and one more thing for the
+// agent working in that workspace to confuse with its neighbours, so
+// sprawl is refused rather than merely discouraged. The cap is enforced
+// on the workspace HTTP API, which is the path an agent adds slots
+// through; the human driving the TUI is trusted with their own repo
+// picker.
+const MaxSlotsPerTask = 4
+
 // slotLabelPattern allows lowercase alphanumerics separated by single
 // dashes. Uppercase would collide on case-insensitive filesystems,
 // leading/trailing dashes read as typos, and a doubled dash would make
@@ -50,6 +59,16 @@ type SlotIdentity struct {
 	TaskName string
 	RepoName string
 	Label    string
+
+	// Base is the revset (jj) or commit-ish (git) the working copy
+	// starts from. Empty means "detect the remote default branch",
+	// which is what every krang-created slot did before callers could
+	// ask for something else. It takes no part in any derived name, so
+	// it plays no role in resolving or validating an identity — it
+	// rides here so that the one path that creates working copies is
+	// also the one path that knows, and can report back, where a
+	// working copy started.
+	Base string
 }
 
 // DirName returns the slot's directory name inside the workspace dir.
@@ -119,10 +138,17 @@ func (s SlotIdentity) Validate(rs *RepoSets) error {
 // single_repo mode the workspace directory itself is the task's initial
 // working copy; every other slot is a subdirectory.
 func SlotDst(rs *RepoSets, workspaceDir string, identity SlotIdentity) string {
-	if rs != nil && rs.WorkspaceStrategy == StrategySingleRepo && identity.Label == "" {
+	return SlotPath(rs, workspaceDir, identity.DirName(), identity.Label)
+}
+
+// SlotPath is SlotDst for a caller holding a recorded row rather than an
+// identity: the directory name and label are what the answer depends on,
+// and a row has both without needing the task name back.
+func SlotPath(rs *RepoSets, workspaceDir, dirName, label string) string {
+	if rs != nil && rs.WorkspaceStrategy == StrategySingleRepo && label == "" {
 		return workspaceDir
 	}
-	return filepath.Join(workspaceDir, identity.DirName())
+	return filepath.Join(workspaceDir, dirName)
 }
 
 // ParseSlotDirName resolves a workspace subdirectory back to the repo
@@ -254,6 +280,29 @@ func ResolveSlotIdentity(rs *RepoSets, workspaceDir, taskName, repo, label strin
 
 	return SlotIdentity{}, fmt.Errorf("no free slot for repo %q in %s: %w",
 		repo, filepath.Base(workspaceDir), firstConflict)
+}
+
+// SuggestSlotLabel returns a label nothing has claimed for another
+// working copy of repo, or "" when the search space is exhausted. It
+// exists so a "this repo is already here, name the slot" refusal can
+// hand back something that will actually work instead of making the
+// caller guess and retry.
+//
+// The suggestion is a bare discriminator rather than anything semantic:
+// krang has no idea what the second checkout is for, and a wrong guess
+// dressed up as advice is worse than an obviously mechanical one.
+func SuggestSlotLabel(rs *RepoSets, workspaceDir, taskName, repo string) string {
+	for n := 2; n <= maxSlotDiscriminator; n++ {
+		candidate := SlotIdentity{TaskName: taskName, RepoName: repo, Label: strconv.Itoa(n)}
+		if candidate.Validate(rs) != nil {
+			continue
+		}
+		if checkSlotFree(rs, workspaceDir, candidate) != nil {
+			continue
+		}
+		return candidate.Label
+	}
+	return ""
 }
 
 // checkSlotFree refuses an identity whose directory or VCS name

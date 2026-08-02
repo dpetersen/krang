@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `workspace_repos.base_revision` is now actually written. The column
+  existed but every row got an empty string, so "where did this working
+  copy start?" was unanswerable. The base is resolved before the working
+  copy is created — the caller's `--base` when given, otherwise the
+  detected remote default branch — and the same value that was handed to
+  `jj workspace add -r` / `git worktree add` is what gets recorded.
+  Recording the bookmark name afterwards would have been worse than
+  nothing, since it points wherever the bookmark has since moved. Rows
+  written before this change keep their empty value.
+
 - Integration tests no longer run against the default tmux server. Each
   test now gets a private server via `tmux -L`, so a test run can't
   disturb a live krang instance on the same machine. Previously the
@@ -19,6 +29,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Teardown also killed sessions by name and unset those globals outright.
 
 ### Added
+
+- Workspace HTTP API. Four endpoints let a Claude session (or a future
+  CLI subcommand) inspect and change a task's workspace without the user
+  switching to the TUI:
+
+  - `GET /api/workspace` lists every working copy the task holds, as
+    `slots[]` of `{dir, repo, canonical_repo_path, vcs, vcs_name, slot,
+    base, exists, recorded}`. Recorded `workspace_repos` rows come
+    first; repo-looking directories krang never recorded follow with
+    `recorded: false`, and a recorded row whose directory has been
+    deleted is still listed with `exists: false`.
+  - `GET /api/workspace/repos` lists the repos the metarepo makes
+    available, as `{name, in_task, sets}`.
+  - `POST /api/workspace/add` is one verb for both "a repo this task
+    doesn't have" and "another checkout of one it does". A repo already
+    in the task requires an explicit `label`, and the refusal suggests a
+    free one. `base` selects the revset or commit-ish the slot starts
+    from, defaulting to remote-default-branch detection. Slots are
+    always created from the canonical repo, never from a sibling
+    working copy.
+  - `DELETE /api/workspace/slot` forgets the recorded VCS identity,
+    removes the directory, and drops the row. It refuses with a 409 when
+    `HasUncommittedChanges`/`HasUnpushedCommits` say work would be lost,
+    naming what in a machine-readable `blockers[]`; `{"force": true}`
+    proceeds. Removing a repo's last slot is how a repo leaves a task,
+    and goes through the same gates.
+
+  Callers name the task by `task` or by `cwd` (matched against live
+  tasks' workspace directories), through one shared resolver used by all
+  four. Mutations go through the existing serialization queue; the two
+  reads skip it, because a listing takes no locks and should not wait
+  behind a modal the human may leave open. A per-task cap of four
+  working copies bounds sprawl on the API path, with the refusal naming
+  what could be removed to make room. Adding to a workspace shared by
+  several tasks is refused: nothing in the data model says which task
+  owns a slot.
 
 - Workspace requests are serialized through the TUI process. The hook
   HTTP server can now hand a typed `WorkspaceRequest` to the Bubble Tea
@@ -32,8 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   line. HTTP callers get a bounded wait and a machine-readable JSON
   failure (`{"status":"error","reason":…,"applied":…}`); a timeout is
   503 with `applied: "unknown"`, because abandoning the wait does not
-  cancel the work. A scaffolding `POST /api/workspace/ping` endpoint
-  exercises the path end to end until the real endpoints land.
+  cancel the work.
 
 - Unified slot creation. Every working copy krang makes for a task now
   goes through one path that gives it an explicit `SlotIdentity`

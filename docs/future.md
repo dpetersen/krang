@@ -47,11 +47,17 @@ Expose krang's task state to external agents (e.g. a workload manager Claude tha
 
 ## Workspace Enhancements
 
-Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented. Remaining ideas:
+Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templating) is implemented, as is the workspace HTTP API — `GET /api/workspace`, `GET /api/workspace/repos`, `POST /api/workspace/add`, `DELETE /api/workspace/slot`. See [architecture.md](architecture.md#workspace-api). Remaining ideas:
 
-- **Workspace management API** — HTTP endpoints on krang's hook server (e.g. `POST /api/workspace/add-repo`) so Claude sessions can request workspace changes without the user switching to the TUI. A CLI subcommand (`krang workspace add-repo --task foo --repo bar`) reads `KRANG_STATEFILE` for the port and curls the API. A skill file in `.claude/commands/` tells Claude how to use the CLI.
+- **CLI subcommand** — `krang workspace list|repos|add|remove`, reading `KRANG_STATEFILE` for the port and calling the endpoints above. The envelopes are already machine-readable and stable (`status`, `reason`, `applied`, plus `slots`/`repos`/`slot`/`blockers`), so the subcommand is argument parsing, a `--json` passthrough, and turning `reason` into an exit code. It should default the `cwd` parameter to its own working directory so `krang workspace list` needs no arguments inside a workspace. A skill file in `.claude/commands/` then tells Claude how to use it.
 
-  The request plumbing exists: mutations are serialized through the TUI process (see [architecture.md](architecture.md#workspace-request-serialization) and `internal/tui/workspacereq.go`), with `POST /api/workspace/ping` as a scaffolding operation. What's left per endpoint is a parameter decoder in front of `submitWorkspaceRequest`, a `WorkspaceOp` case in `Model.executeWorkspaceRequest`, and the CLI subcommand.
+- **Shared-workspace slot ownership** — adding a slot to a workspace two tasks share is refused (`shared_workspace`), because nothing in the data model says which task owns a slot: the `workspace_repos` row names one task, and completing that task forgets a VCS identity the other may still be working in. Answering this properly means either co-owned rows (a join table, and a rule for when the last owner leaves) or making shared forks own their workspace jointly at fork time. Refusing is the honest v1; the ambiguity is real and predates the API.
+
+- **jj unsaved-work gate** — the removal gate is git-only. That is correct today, because forgetting a jj workspace leaves its commits (including the working-copy commit) in the source repo's store. It would stop being correct if krang ever started abandoning those commits on cleanup, at which point removal needs a jj-side check.
+
+- **Slot cap tuning** — `workspace.MaxSlotsPerTask` is a flat 4, enforced on the API only. If it turns out to bind in practice, the natural next step is making it configurable in `krang.yaml` rather than raising the constant.
+
+- **Base revisions for pre-existing slots** — `base_revision` is now recorded for every slot krang creates, but rows written before that (and the reconcile backfill's derived rows) still have it empty. The listing reports `base: ""` for those, which is honest but means the field can't be relied on for older tasks.
 
 ## Sandbox Configuration
 

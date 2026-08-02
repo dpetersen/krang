@@ -21,17 +21,36 @@ import (
 // TUI to answer. It has to cover a real clone, not just the queue hop.
 const DefaultWorkspaceTimeout = 60 * time.Second
 
-// WorkspaceOp names a mutation the TUI knows how to perform.
+// WorkspaceOp names an operation the TUI knows how to perform.
 type WorkspaceOp string
 
 const (
-	// WorkspaceOpPing is scaffolding. It exercises the whole path —
-	// HTTP handler → request queue → tea.Cmd → reply → HTTP response
-	// — without touching a workspace, so the mechanism is testable
-	// before the real endpoints exist. Delete it or repurpose it as a
-	// liveness probe once they land.
-	WorkspaceOpPing WorkspaceOp = "ping"
+	// WorkspaceOpList enumerates the working copies in a task's
+	// workspace. Read-only.
+	WorkspaceOpList WorkspaceOp = "list"
+	// WorkspaceOpRepos lists the repos the metarepo makes available.
+	// Read-only.
+	WorkspaceOpRepos WorkspaceOp = "repos"
+	// WorkspaceOpAdd gives a task's workspace one more working copy —
+	// of a repo it doesn't hold yet, or another slot of one it does.
+	WorkspaceOpAdd WorkspaceOp = "add"
+	// WorkspaceOpRemoveSlot tears one working copy back out.
+	WorkspaceOpRemoveSlot WorkspaceOp = "remove_slot"
 )
+
+// ReadOnly reports whether an operation only reads workspace state.
+// Read-only operations skip the mutation queue: they take no locks and
+// change nothing, so making them wait behind a modal the human might
+// leave open indefinitely would break them for no benefit. See
+// Model.handleWorkspaceRequest for the full argument.
+func (op WorkspaceOp) ReadOnly() bool {
+	switch op {
+	case WorkspaceOpList, WorkspaceOpRepos:
+		return true
+	default:
+		return false
+	}
+}
 
 // Response statuses.
 const (
@@ -62,6 +81,34 @@ const (
 	ReasonUnsupportedOperation = "unsupported_operation"
 	// ReasonOperationFailed — the mutation ran and failed.
 	ReasonOperationFailed = "operation_failed"
+	// ReasonNoWorkspace — the task exists but has no workspace
+	// directory, so there is nothing to enumerate or add to.
+	ReasonNoWorkspace = "no_workspace"
+	// ReasonUnknownRepo — the named repo is not in the metarepo's
+	// repos dir. GET /api/workspace/repos lists what is.
+	ReasonUnknownRepo = "unknown_repo"
+	// ReasonLabelRequired — the workspace already holds this repo, so
+	// the new slot needs a label. The message suggests a free one.
+	ReasonLabelRequired = "label_required"
+	// ReasonSlotLimit — the task is already at MaxSlotsPerTask. The
+	// message names the slots that could be removed to make room.
+	ReasonSlotLimit = "slot_limit"
+	// ReasonSharedWorkspace — the workspace belongs to more than one
+	// task, and krang has no answer for who owns its slots.
+	ReasonSharedWorkspace = "shared_workspace"
+	// ReasonUnknownSlot — no slot in the workspace matches the request.
+	ReasonUnknownSlot = "unknown_slot"
+	// ReasonAmbiguousSlot — the request matches more than one slot.
+	ReasonAmbiguousSlot = "ambiguous_slot"
+	// ReasonSlotMissing — the slot is recorded but not on disk.
+	ReasonSlotMissing = "slot_missing"
+	// ReasonWorkspaceRoot — the slot named IS the task's workspace
+	// directory (a single_repo task's initial checkout), so removing it
+	// would tear down the task's whole working directory.
+	ReasonWorkspaceRoot = "workspace_root"
+	// ReasonUnsavedWork — removing the slot would destroy uncommitted
+	// or unpushed work. Blockers says what; {"force":true} overrides.
+	ReasonUnsavedWork = "unsaved_work"
 )
 
 // Applied tells the caller whether the mutation may have taken effect.
@@ -83,19 +130,35 @@ const (
 type WorkspaceRequest struct {
 	Op WorkspaceOp
 
-	// TaskName identifies the task whose workspace changes. Callers
-	// use names because that is what a Claude session, the CLI, and
-	// the user all have; the TUI resolves the ID.
+	// TaskName identifies the task whose workspace the request is
+	// about. Callers use names because that is what a Claude session,
+	// the CLI, and the user all have; the TUI resolves the ID.
 	TaskName string
 
-	// Repo and Label are the slot parameters the real endpoints will
-	// fill in (add-repo, create-slot). Unused by ping.
-	Repo  string
+	// Cwd is the caller's working directory, used to find the task when
+	// TaskName is empty. An agent running inside a workspace knows
+	// where it is without knowing what krang calls it.
+	Cwd string
+
+	// Repo names the repo under the metarepo's repos dir. Add uses it
+	// to pick a source; remove accepts it (with Label) as an
+	// alternative way to name a slot.
+	Repo string
+
+	// Label is the slot label. Empty means a task's initial working
+	// copy of the repo.
 	Label string
 
-	// Message is the ping payload. Scaffolding — remove with the ping
-	// operation.
-	Message string
+	// Dir names a slot by its directory inside the workspace, which is
+	// the key GET /api/workspace reports and the only unambiguous one.
+	Dir string
+
+	// Base is the revset (jj) or commit-ish (git) a new slot starts
+	// from. Empty means detect the remote default branch.
+	Base string
+
+	// Force waives the refusal that protects unsaved work on removal.
+	Force bool
 
 	// Deadline is when the HTTP caller stops waiting. A request still
 	// sitting in the queue at its deadline is dropped rather than
@@ -123,9 +186,56 @@ func (r WorkspaceRequest) Expired(now time.Time) bool {
 	return !r.Deadline.IsZero() && now.After(r.Deadline)
 }
 
+// SlotInfo describes one working copy inside a task's workspace. Its
+// field set is the contract GET /api/workspace publishes, so every key
+// is always present — a caller checking `exists` must not have to tell
+// "false" from "the server didn't say".
+//
+// Recorded distinguishes a slot krang made and wrote a workspace_repos
+// row for from one a filesystem scan merely found. The difference
+// matters: only a recorded slot has a VCS identity krang knows how to
+// forget, so an unrecorded one is reported rather than acted on
+// confidently.
+type SlotInfo struct {
+	Dir               string `json:"dir"`
+	Repo              string `json:"repo"`
+	CanonicalRepoPath string `json:"canonical_repo_path"`
+	VCS               string `json:"vcs"`
+	VCSName           string `json:"vcs_name"`
+	Slot              string `json:"slot"`
+	Base              string `json:"base"`
+	Exists            bool   `json:"exists"`
+	Recorded          bool   `json:"recorded"`
+}
+
+// RepoInfo describes one repo the metarepo makes available.
+type RepoInfo struct {
+	Name   string   `json:"name"`
+	InTask bool     `json:"in_task"`
+	Sets   []string `json:"sets"`
+}
+
+// RemovalBlocker names work that removing a slot would destroy.
+type RemovalBlocker struct {
+	Dir    string `json:"dir"`
+	Kind   string `json:"kind"`
+	Detail string `json:"detail"`
+}
+
+// Blocker kinds. Callers branch on these; Detail is for humans.
+const (
+	BlockerUncommittedChanges = "uncommitted_changes"
+	BlockerUnpushedCommits    = "unpushed_commits"
+)
+
 // WorkspaceResponse is both the TUI's answer and the JSON body of the
 // HTTP response, so the shape callers parse is the shape the model
 // produces.
+//
+// The payload fields are typed and per-operation rather than a single
+// generic blob, for the same reason WorkspaceRequest's parameters are:
+// the compiler is then the thing keeping the handler, the executor, and
+// the eventual CLI in agreement about what an operation answers with.
 type WorkspaceResponse struct {
 	Status  string            `json:"status"`
 	Op      WorkspaceOp       `json:"op,omitempty"`
@@ -133,6 +243,19 @@ type WorkspaceResponse struct {
 	Applied string            `json:"applied,omitempty"`
 	Message string            `json:"message,omitempty"`
 	Data    map[string]string `json:"data,omitempty"`
+
+	// Task is the task krang resolved the request to. Echoed back
+	// because a caller identifying itself by cwd doesn't know it.
+	Task string `json:"task,omitempty"`
+
+	// Slots is the workspace listing (list).
+	Slots []SlotInfo `json:"slots,omitempty"`
+	// Repos is the registry listing (repos).
+	Repos []RepoInfo `json:"repos,omitempty"`
+	// Slot is the single working copy an add or remove acted on.
+	Slot *SlotInfo `json:"slot,omitempty"`
+	// Blockers is what an unsaved_work refusal is protecting.
+	Blockers []RemovalBlocker `json:"blockers,omitempty"`
 }
 
 // WorkspaceOK builds a success response.
@@ -165,10 +288,16 @@ func workspaceHTTPStatus(resp WorkspaceResponse) int {
 		return http.StatusOK
 	}
 	switch resp.Reason {
-	case ReasonInvalidRequest, ReasonUnsupportedOperation:
+	case ReasonInvalidRequest, ReasonUnsupportedOperation, ReasonNoWorkspace,
+		ReasonUnknownRepo, ReasonLabelRequired, ReasonSlotLimit, ReasonAmbiguousSlot:
 		return http.StatusBadRequest
-	case ReasonUnknownTask:
+	case ReasonUnknownTask, ReasonUnknownSlot:
 		return http.StatusNotFound
+	case ReasonUnsavedWork, ReasonSharedWorkspace, ReasonSlotMissing:
+		// Conflicts with the current state of the world, not with the
+		// request itself. A caller that resolves the conflict — pushes,
+		// forces, stops sharing — can send the very same request again.
+		return http.StatusConflict
 	case ReasonUnavailable, ReasonNotAccepted, ReasonExpired, ReasonTimeout:
 		return http.StatusServiceUnavailable
 	default:
@@ -243,28 +372,114 @@ func (s *Server) submitWorkspaceRequest(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-// handleWorkspacePing is scaffolding for the workspace request
-// mechanism: it resolves the task and echoes a message back, proving
-// the plumbing end to end without mutating anything. It is registered
-// as POST /api/workspace/ping and should be removed or repurposed once
-// the real endpoints exist.
-func (s *Server) handleWorkspacePing(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Task    string `json:"task"`
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeWorkspaceResponse(w, WorkspaceFailure(WorkspaceOpPing, ReasonInvalidRequest, AppliedNo,
-			"body must be a JSON object"))
-		return
-	}
-	if body.Task == "" {
-		writeWorkspaceResponse(w, WorkspaceFailure(WorkspaceOpPing, ReasonInvalidRequest, AppliedNo,
-			`"task" is required`))
-		return
-	}
+// workspaceRequestBody is the JSON every mutating workspace endpoint
+// accepts. One struct rather than one per endpoint keeps the wire names
+// from drifting apart — "task"/"cwd" mean the same thing everywhere,
+// and an endpoint simply ignores the fields it has no use for.
+type workspaceRequestBody struct {
+	Task  string `json:"task"`
+	Cwd   string `json:"cwd"`
+	Repo  string `json:"repo"`
+	Label string `json:"label"`
+	Dir   string `json:"dir"`
+	Base  string `json:"base"`
+	Force bool   `json:"force"`
+}
 
-	req := NewWorkspaceRequest(WorkspaceOpPing, body.Task)
-	req.Message = body.Message
+// decodeWorkspaceBody reads a JSON object body, treating an empty body
+// as an empty object. Returns false after writing the failure response.
+func decodeWorkspaceBody(w http.ResponseWriter, r *http.Request, op WorkspaceOp) (workspaceRequestBody, bool) {
+	var body workspaceRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		writeWorkspaceResponse(w, WorkspaceFailure(op, ReasonInvalidRequest, AppliedNo,
+			"body must be a JSON object"))
+		return body, false
+	}
+	return body, true
+}
+
+// newTaskScopedRequest builds a request from the two ways a caller can
+// say which task it means. Every endpoint goes through here so "which
+// task?" has exactly one answer everywhere, and so the error for
+// answering it badly is worded once.
+func newTaskScopedRequest(w http.ResponseWriter, op WorkspaceOp, task, cwd string) (WorkspaceRequest, bool) {
+	if task == "" && cwd == "" {
+		writeWorkspaceResponse(w, WorkspaceFailure(op, ReasonInvalidRequest, AppliedNo,
+			`name the task: send "task" with its name, or "cwd" with a directory inside its workspace`))
+		return WorkspaceRequest{}, false
+	}
+	req := NewWorkspaceRequest(op, task)
+	req.Cwd = cwd
+	return req, true
+}
+
+// handleWorkspaceList answers GET /api/workspace with every working
+// copy the task's workspace holds.
+func (s *Server) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	req, ok := newTaskScopedRequest(w, WorkspaceOpList, query.Get("task"), query.Get("cwd"))
+	if !ok {
+		return
+	}
+	s.submitWorkspaceRequest(w, r, req)
+}
+
+// handleWorkspaceRepos answers GET /api/workspace/repos with the repos
+// the metarepo makes available and which of them the task already holds.
+func (s *Server) handleWorkspaceRepos(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	req, ok := newTaskScopedRequest(w, WorkspaceOpRepos, query.Get("task"), query.Get("cwd"))
+	if !ok {
+		return
+	}
+	s.submitWorkspaceRequest(w, r, req)
+}
+
+// handleWorkspaceAdd answers POST /api/workspace/add. One verb covers
+// both "this task needs a repo it doesn't have" and "this task needs a
+// second checkout of a repo it does" — from the caller's side those are
+// the same wish, and which one it turns out to be is decided by what
+// the workspace already holds, not by which URL was posted to.
+func (s *Server) handleWorkspaceAdd(w http.ResponseWriter, r *http.Request) {
+	body, ok := decodeWorkspaceBody(w, r, WorkspaceOpAdd)
+	if !ok {
+		return
+	}
+	req, ok := newTaskScopedRequest(w, WorkspaceOpAdd, body.Task, body.Cwd)
+	if !ok {
+		return
+	}
+	if body.Repo == "" {
+		writeWorkspaceResponse(w, WorkspaceFailure(WorkspaceOpAdd, ReasonInvalidRequest, AppliedNo,
+			`"repo" is required`))
+		return
+	}
+	req.Repo = body.Repo
+	req.Label = body.Label
+	req.Base = body.Base
+	s.submitWorkspaceRequest(w, r, req)
+}
+
+// handleWorkspaceRemoveSlot answers DELETE /api/workspace/slot. The
+// slot is named by "dir" (what the listing reports) or by "repo" plus
+// optional "label".
+func (s *Server) handleWorkspaceRemoveSlot(w http.ResponseWriter, r *http.Request) {
+	body, ok := decodeWorkspaceBody(w, r, WorkspaceOpRemoveSlot)
+	if !ok {
+		return
+	}
+	req, ok := newTaskScopedRequest(w, WorkspaceOpRemoveSlot, body.Task, body.Cwd)
+	if !ok {
+		return
+	}
+	if body.Dir == "" && body.Repo == "" {
+		writeWorkspaceResponse(w, WorkspaceFailure(WorkspaceOpRemoveSlot, ReasonInvalidRequest, AppliedNo,
+			`name the slot: send "dir" as reported by GET /api/workspace, or "repo" with an optional "label"`))
+		return
+	}
+	req.Dir = body.Dir
+	req.Repo = body.Repo
+	req.Label = body.Label
+	req.Force = body.Force
 	s.submitWorkspaceRequest(w, r, req)
 }

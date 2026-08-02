@@ -677,9 +677,12 @@ func TestGitWorktreeBasedOnRemoteMain(t *testing.T) {
 
 	// Create workspace — should fetch and base on origin/main.
 	dst := filepath.Join(workspacesDir, "test-task")
-	_, err := addGitWorktree(repoDir, dst, "test-task")
+	_, base, err := addGitWorktree(repoDir, dst, "test-task", "")
 	if err != nil {
 		t.Fatalf("addGitWorktree: %v", err)
+	}
+	if base != "origin/main" {
+		t.Errorf("reported base = %q, want origin/main so the row can record where the slot started", base)
 	}
 
 	worktreeHead := gitHeadCommit(t, dst)
@@ -709,9 +712,12 @@ func TestGitWorktreeBasedOnRemoteMaster(t *testing.T) {
 	latestCommit := gitHeadCommit(t, pusher)
 
 	dst := filepath.Join(workspacesDir, "test-task")
-	_, err := addGitWorktree(repoDir, dst, "test-task")
+	_, base, err := addGitWorktree(repoDir, dst, "test-task", "")
 	if err != nil {
 		t.Fatalf("addGitWorktree: %v", err)
+	}
+	if base != "origin/master" {
+		t.Errorf("reported base = %q, want origin/master", base)
 	}
 
 	worktreeHead := gitHeadCommit(t, dst)
@@ -786,9 +792,12 @@ func TestGitWorktreeFallbackOnNoRemote(t *testing.T) {
 
 	// No remote — should still create a workspace from HEAD.
 	dst := filepath.Join(workspacesDir, "fallback-task")
-	_, err := addGitWorktree(repoDir, dst, "fallback-task")
+	_, base, err := addGitWorktree(repoDir, dst, "fallback-task", "")
 	if err != nil {
 		t.Fatalf("addGitWorktree: %v", err)
+	}
+	if base != "" {
+		t.Errorf("reported base = %q, want empty: branching from HEAD has no stable name to record", base)
 	}
 
 	worktreeHead := gitHeadCommit(t, dst)

@@ -1802,6 +1802,7 @@ func (m Model) recordedRepos(taskID string) []workspace.RepoProvenance {
 			VCS:      row.VCS,
 			VCSName:  row.VCSName,
 			Label:    row.SlotLabel,
+			Base:     row.BaseRevision,
 			Recorded: true,
 		}
 	}
@@ -2692,7 +2693,7 @@ func (m Model) wsCloneRepoCmd(index int) tea.Cmd {
 	taskName := ws.TaskName
 	workspaceDir := ws.WorkspaceDir
 	return func() tea.Msg {
-		result, err := m.manager.CreateSlot(taskID, taskName, workspaceDir, entry.Repo, "")
+		result, err := m.manager.CreateSlot(taskID, taskName, workspaceDir, entry.Repo, "", "")
 		return wsCloneDoneMsg{
 			Index:      index,
 			Output:     result.Output,

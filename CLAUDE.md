@@ -169,13 +169,47 @@ CLI subcommand) go through the hook HTTP server and are serialized by
 the Bubble Tea process, which is the single writer. See
 `internal/hooks/workspace.go` and `internal/tui/workspacereq.go`.
 
-- **Request type** — `hooks.WorkspaceRequest{Op, TaskName, Repo, Label, Deadline, Reply}`. New operations add typed fields rather than a generic map, so handlers and the TUI executor can't drift. Callers name the *task*, not its ID.
+### Endpoints
+
+| Method | Path | Op | Queued? |
+|---|---|---|---|
+| `GET` | `/api/workspace` | `list` | no (read-only) |
+| `GET` | `/api/workspace/repos` | `repos` | no (read-only) |
+| `POST` | `/api/workspace/add` | `add` | yes |
+| `DELETE` | `/api/workspace/slot` | `remove_slot` | yes |
+
+Every endpoint identifies the task the same way, through one shared
+helper (`Model.resolveRequestTask`): an explicit `task` name wins, and
+otherwise `cwd` is matched against live tasks' `workspace_dir` with a
+path-boundary-aware longest-prefix match. The match is on
+`workspace_dir`, not `tasks.cwd`, because the cwd follows Claude around
+as it `cd`s while the workspace dir is fixed for the task's life. The
+resolved name is echoed back as `task` on every response.
+
+- **`GET /api/workspace`** — every working copy the task's workspace holds, as `slots[]` with exactly `{dir, repo, canonical_repo_path, vcs, vcs_name, slot, base, exists, recorded}` (no `omitempty`; a caller branching on `exists` must not have to tell `false` from absent). Recorded `workspace_repos` rows come first in row order; repo-looking directories with no row follow with `recorded: false`. A recorded row whose directory is gone is still listed, with `exists: false`.
+- **`GET /api/workspace/repos`** — every directory in `repos_dir` as `repos[]` of `{name, in_task, sets}`. `in_task` comes from `PresentRepos` (recorded rows preferred, directory scan as fallback), so a second slot of a repo doesn't read as a second repo. Repos named only in a `krang.yaml` set but not cloned are not listed — you can't add what isn't there.
+- **`POST /api/workspace/add`** — one verb for both "a repo this task doesn't have" and "another checkout of one it does"; which it turns out to be follows from the workspace, not the URL. A repo the task already holds requires an explicit `label`, and the refusal suggests a free one (auto-numbering is fine when a human can see the result, but an agent handed `alpha--2` unasked has no idea which checkout is which). `base` plumbs a revset/commit-ish through `SlotIdentity.Base` to `jj workspace add -r` / `git worktree add <commitish>`; empty means detect the remote default branch, and either way the effective value is recorded in `base_revision`. Slots are always created from the canonical repo under `repos_dir`.
+- **`DELETE /api/workspace/slot`** — names the slot by `dir` (what the listing reports) or by `repo` plus optional `label`. Forgets the *recorded* VCS identity, removes the directory, drops the row, in that order, stopping at the first failure so the three stay in step and the identical request can be retried.
+
+### Policies the API enforces
+
+- **Slot cap** — `workspace.MaxSlotsPerTask` (4) working copies per task. The refusal (`slot_limit`) names the slots that could be removed. The cap is on the API only; the human's repo picker is trusted.
+- **Shared workspaces refuse adds** — when two tasks share a `workspace_dir`, nothing says who owns a slot: the row would name one task and completing it would forget an identity the other is still working in. `shared_workspace` (409) keeps that ambiguity visible rather than encoding an arbitrary answer. Fork independently instead.
+- **Unsaved-work gate on removal** — `HasUncommittedChanges` / `HasUnpushedCommits` block the removal with `unsaved_work` (409) and a machine-readable `blockers[]`; `{"force": true}` proceeds. The gate is git-only by nature: forgetting a jj workspace leaves its commits — including the working-copy commit — in the source repo's store where `jj log` still finds them, so there is nothing to lose.
+- **Last slot of a repo** — not special-cased. Removing it is how a repo leaves a task, through the same gates. The response reports `data.repo_dropped`.
+- **Workspace root** — in `multi_repo` the task's cwd is the workspace *container* and no slot is ever the cwd root. In `single_repo` the workspace dir IS the initial checkout and IS the cwd, so removing that slot is a task teardown wearing a slot removal's clothes: refused with `workspace_root`, force or not. A cwd that has drifted *into* a slot is not checked — the agent asking is the one standing there.
+- **Missing directory** — a recorded slot with nothing on disk is refused with `slot_missing` (409) until forced, so the inconsistency surfaces before it's papered over.
+
+### Mechanism
+
+- **Request type** — `hooks.WorkspaceRequest{Op, TaskName, Cwd, Repo, Label, Dir, Base, Force, Deadline, Reply}`. New operations add typed fields rather than a generic map, so handlers and the TUI executor can't drift. Same for the response payloads (`Slots`, `Repos`, `Slot`, `Blockers`). Callers name the *task*, not its ID.
 - **Delivery** — the server puts the request on a channel; `Model.waitForWorkspaceRequest` receives it inside a `tea.Cmd` and re-arms, exactly like `waitForHookEvent`.
+- **Reads skip the queue.** `WorkspaceOp.ReadOnly()` is true for `list` and `repos`; those start immediately in `handleWorkspaceRequest` instead of queuing. The queue exists to keep two writers off one workspace, and a listing is not a writer. Queuing it would mean waiting on `workspaceBusy()`, which stays true for as long as the human leaves a modal open. The cost is that a listing can catch a workspace mid-clone — which reads out as `recorded: false`, i.e. honestly. `workspaceRequestDoneMsg.ReadOnly` keeps a finished read from freeing the in-flight slot a mutation is holding.
 - **The Update loop never blocks.** It appends the request to a FIFO queue. `startNextWorkspaceRequest` runs after every message (via the `Update` wrapper around `update`) and launches the head of the queue as a `tea.Cmd` when nothing else is mutating a workspace. Completion arrives as `workspaceRequestDoneMsg`, which frees the slot and lets the next one start.
 - **One at a time, across both sources.** `workspaceBusy()` is true for an in-flight request, an unfinished `wsProgress`, or an open workspace modal (wizard, repo picker, fork dialog, complete confirmation). The keyboard flows share the guard in the other direction: `n`, `e`, `d`, and `c`-on-a-workspace-task are refused (with a debug-log line) while an agent request is in flight.
 - **Timeouts don't cancel work.** The HTTP helper `submitWorkspaceRequest` waits a bounded time (`Server.WorkspaceTimeout`, default 60s). Before the TUI accepts the request, a timeout means it definitely never ran (`not_accepted`/`expired`, `applied: "no"`). After acceptance, giving up returns 503 `{"reason":"timeout","applied":"unknown"}` — the operation runs to completion anyway and still records its provenance, events row, and log line. A queued request past its deadline is dropped rather than started, so work never begins after the caller was told nothing happened.
-- **Observability** — every request that resolved a task writes a `workspace_<op>` events row (before the reply, so abandoned callers still leave a trail) and a debug-log line on completion.
-- **Scaffolding** — `POST /api/workspace/ping` and `WorkspaceOpPing` exist only to make the mechanism testable before the real endpoints (add-repo, create-slot) land. Remove or repurpose them then.
+- **Observability** — every request that resolved a task writes a `workspace_<op>` events row (before the reply, so abandoned callers still leave a trail) and a debug-log line on completion. The row records the *resolved* task name, since a cwd-identified caller sends none.
+- **Failure reasons** — `invalid_request`, `no_workspace`, `unknown_repo`, `label_required`, `slot_limit`, `ambiguous_slot`, `unsupported_operation` → 400; `unknown_task`, `unknown_slot` → 404; `unsaved_work`, `shared_workspace`, `slot_missing` → 409 (conflicts with the state of the world, so the identical request works once resolved); `unavailable`, `not_accepted`, `expired`, `timeout` → 503; `operation_failed` → 500.
 
 ## Changelog
 

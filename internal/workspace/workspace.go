@@ -254,6 +254,7 @@ type RepoProvenance struct {
 	VCS      string // "jj" or "git"
 	VCSName  string // jj workspace name; git branches are krang/<VCSName>
 	Label    string // slot label; empty for a task's initial working copy
+	Base     string // revset/commit-ish the working copy started from
 	Recorded bool
 }
 
@@ -467,12 +468,17 @@ func CloneRepoAs(rs *RepoSets, identity SlotIdentity, dst string) CloneRepoResul
 		return result
 	}
 
+	// The source is always the canonical repo under ReposDir, never
+	// another slot in the workspace: a slot branched off a sibling
+	// working copy would inherit that sibling's in-progress state and
+	// its VCS identity's lifetime.
 	repoSrc := filepath.Join(rs.ReposDir, identity.RepoName)
+	var base string
 	switch result.VCS {
 	case "jj":
-		result.Output, result.Err = cloneJJWorkspace(repoSrc, dst, identity.VCSName())
+		result.Output, base, result.Err = cloneJJWorkspace(repoSrc, dst, identity.VCSName(), identity.Base)
 	default:
-		result.Output, result.Err = addGitWorktree(repoSrc, dst, identity.VCSName())
+		result.Output, base, result.Err = addGitWorktree(repoSrc, dst, identity.VCSName(), identity.Base)
 	}
 	if result.Err != nil {
 		return result
@@ -484,6 +490,7 @@ func CloneRepoAs(rs *RepoSets, identity SlotIdentity, dst string) CloneRepoResul
 		VCS:      result.VCS,
 		VCSName:  identity.VCSName(),
 		Label:    identity.Label,
+		Base:     base,
 	}
 	return result
 }
@@ -504,49 +511,66 @@ func RepoDst(rs *RepoSets, workspaceDir, repo string) string {
 	return filepath.Join(workspaceDir, repo)
 }
 
-func cloneJJWorkspace(repoSrc, repoDst, workspaceName string) (string, error) {
+// cloneJJWorkspace adds a jj workspace at repoDst. base is the revset to
+// start from; empty means detect the remote default bookmark, which is
+// what krang has always done. The revset actually used comes back as the
+// second return value so the caller can record it — "where did this slot
+// start?" is unanswerable later, since the bookmark will have moved.
+func cloneJJWorkspace(repoSrc, repoDst, workspaceName, base string) (string, string, error) {
 	// Ensure the source repo's working copy is up to date — a stale
 	// working copy causes "jj workspace add" to fail.
 	updateCmd := exec.Command("jj", "workspace", "update-stale")
 	updateCmd.Dir = repoSrc
 	_ = updateCmd.Run() // safe no-op if not stale
 
-	// Fetch latest from origin so the workspace isn't based on stale state.
+	// Fetch latest from origin so the workspace isn't based on stale
+	// state. This runs before detection so "today's main@origin" means
+	// today's, not whatever was last fetched.
 	_ = fetchJJRemote(repoSrc)
+
+	if base == "" {
+		base = detectJJDefaultBookmark(repoSrc)
+	}
 
 	// jj workspace add must be run from the source repo.
 	args := []string{"workspace", "add", repoDst, "--name", workspaceName}
-
-	// Base the workspace on the remote default branch if we can detect it.
-	if bookmark := detectJJDefaultBookmark(repoSrc); bookmark != "" {
-		args = append(args, "-r", bookmark)
+	if base != "" {
+		args = append(args, "-r", base)
 	}
 
 	cmd := exec.Command("jj", args...)
 	cmd.Dir = repoSrc
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("jj workspace add: %w: %s", err, output)
+		return string(output), base, fmt.Errorf("jj workspace add: %w: %s", err, output)
 	}
-	return string(output), nil
+	return string(output), base, nil
 }
 
 // addGitWorktree creates a git worktree at repoDst branching from repoSrc.
 // The branch is named krang/<vcsName> to make it identifiable for cleanup.
-// It fetches from origin first and bases the worktree on the remote default
-// branch so that new workspaces start from up-to-date code.
-func addGitWorktree(repoSrc, repoDst, taskName string) (string, error) {
+// It fetches from origin first and, when base is empty, bases the
+// worktree on the remote default branch so that new workspaces start
+// from up-to-date code. The commit-ish actually used comes back as the
+// second return value for recording.
+func addGitWorktree(repoSrc, repoDst, taskName, base string) (string, string, error) {
 	// Fetch latest from origin so the worktree isn't based on a stale
 	// local HEAD. Non-fatal — proceed with whatever we have on failure.
 	_ = fetchGitRemote(repoSrc)
 
-	// Determine the remote default branch (e.g. "origin/main").
-	// If found, delegate to addGitWorktreeAt so the worktree starts there.
-	if base := detectGitDefaultBranch(repoSrc); base != "" {
-		return addGitWorktreeAt(repoSrc, repoDst, taskName, base)
+	// Determine the remote default branch (e.g. "origin/main") unless
+	// the caller named a base. Either way, delegate to
+	// addGitWorktreeAt so the worktree starts there.
+	if base == "" {
+		base = detectGitDefaultBranch(repoSrc)
+	}
+	if base != "" {
+		output, err := addGitWorktreeAt(repoSrc, repoDst, taskName, base)
+		return output, base, err
 	}
 
-	// Fallback: no remote or detection failed — branch from HEAD.
+	// Fallback: no remote and no base given — branch from HEAD. There
+	// is no stable name to record for that.
 	branchName := "krang/" + taskName
 
 	// Prune stale worktree entries that might block creation.
@@ -567,7 +591,7 @@ func addGitWorktree(repoSrc, repoDst, taskName string) (string, error) {
 	cmd.Dir = repoSrc
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(output), fmt.Errorf("git worktree add: %w: %s", err, output)
+		return string(output), "", fmt.Errorf("git worktree add: %w: %s", err, output)
 	}
 
 	result := string(output)
@@ -578,7 +602,7 @@ func addGitWorktree(repoSrc, repoDst, taskName string) (string, error) {
 		result += "\nworktreeinclude warning: " + inclErr.Error()
 	}
 
-	return result, nil
+	return result, "", nil
 }
 
 // addGitWorktreeAt creates a git worktree at a specific commit.

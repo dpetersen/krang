@@ -2,7 +2,6 @@ package tui
 
 import (
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,31 +11,15 @@ import (
 	"github.com/dpetersen/krang/internal/hooks"
 )
 
-// newWorkspaceReqModel builds a Model backed by a throwaway database
-// holding one live task named "alpha". The manager, tmux, and hook
-// channel are all absent — the request path touches none of them.
+// newWorkspaceReqModel builds a Model over a real metarepo holding one
+// live task named "alpha" and one repo to make slots of. The queueing
+// tests drive genuine mutations through it, because a queue that only
+// ever serializes no-ops proves nothing about serializing work.
 func newWorkspaceReqModel(t *testing.T) (Model, *sql.DB) {
 	t.Helper()
 
-	t.Setenv("KRANG_DB", filepath.Join(t.TempDir(), "krang.db"))
-	database, err := db.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("opening database: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
-
-	taskStore := db.NewTaskStore(database)
-	if err := taskStore.Create(&db.Task{
-		ID: "01ALPHA", Name: "alpha", State: db.StateActive,
-		Attention: db.AttentionOK, Cwd: "/tmp/ws/alpha", WorkspaceDir: "/tmp/ws/alpha",
-	}); err != nil {
-		t.Fatalf("creating task: %v", err)
-	}
-
-	return Model{
-		taskStore:  taskStore,
-		eventStore: db.NewEventStore(database),
-	}, database
+	f := newWSFixture(t, "queue-repo")
+	return f.model, f.database
 }
 
 // runCmd executes a command and flattens any batch it produces, so a
@@ -97,9 +80,10 @@ func noReplyYet(t *testing.T, req hooks.WorkspaceRequest, what string) {
 	}
 }
 
-func pingRequest(message string) hooks.WorkspaceRequest {
-	req := hooks.NewWorkspaceRequest(hooks.WorkspaceOpPing, "alpha")
-	req.Message = message
+func queuedRequest(label string) hooks.WorkspaceRequest {
+	req := hooks.NewWorkspaceRequest(hooks.WorkspaceOpAdd, "alpha")
+	req.Repo = "queue-repo"
+	req.Label = label
 	return req
 }
 
@@ -121,8 +105,8 @@ func countEvents(t *testing.T, database *sql.DB, eventType string) int {
 func TestWorkspaceRequestQueuesBehindInFlightRequest(t *testing.T) {
 	m, database := newWorkspaceReqModel(t)
 
-	first := pingRequest("first")
-	second := pingRequest("second")
+	first := queuedRequest("first")
+	second := queuedRequest("second")
 
 	model, firstCmd := m.Update(workspaceRequestMsg{Request: first})
 	m = model.(Model)
@@ -136,8 +120,8 @@ func TestWorkspaceRequestQueuesBehindInFlightRequest(t *testing.T) {
 	if len(m.workspaceQueue) != 1 {
 		t.Fatalf("queue length = %d, want 1", len(m.workspaceQueue))
 	}
-	if m.workspaceRequest.Message != "first" {
-		t.Errorf("in-flight request = %q, want the first one", m.workspaceRequest.Message)
+	if m.workspaceRequest.Label != "first" {
+		t.Errorf("in-flight request = %q, want the first one", m.workspaceRequest.Label)
 	}
 	if runCmd(t, queuedCmd) != nil {
 		t.Error("queuing a request produced work; it must wait for the in-flight one")
@@ -147,8 +131,8 @@ func TestWorkspaceRequestQueuesBehindInFlightRequest(t *testing.T) {
 	// The first request finishes.
 	firstDone := doneMsg(t, runCmd(t, firstCmd))
 	firstResp := replyOrFail(t, first)
-	if firstResp.Status != hooks.WorkspaceStatusOK || firstResp.Data["echo"] != "first" {
-		t.Errorf("first reply = %+v, want ok echoing %q", firstResp, "first")
+	if firstResp.Status != hooks.WorkspaceStatusOK || firstResp.Slot.Slot != "first" {
+		t.Errorf("first reply = %+v, want the first slot created", firstResp)
 	}
 
 	model, secondCmd := m.Update(firstDone)
@@ -156,14 +140,14 @@ func TestWorkspaceRequestQueuesBehindInFlightRequest(t *testing.T) {
 	if len(m.workspaceQueue) != 0 {
 		t.Fatalf("queue length = %d, want 0 after the slot freed", len(m.workspaceQueue))
 	}
-	if m.workspaceRequest == nil || m.workspaceRequest.Message != "second" {
+	if m.workspaceRequest == nil || m.workspaceRequest.Label != "second" {
 		t.Fatalf("in-flight request = %+v, want the queued second one", m.workspaceRequest)
 	}
 
 	secondDone := doneMsg(t, runCmd(t, secondCmd))
 	secondResp := replyOrFail(t, second)
-	if secondResp.Status != hooks.WorkspaceStatusOK || secondResp.Data["echo"] != "second" {
-		t.Errorf("second reply = %+v, want ok echoing %q", secondResp, "second")
+	if secondResp.Status != hooks.WorkspaceStatusOK || secondResp.Slot.Slot != "second" {
+		t.Errorf("second reply = %+v, want the second slot created", secondResp)
 	}
 
 	model, _ = m.Update(secondDone)
@@ -171,8 +155,8 @@ func TestWorkspaceRequestQueuesBehindInFlightRequest(t *testing.T) {
 	if m.workspaceRequest != nil {
 		t.Error("in-flight slot still held after the last request finished")
 	}
-	if got := countEvents(t, database, "workspace_ping"); got != 2 {
-		t.Errorf("workspace_ping events = %d, want 2", got)
+	if got := countEvents(t, database, "workspace_add"); got != 2 {
+		t.Errorf("workspace_add events = %d, want 2", got)
 	}
 }
 
@@ -183,7 +167,7 @@ func TestWorkspaceRequestQueuesBehindHumanWorkspaceClone(t *testing.T) {
 	m.mode = ModeWorkspaceProgress
 	m.wsProgress = &wsProgressState{Title: "Creating workspace \"beta\""}
 
-	req := pingRequest("during clone")
+	req := queuedRequest("during-clone")
 
 	model, cmd := m.Update(workspaceRequestMsg{Request: req})
 	m = model.(Model)
@@ -213,8 +197,8 @@ func TestWorkspaceRequestQueuesBehindHumanWorkspaceClone(t *testing.T) {
 	if resp := replyOrFail(t, req); resp.Status != hooks.WorkspaceStatusOK {
 		t.Errorf("reply = %+v, want ok", resp)
 	}
-	if done.Op != hooks.WorkspaceOpPing {
-		t.Errorf("done op = %q, want %q", done.Op, hooks.WorkspaceOpPing)
+	if done.Op != hooks.WorkspaceOpAdd {
+		t.Errorf("done op = %q, want %q", done.Op, hooks.WorkspaceOpAdd)
 	}
 }
 
@@ -225,7 +209,7 @@ func TestWorkspaceRequestQueuesBehindInteractiveModal(t *testing.T) {
 		m, _ := newWorkspaceReqModel(t)
 		m.mode = mode
 
-		req := pingRequest("during modal")
+		req := queuedRequest("during-modal")
 		model, _ := m.Update(workspaceRequestMsg{Request: req})
 		m = model.(Model)
 
@@ -243,7 +227,7 @@ func TestWorkspaceRequestQueuesBehindInteractiveModal(t *testing.T) {
 func TestCompletedWorkspaceRequestRecordsEventAndDebugLog(t *testing.T) {
 	m, database := newWorkspaceReqModel(t)
 
-	req := pingRequest("hello")
+	req := queuedRequest("hello")
 
 	model, cmd := m.Update(workspaceRequestMsg{Request: req})
 	m = model.(Model)
@@ -251,16 +235,16 @@ func TestCompletedWorkspaceRequestRecordsEventAndDebugLog(t *testing.T) {
 
 	// The events row is written before the caller is answered, so an
 	// abandoned request is still recorded.
-	if got := countEvents(t, database, "workspace_ping"); got != 1 {
-		t.Errorf("workspace_ping events = %d, want 1", got)
+	if got := countEvents(t, database, "workspace_add"); got != 1 {
+		t.Errorf("workspace_add events = %d, want 1", got)
 	}
 	var payload string
 	if err := database.QueryRow(
-		"SELECT payload FROM events WHERE event_type = 'workspace_ping'",
+		"SELECT payload FROM events WHERE event_type = 'workspace_add'",
 	).Scan(&payload); err != nil {
 		t.Fatalf("reading event payload: %v", err)
 	}
-	for _, want := range []string{`"op":"ping"`, `"task":"alpha"`, `"status":"ok"`} {
+	for _, want := range []string{`"op":"add"`, `"task":"alpha"`, `"status":"ok"`} {
 		if !strings.Contains(payload, want) {
 			t.Errorf("event payload %s missing %s", payload, want)
 		}
@@ -270,7 +254,7 @@ func TestCompletedWorkspaceRequestRecordsEventAndDebugLog(t *testing.T) {
 	m = model.(Model)
 
 	logged := strings.Join(m.debugLog, "\n")
-	if !strings.Contains(logged, "workspace ping task=alpha ok") {
+	if !strings.Contains(logged, "workspace add task=alpha ok") {
 		t.Errorf("debug log %q missing the completion line", logged)
 	}
 }
@@ -280,7 +264,7 @@ func TestCompletedWorkspaceRequestRecordsEventAndDebugLog(t *testing.T) {
 func TestWorkspaceRequestUnknownTaskFails(t *testing.T) {
 	m, database := newWorkspaceReqModel(t)
 
-	req := hooks.NewWorkspaceRequest(hooks.WorkspaceOpPing, "ghost")
+	req := hooks.NewWorkspaceRequest(hooks.WorkspaceOpAdd, "ghost")
 
 	model, cmd := m.Update(workspaceRequestMsg{Request: req})
 	m = model.(Model)
@@ -293,8 +277,8 @@ func TestWorkspaceRequestUnknownTaskFails(t *testing.T) {
 	if resp.Applied != hooks.AppliedNo {
 		t.Errorf("applied = %q, want %q", resp.Applied, hooks.AppliedNo)
 	}
-	if got := countEvents(t, database, "workspace_ping"); got != 0 {
-		t.Errorf("workspace_ping events = %d, want 0 for an unresolved task", got)
+	if got := countEvents(t, database, "workspace_add"); got != 0 {
+		t.Errorf("workspace_add events = %d, want 0 for an unresolved task", got)
 	}
 }
 
@@ -305,7 +289,7 @@ func TestExpiredQueuedWorkspaceRequestIsDroppedNotStarted(t *testing.T) {
 	m.mode = ModeWorkspaceProgress
 	m.wsProgress = &wsProgressState{Title: "busy"}
 
-	req := pingRequest("abandoned")
+	req := queuedRequest("abandoned")
 	req.Deadline = time.Now().Add(20 * time.Millisecond)
 
 	model, _ := m.Update(workspaceRequestMsg{Request: req})
@@ -330,15 +314,15 @@ func TestExpiredQueuedWorkspaceRequestIsDroppedNotStarted(t *testing.T) {
 	if resp := replyOrFail(t, req); resp.Reason != hooks.ReasonExpired {
 		t.Errorf("reason = %q, want %q", resp.Reason, hooks.ReasonExpired)
 	}
-	if got := countEvents(t, database, "workspace_ping"); got != 0 {
-		t.Errorf("workspace_ping events = %d, want 0 for a dropped request", got)
+	if got := countEvents(t, database, "workspace_add"); got != 0 {
+		t.Errorf("workspace_add events = %d, want 0 for a dropped request", got)
 	}
 }
 
 // The keyboard flows share the in-flight guard: a request holding it
 // keeps the human out rather than letting the two interleave.
 func TestKeyboardWorkspaceFlowsRefusedWhileRequestInFlight(t *testing.T) {
-	held := hooks.NewWorkspaceRequest(hooks.WorkspaceOpPing, "alpha")
+	held := hooks.NewWorkspaceRequest(hooks.WorkspaceOpAdd, "alpha")
 
 	for _, key := range []string{"d", "e", "c"} {
 		m := Model{

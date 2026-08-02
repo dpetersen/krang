@@ -142,6 +142,8 @@ POST /api/workspace/…      hook server        Bubble Tea process
 
 **Non-blocking Update.** The model receives requests with a self-re-arming `tea.Cmd`, the same pattern as hook events, and only ever *queues* them in `Update`. A drain step runs after every message and starts the head of the queue when the workspace is free, so a request held behind a modal starts on the first message after the modal closes.
 
+**Reads don't queue.** The queue exists to keep two writers off one workspace. `GET /api/workspace` and `GET /api/workspace/repos` read the `workspace_repos` rows and stat some directories; they take no locks and change nothing, so they start immediately rather than waiting on `workspaceBusy()` — which stays true for as long as a human leaves a modal open. The tradeoff is that a listing can catch a workspace mid-clone: a directory present with no row yet. That reads out as `recorded: false`, which is what it is. Reads still run inside the Bubble Tea process, so there is still exactly one thing reading krang's own view of workspace state, and `workspaceRequestDoneMsg.ReadOnly` keeps a finished read from freeing the in-flight slot a mutation is holding.
+
 **One mutation in flight.** The busy check covers the agent's request, the workspace progress modal that the create/add-repos/fork/complete flows drive, and the interactive modals that are about to start one of those flows. The keyboard flows are refused while an agent request holds the slot, which makes the two sources mutually exclusive rather than merely ordered.
 
 **Bounded waits, uncancelled work.** The HTTP side waits with a deadline and answers with a machine-readable JSON envelope (`status`, `reason`, `applied`, `message`, `data`). The `applied` field is the one callers branch on:
@@ -157,7 +159,34 @@ A timeout abandons the *wait*, not the work: the TUI still runs the operation to
 
 **Observability.** Every request that resolved a task writes a `workspace_<op>` row to the events table before replying, plus a debug-log line in the TUI on completion.
 
-`POST /api/workspace/ping` is scaffolding that exercises this path without mutating anything; it goes away when the real endpoints arrive.
+## Workspace API
+
+Four endpoints ride the serialization path above.
+
+| Method | Path | Op | Answers with |
+|---|---|---|---|
+| `GET` | `/api/workspace` | `list` | `slots[]` — every working copy the task holds |
+| `GET` | `/api/workspace/repos` | `repos` | `repos[]` — what the metarepo makes available |
+| `POST` | `/api/workspace/add` | `add` | `slot` — the working copy created |
+| `DELETE` | `/api/workspace/slot` | `remove_slot` | `slot` — the working copy removed |
+
+**One way to name a task.** All four go through `Model.resolveRequestTask`: an explicit `task` name wins, and otherwise the caller's `cwd` is matched against live tasks' `workspace_dir` (longest prefix, path-boundary aware, symlinks resolved). Matching on `workspace_dir` rather than `tasks.cwd` matters because the cwd tracks wherever Claude has `cd`'d, while the workspace dir is fixed. The resolved name is echoed back on every response so a cwd-identified caller learns what krang calls it.
+
+**Recorded versus scanned.** The listing is the `workspace_repos` rows joined with a directory scan, and reports which is which. A recorded slot carries a VCS identity and a base revision krang can act on; a scanned one is a directory whose repo and label were guessed from its name. Both are listed — hiding the second would make the API disagree with `ls` — but only the first is authoritative. A recorded row whose directory has been deleted is listed with `exists: false` rather than dropped, because that inconsistency is exactly what a caller needs to see.
+
+**Slots come from the canonical repo.** Every working copy is created from `repos_dir/<repo>`, never from a sibling slot: branching off a neighbour would inherit its in-progress state and tie the new slot's lifetime to the neighbour's VCS identity. The `--base` revset flows through `SlotIdentity.Base` into `jj workspace add -r` or `git worktree add <commitish>`, defaulting to remote-default-branch detection, and the *effective* base is what lands in `base_revision` — recording the bookmark name after the fact would point somewhere else once it moves.
+
+**Refusals rather than guesses.** Three cases the API declines instead of picking an answer for:
+
+| Situation | Reason | Why not just do it |
+|---|---|---|
+| Repo already in the task, no label given | `label_required` (400) | Auto-numbering is fine when a human sees the result; an agent handed `alpha--2` unasked can't tell its checkouts apart. The refusal suggests a free label. |
+| Workspace shared by several tasks | `shared_workspace` (409) | Nothing says which task owns a slot. The row would name one, and completing it would forget an identity another task is still working in. Fork independently. |
+| Removal would destroy unsaved work | `unsaved_work` (409) | `blockers[]` names what. `{"force": true}` proceeds. Git-only by nature: forgetting a jj workspace leaves its commits in the source repo's store. |
+
+A per-task cap of `workspace.MaxSlotsPerTask` (4) working copies bounds sprawl on the API path, with the refusal naming what could be removed to make room. The human's repo picker is not capped.
+
+**Removal order.** Forget the recorded VCS identity, remove the directory, drop the row — stopping at the first failure so all three stay in step and the identical request can be retried. Removing a repo's last slot is not special-cased: it is how a repo leaves a task, through the same gates, and the response says `data.repo_dropped`. In `single_repo` the workspace directory *is* the initial checkout and *is* the task's cwd, so removing that slot would be a task teardown; it is refused with `workspace_root` regardless of `force`. In `multi_repo` — what this API is really for — the task's cwd is the workspace container and no slot is ever the cwd root.
 
 ## Graceful Shutdown
 
@@ -229,7 +258,7 @@ SQLite per-instance at `~/.local/share/krang/instances/<encoded-cwd>/krang.db` (
 
 **workspace_repos table:** id, task_id (FK), repo_name, dir_name, vcs, vcs_name, slot_label, base_revision, created_at
 
-One row per working copy inside a task's workspace directory, written by the creation path for every slot including a task's initial ones. Cleanup reads these rows to learn which repo under the repos dir a directory came from and which jj workspace / git branch to forget, instead of inferring both from the directory name. Unique on (task_id, dir_name) and (repo_name, vcs_name). Rows are dropped when the task completes, releasing its VCS identities along with its name. Directories with no row — one-off clones made by hand, workspaces predating the table that backfill skipped — still get the old directory-name derivation as a best-effort fallback. The events table can't serve this purpose: it's trimmed on every reconcile.
+One row per working copy inside a task's workspace directory, written by the creation path for every slot including a task's initial ones. `base_revision` holds the revset or commit-ish the working copy actually started from — the caller's `--base` when it named one, otherwise the remote default branch as detected at creation time. It is resolved before the working copy is made and recorded from the same value the VCS was given, because a bookmark name recorded after the fact points wherever the bookmark has since moved. Cleanup reads these rows to learn which repo under the repos dir a directory came from and which jj workspace / git branch to forget, instead of inferring both from the directory name. Unique on (task_id, dir_name) and (repo_name, vcs_name). Rows are dropped when the task completes, releasing its VCS identities along with its name. Directories with no row — one-off clones made by hand, workspaces predating the table that backfill skipped — still get the old directory-name derivation as a best-effort fallback. The events table can't serve this purpose: it's trimmed on every reconcile.
 
 Recording every slot matters because the reconcile backfill only fires for tasks with *zero* rows: a task recorded partially would never have the rest filled in.
 

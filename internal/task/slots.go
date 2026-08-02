@@ -18,7 +18,13 @@ import (
 // result so the caller can record it with RecordSlot once the task
 // exists — every working copy needs a row, because the reconcile
 // backfill only fires for tasks with none at all.
-func (m *Manager) CreateSlot(taskID, taskName, workspaceDir, repo, label string) (workspace.CloneRepoResult, error) {
+//
+// base is the revset (jj) or commit-ish (git) to start the working copy
+// from. Empty keeps the historical behaviour: detect the remote default
+// branch at creation time. Whatever is used ends up in the row's
+// base_revision, because a bookmark name recorded after the fact points
+// somewhere else.
+func (m *Manager) CreateSlot(taskID, taskName, workspaceDir, repo, label, base string) (workspace.CloneRepoResult, error) {
 	if m.repoSets == nil {
 		return workspace.CloneRepoResult{}, fmt.Errorf("no workspace configuration loaded")
 	}
@@ -27,6 +33,10 @@ func (m *Manager) CreateSlot(taskID, taskName, workspaceDir, repo, label string)
 	if err != nil {
 		return workspace.CloneRepoResult{Repo: repo, VCS: m.repoSets.DetectVCS(repo)}, err
 	}
+	// Set after resolution rather than passed into it: the base has no
+	// bearing on which names are free, so letting it into identity
+	// resolution would only invite the two to be confused.
+	identity.Base = base
 
 	result := workspace.CloneRepoAs(m.repoSets, identity,
 		workspace.SlotDst(m.repoSets, workspaceDir, identity))
@@ -50,12 +60,13 @@ func (m *Manager) RecordSlot(taskID string, provenance workspace.RepoProvenance)
 		return nil
 	}
 	err := m.workspaceRepos.Create(&db.WorkspaceRepo{
-		TaskID:    taskID,
-		RepoName:  provenance.RepoName,
-		DirName:   provenance.DirName,
-		VCS:       provenance.VCS,
-		VCSName:   provenance.VCSName,
-		SlotLabel: provenance.Label,
+		TaskID:       taskID,
+		RepoName:     provenance.RepoName,
+		DirName:      provenance.DirName,
+		VCS:          provenance.VCS,
+		VCSName:      provenance.VCSName,
+		SlotLabel:    provenance.Label,
+		BaseRevision: provenance.Base,
 	})
 	if err != nil {
 		_ = m.events.Log(taskID, "workspace_repo_record_failed", err.Error())

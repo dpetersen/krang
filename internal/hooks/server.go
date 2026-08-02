@@ -48,9 +48,13 @@ func NewServer(stateFilePath string, onEvent EventCallback, workspaceRequests ch
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /hooks/event", s.handleEvent)
 	mux.HandleFunc("GET /health", s.handleHealth)
-	// Scaffolding endpoint proving the workspace request path. The
-	// real endpoints (add-repo, create-slot) register alongside it.
-	mux.HandleFunc("POST /api/workspace/ping", s.handleWorkspacePing)
+	// Workspace API. Reads are GETs and answer from the DB plus a
+	// directory scan; mutations go through the TUI's serialization
+	// queue. See workspace.go.
+	mux.HandleFunc("GET /api/workspace", s.handleWorkspaceList)
+	mux.HandleFunc("GET /api/workspace/repos", s.handleWorkspaceRepos)
+	mux.HandleFunc("POST /api/workspace/add", s.handleWorkspaceAdd)
+	mux.HandleFunc("DELETE /api/workspace/slot", s.handleWorkspaceRemoveSlot)
 
 	s.httpServer = &http.Server{
 		Handler: mux,
