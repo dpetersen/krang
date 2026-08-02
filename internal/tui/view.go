@@ -1190,11 +1190,10 @@ func (m Model) renderDetailModal(t *db.Task) string {
 }
 
 // detailSlotsMaxShown bounds how many working copies the detail modal
-// lists. The API caps a task at workspace.MaxSlotsPerTask, but the
-// human's repo picker is deliberately not capped, and the modal does
-// not scroll — a twenty-repo workspace would push the Actions section
-// off the screen and make the modal useless for the thing it is
-// primarily for.
+// lists. Nothing caps how many a task may hold, and the modal does not
+// scroll — a twenty-repo workspace would push the Actions section off
+// the screen and make the modal useless for the thing it is primarily
+// for.
 const detailSlotsMaxShown = 12
 
 // renderSlotsSection lists the working copies a task's workspace holds,

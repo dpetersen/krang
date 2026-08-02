@@ -450,7 +450,6 @@ func TestWorkspaceStatusCodesCoverEveryReason(t *testing.T) {
 		ReasonNoWorkspace:          http.StatusBadRequest,
 		ReasonUnknownRepo:          http.StatusBadRequest,
 		ReasonLabelRequired:        http.StatusBadRequest,
-		ReasonSlotLimit:            http.StatusBadRequest,
 		ReasonAmbiguousSlot:        http.StatusBadRequest,
 		ReasonUnsupportedOperation: http.StatusBadRequest,
 		ReasonUnknownTask:          http.StatusNotFound,

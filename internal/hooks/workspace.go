@@ -90,9 +90,6 @@ const (
 	// ReasonLabelRequired — the workspace already holds this repo, so
 	// the new slot needs a label. The message suggests a free one.
 	ReasonLabelRequired = "label_required"
-	// ReasonSlotLimit — the task is already at MaxSlotsPerTask. The
-	// message names the slots that could be removed to make room.
-	ReasonSlotLimit = "slot_limit"
 	// ReasonSharedWorkspace — the workspace belongs to more than one
 	// task, and krang has no answer for who owns its slots.
 	ReasonSharedWorkspace = "shared_workspace"
@@ -289,7 +286,7 @@ func workspaceHTTPStatus(resp WorkspaceResponse) int {
 	}
 	switch resp.Reason {
 	case ReasonInvalidRequest, ReasonUnsupportedOperation, ReasonNoWorkspace,
-		ReasonUnknownRepo, ReasonLabelRequired, ReasonSlotLimit, ReasonAmbiguousSlot:
+		ReasonUnknownRepo, ReasonLabelRequired, ReasonAmbiguousSlot:
 		return http.StatusBadRequest
 	case ReasonUnknownTask, ReasonUnknownSlot:
 		return http.StatusNotFound

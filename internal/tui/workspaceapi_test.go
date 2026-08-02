@@ -576,9 +576,10 @@ func TestWorkspaceAddPlumbsAndRecordsAnExplicitBase(t *testing.T) {
 	}
 }
 
-// AC: the per-task slot cap is enforced, and the refusal names the
-// slots that could be removed to make room.
-func TestWorkspaceAddEnforcesTheSlotCap(t *testing.T) {
+// AC: there is no per-task cap. A task that already holds four working
+// copies — the number the old cap refused at — takes a fifth and a
+// sixth, including another checkout of a repo it already has three of.
+func TestWorkspaceAddIsNotCapped(t *testing.T) {
 	f := newWSFixture(t, "alpha-repo", "beta-repo")
 
 	f.add("alpha-repo", "")
@@ -586,21 +587,25 @@ func TestWorkspaceAddEnforcesTheSlotCap(t *testing.T) {
 	f.add("alpha-repo", "two")
 	f.add("alpha-repo", "three")
 
-	resp := f.run(addRequest("beta-repo", "spare"))
+	fifth := f.add("beta-repo", "spare")
+	sixth := f.add("alpha-repo", "four")
 
-	if resp.Reason != hooks.ReasonSlotLimit {
-		t.Fatalf("reason = %q, want %q: %+v", resp.Reason, hooks.ReasonSlotLimit, resp)
-	}
-	for _, dir := range []string{"alpha-repo", "beta-repo", "alpha-repo--two", "alpha-repo--three"} {
-		if !strings.Contains(resp.Message, dir) {
-			t.Errorf("message %q does not name removable slot %q", resp.Message, dir)
+	for _, dir := range []string{fifth.Dir, sixth.Dir} {
+		if _, err := os.Stat(filepath.Join(f.workspaceDir, dir)); err != nil {
+			t.Errorf("slot %q past the old cap was not created: %v", dir, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(f.workspaceDir, "beta-repo--spare")); err == nil {
-		t.Error("the refused slot was created anyway")
+
+	rows, err := f.repoRows.ListByTask("01ALPHA")
+	if err != nil {
+		t.Fatalf("listing provenance rows: %v", err)
 	}
-	if workspace.MaxSlotsPerTask != 4 {
-		t.Errorf("MaxSlotsPerTask = %d; this test assumes 4", workspace.MaxSlotsPerTask)
+	if len(rows) != 6 {
+		t.Errorf("provenance rows = %d, want 6 — every working copy recorded", len(rows))
+	}
+
+	if listed := f.run(listRequest()); len(listed.Slots) != 6 {
+		t.Errorf("listed slots = %d, want 6: %+v", len(listed.Slots), listed.Slots)
 	}
 }
 

@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   nothing else. Exit codes distinguish the four decisions a caller
   actually has to make: 0 success, 1 an error retrying can't fix, 2 a
   refusal that the *identical* command fixes once you've dealt with what
-  the message names (`unsaved_work`, `label_required`, `slot_limit`, …),
+  the message names (`unsaved_work`, `label_required`, …),
   3 krang may or may not have applied it — do not blindly retry, and 4
   krang never took the request so retrying is safe. Every subcommand's
   `--help` names its endpoint, its defaults, and the whole exit-code
@@ -76,11 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   tasks' workspace directories), through one shared resolver used by all
   four. Mutations go through the existing serialization queue; the two
   reads skip it, because a listing takes no locks and should not wait
-  behind a modal the human may leave open. A per-task cap of four
-  working copies bounds sprawl on the API path, with the refusal naming
-  what could be removed to make room. Adding to a workspace shared by
-  several tasks is refused: nothing in the data model says which task
-  owns a slot.
+  behind a modal the human may leave open. Nothing caps how many working
+  copies a task may hold; sprawl is surfaced by the in-flight status line
+  and the detail modal's working-copy list rather than refused. Adding to
+  a workspace shared by several tasks is refused: nothing in the data
+  model says which task owns a slot.
 
 - Workspace requests are serialized through the TUI process. The hook
   HTTP server can now hand a typed `WorkspaceRequest` to the Bubble Tea

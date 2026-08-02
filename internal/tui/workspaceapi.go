@@ -141,13 +141,6 @@ func (m Model) workspaceAddOp(req hooks.WorkspaceRequest, t *db.Task) hooks.Work
 	}
 
 	slots := m.workspaceSlots(t)
-	if len(slots) >= workspace.MaxSlotsPerTask {
-		return hooks.WorkspaceFailure(req.Op, hooks.ReasonSlotLimit, hooks.AppliedNo,
-			fmt.Sprintf("task %q already holds %d working copies, the maximum: remove one first with "+
-				"DELETE /api/workspace/slot (%s)",
-				t.Name, len(slots), strings.Join(slotDirNames(slots), ", ")))
-	}
-
 	if req.Label == "" && slotsHoldRepo(slots, req.Repo) {
 		suggestion := workspace.SuggestSlotLabel(m.repoSets, t.WorkspaceDir, t.Name, req.Repo)
 		message := fmt.Sprintf("task %q already has a working copy of %q; a second one needs a label",

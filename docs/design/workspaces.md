@@ -172,8 +172,12 @@ task-name reuse, and only when `git branch -d` agrees nothing is lost —
 cleanup goes out of its way to keep unpushed branches, so creation must
 not force-delete them.
 
-**Cap.** `workspace.MaxSlotsPerTask` (4) working copies per task, enforced
-on the API path only; the human's repo picker is trusted.
+**No cap.** A task may hold as many working copies as it asks for. An
+earlier flat limit of four counted the initial repos too, so a four-repo
+task was at the limit before any agent requested anything. Sprawl is
+made visible instead of refused: the status line names every
+API-initiated mutation as it happens and the detail modal lists every
+working copy the workspace holds.
 
 ## VCS Operations
 
@@ -511,7 +515,7 @@ slot of a repo must not read as an unknown repo of its own.
 | Package | Key types/functions |
 |---------|-------------------|
 | `internal/workspace/reposets.go` | `RepoSets`, `Load()`, `ListRepos()`, `DetectVCS()`, `ResolveRepos()` |
-| `internal/workspace/slot.go` | `SlotIdentity`, `DirName()`, `VCSName()`, `GitBranch()`, `ValidateSlotLabel()`, `ResolveSlotIdentity()`, `SuggestSlotLabel()`, `ParseSlotDirName()`, `PresentSlots()`, `PresentRepos()`, `MaxSlotsPerTask` |
+| `internal/workspace/slot.go` | `SlotIdentity`, `DirName()`, `VCSName()`, `GitBranch()`, `ValidateSlotLabel()`, `ResolveSlotIdentity()`, `SuggestSlotLabel()`, `ParseSlotDirName()`, `PresentSlots()`, `PresentRepos()` |
 | `internal/workspace/workspace.go` | `Create()`, `AddRepos()`, `Destroy()`, `PresentDirs()`, `CreateWorkspaceDir()`, `CloneRepoAs()`, `RepoProvenance`, `ForgetRepo()`, `DestroyRepoList()`, `GitBranchFor()`, `ForgetSingleRepoWorkspace()` |
 | `internal/db/workspacerepos.go` | `WorkspaceRepoStore` — insert, list by task, reassign, delete |
 | `internal/task/slots.go` | `Manager.CreateSlot()`, `Manager.RecordSlot()` |

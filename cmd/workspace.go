@@ -168,8 +168,6 @@ Output:
 
 Refusals worth knowing (all exit 2, nothing applied):
   label_required    the task already holds this repo; pass --label.
-  slot_limit        the task is at the per-task cap; the message names what
-                    could be removed to make room.
   shared_workspace  two tasks share this workspace, so nothing says who would
                     own the new working copy. Fork independently instead.
 

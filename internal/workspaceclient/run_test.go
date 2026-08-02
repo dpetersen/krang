@@ -529,7 +529,6 @@ func TestExitCodeForCoversEveryServerReason(t *testing.T) {
 		hooks.ReasonOperationFailed:      ExitError,
 		hooks.ReasonWorkspaceRoot:        ExitError,
 		hooks.ReasonLabelRequired:        ExitRefused,
-		hooks.ReasonSlotLimit:            ExitRefused,
 		hooks.ReasonAmbiguousSlot:        ExitRefused,
 		hooks.ReasonUnsavedWork:          ExitRefused,
 		hooks.ReasonSharedWorkspace:      ExitRefused,

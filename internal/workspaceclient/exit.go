@@ -46,7 +46,6 @@ var refusalReasons = map[string]bool{
 	hooks.ReasonSharedWorkspace: true,
 	hooks.ReasonSlotMissing:     true,
 	hooks.ReasonLabelRequired:   true,
-	hooks.ReasonSlotLimit:       true,
 	hooks.ReasonAmbiguousSlot:   true,
 }
 
@@ -113,9 +112,9 @@ const ExitCodeHelp = `Exit codes:
      unknown task/repo/slot, no workspace, operation_failed, or a krang too
      old to serve the endpoint. Nothing applied.
   2  Refused, but fixable: the request conflicts with the current state
-     (unsaved_work, label_required, slot_limit, shared_workspace,
-     slot_missing, ambiguous_slot). Nothing applied. Fix what the message
-     names, then send the identical command again.
+     (unsaved_work, label_required, shared_workspace, slot_missing,
+     ambiguous_slot). Nothing applied. Fix what the message names, then
+     send the identical command again.
   3  UNKNOWN whether it applied (applied:"unknown"): krang accepted the work
      and did not answer in time, or failed partway. DO NOT blindly retry —
      run "krang workspace list" and decide from what is actually there.

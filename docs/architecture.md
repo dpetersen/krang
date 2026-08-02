@@ -184,7 +184,7 @@ Four endpoints ride the serialization path above.
 | Workspace shared by several tasks | `shared_workspace` (409) | Nothing says which task owns a slot. The row would name one, and completing it would forget an identity another task is still working in. Fork independently. |
 | Removal would destroy unsaved work | `unsaved_work` (409) | `blockers[]` names what. `{"force": true}` proceeds. Git-only by nature: forgetting a jj workspace leaves its commits in the source repo's store. |
 
-A per-task cap of `workspace.MaxSlotsPerTask` (4) working copies bounds sprawl on the API path, with the refusal naming what could be removed to make room. The human's repo picker is not capped.
+Nothing caps how many working copies a task may hold. A flat limit of four used to, but it counted the initial repos chosen at task creation, so a four-repo task was at the limit before an agent asked for anything — the refusal landed on the ordinary case rather than the runaway one. Sprawl is made visible instead: the status line names every API-initiated mutation while it runs, and the detail modal lists every working copy the workspace holds.
 
 **Removal order.** Forget the recorded VCS identity, remove the directory, drop the row — stopping at the first failure so all three stay in step and the identical request can be retried. Removing a repo's last slot is not special-cased: it is how a repo leaves a task, through the same gates, and the response says `data.repo_dropped`. In `single_repo` the workspace directory *is* the initial checkout and *is* the task's cwd, so removing that slot would be a task teardown; it is refused with `workspace_root` (409, like the other refusals over the state of the world — completing the task is what resolves it) regardless of `force`. In `multi_repo` — what this API is really for — the task's cwd is the workspace container and no slot is ever the cwd root.
 
@@ -201,7 +201,7 @@ The workspace API changed the size of that. The same unauthenticated port now:
 - **deletes working copies and their VCS identities**, via `DELETE /api/workspace/slot`, including `{"force": true}` to walk past the unsaved-work gate that exists precisely to stop uncommitted work from being destroyed
 - **reads the layout of the metarepo** — `GET /api/workspace/repos` enumerates every repo the user has cloned
 
-The `unsaved_work` and `slot_limit` refusals are guardrails against an *honest* caller doing something regrettable. They are not access control, and `force` is a documented flag rather than a barrier.
+The `unsaved_work` refusal is a guardrail against an *honest* caller doing something regrettable. They are not access control, and `force` is a documented flag rather than a barrier.
 
 **Why this is accepted today.** Krang is a single-user developer tool, and the process on the other end of that socket is a Claude Code session the user launched, running as the user, with a shell. Anything that can reach the loopback port can already run `rm -rf` on the same directories directly, so the API grants no privilege its callers lack. The exposure is real but not an escalation: it widens what a *confused* local process can do by accident, not what a malicious one can do at all.
 
@@ -239,7 +239,7 @@ agent in a task window            krang instance
 | Code | Meaning | What the caller should do |
 |---|---|---|
 | 1 | Unfixable error: bad flags, no state file, unknown task/repo/slot, `operation_failed`, an instance too old to serve the endpoint | Stop. Nothing applied. |
-| 2 | Refused over the state of the world: `unsaved_work`, `label_required`, `slot_limit`, `shared_workspace`, `slot_missing`, `ambiguous_slot` | Deal with what the message names, then send the *identical* command. Nothing applied. |
+| 2 | Refused over the state of the world: `unsaved_work`, `label_required`, `shared_workspace`, `slot_missing`, `ambiguous_slot` | Deal with what the message names, then send the *identical* command. Nothing applied. |
 | 3 | `applied: "unknown"` — accepted then unanswered, or failed partway | Do not retry. Re-read with `krang workspace list` and decide from what is there. |
 | 4 | krang never took it: `unavailable`, `not_accepted`, `expired`, dead port | Retry once krang is up. Nothing applied. |
 

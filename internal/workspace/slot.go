@@ -18,15 +18,6 @@ const slotSeparator = "--"
 // a hundred working copies of one repo is a mistake, not a workflow.
 const maxSlotDiscriminator = 100
 
-// MaxSlotsPerTask caps how many working copies one task's workspace may
-// hold. Each slot is a full checkout on disk and one more thing for the
-// agent working in that workspace to confuse with its neighbours, so
-// sprawl is refused rather than merely discouraged. The cap is enforced
-// on the workspace HTTP API, which is the path an agent adds slots
-// through; the human driving the TUI is trusted with their own repo
-// picker.
-const MaxSlotsPerTask = 4
-
 // slotLabelPattern allows lowercase alphanumerics separated by single
 // dashes. Uppercase would collide on case-insensitive filesystems,
 // leading/trailing dashes read as typos, and a doubled dash would make

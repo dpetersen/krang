@@ -61,8 +61,6 @@ Core workspace support (creation, cleanup, repo sets, add-repos, sandbox templat
 
 - **jj unsaved-work gate** — the removal gate is git-only. That is correct today, because forgetting a jj workspace leaves its commits (including the working-copy commit) in the source repo's store. It would stop being correct if krang ever started abandoning those commits on cleanup, at which point removal needs a jj-side check.
 
-- **Slot cap tuning** — `workspace.MaxSlotsPerTask` is a flat 4, enforced on the API only. If it turns out to bind in practice, the natural next step is making it configurable in `krang.yaml` rather than raising the constant.
-
 - **Base revisions for pre-existing slots** — `base_revision` is now recorded for every slot krang creates, but rows written before that (and the reconcile backfill's derived rows) still have it empty. The listing reports `base: ""` for those, which is honest but means the field can't be relied on for older tasks.
 
 ## Sandbox Configuration
