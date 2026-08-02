@@ -12,6 +12,13 @@ type TasksRefreshedMsg struct {
 	WindowIndexes map[string]string // tmux window ID → display index
 }
 
+// taskCreatedMsg fires after a non-workspace task is created. The
+// handler stashes TaskID on the Model so the next TasksRefreshedMsg
+// moves the cursor to the new row.
+type taskCreatedMsg struct {
+	TaskID string
+}
+
 type ErrorMsg struct {
 	Err error
 }
@@ -139,7 +146,8 @@ type wsCloneDoneMsg struct {
 
 // wsLaunchDoneMsg signals that the task launch step completed.
 type wsLaunchDoneMsg struct {
-	Err error
+	TaskID string
+	Err    error
 }
 
 // wsCompleteDoneMsg signals that manager.Complete finished (Claude stopped).
@@ -179,12 +187,14 @@ type wsForkSessionCopiedMsg struct {
 
 // wsForkLaunchDoneMsg signals that the forked task was launched.
 type wsForkLaunchDoneMsg struct {
-	Err error
+	TaskID string
+	Err    error
 }
 
 // forkSharedDoneMsg signals that a shared-mode fork completed.
 type forkSharedDoneMsg struct {
 	PendingOpKey string
+	TaskID       string
 	Err          error
 }
 

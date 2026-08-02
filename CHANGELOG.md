@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   default) targets the default server exactly as before; the integration
   harness sets it per-test.
 
+### Changed
+
+- Select the newly-created task in the main list as soon as it appears,
+  so the first lifecycle action after dismissing the creation (or fork)
+  modal targets the task you just made instead of the previously-
+  selected row. Applies to plain creation, workspace creation, and both
+  fork modes.
+
 ## [1.0.0-beta.3] - 2026-04-16
 
 ### Fixed

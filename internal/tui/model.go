@@ -106,6 +106,11 @@ type Model struct {
 	// Each entry is a repo name (multi_repo) or empty for single_repo.
 	confirmUncommittedRepos []string
 	confirmUnpushedRepos    []string
+
+	// One-shot: next TasksRefreshedMsg moves the cursor to this task,
+	// then clears the field. Set after creating/forking a task so the
+	// new row gets focus as soon as it appears.
+	selectTaskID string
 }
 
 func NewModel(manager *task.Manager, taskStore *db.TaskStore, eventStore *db.EventStore, hookEvents <-chan hooks.HookEvent, summaryPipeline *summary.Pipeline, activeSession, parkedSession string, cfg config.Config, styles Styles) Model {
@@ -183,6 +188,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TasksRefreshedMsg:
 		m.tasks = msg.Tasks
 		m.windowIndexes = msg.WindowIndexes
+		m.applyPendingSelection()
 		if m.cursor >= len(m.filteredTasks()) && len(m.filteredTasks()) > 0 {
 			m.cursor = len(m.filteredTasks()) - 1
 		}
@@ -191,6 +197,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.syncWindowStyles()
 		}
 		return m, nil
+
+	case taskCreatedMsg:
+		m.selectTaskID = msg.TaskID
+		return m, m.refreshTasks
 
 	case HookEventMsg:
 		t, _ := m.taskStore.GetBySessionID(msg.Event.SessionID)
@@ -527,6 +537,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 				fmt.Sprintf("Error: %v", msg.Err))
 		} else {
+			m.wsProgress.TaskID = msg.TaskID
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Done!")
 		}
 		m.wsProgress.Done = true
@@ -734,6 +745,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines,
 				fmt.Sprintf("Error: %v", msg.Err))
 		} else {
+			m.wsProgress.TaskID = msg.TaskID
 			m.wsProgress.LogLines = append(m.wsProgress.LogLines, "Done!")
 		}
 		m.wsProgress.Done = true
@@ -744,6 +756,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.appendDebugLog(fmt.Sprintf("[%s] fork error: %v",
 				time.Now().Format("15:04:05"), msg.Err))
+		} else if msg.TaskID != "" {
+			m.selectTaskID = msg.TaskID
 		}
 		return m, m.refreshTasks
 
@@ -1201,6 +1215,9 @@ func (m Model) handleWSProgressKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			m.mode = ModeNormal
+			if ws.TaskID != "" {
+				m.selectTaskID = ws.TaskID
+			}
 			m.wsProgress = nil
 			if ws.Err != nil {
 				m.appendDebugLog(fmt.Sprintf("[%s] workspace error: %v",
@@ -2087,8 +2104,11 @@ func (m Model) forkSharedCmd(name string, src *db.Task) tea.Cmd {
 			cwd = workspaceDir
 		}
 
-		_, err := m.manager.ForkTask(name, srcSessionID, srcID, cwd, srcFlags, srcSandboxProfile, workspaceDir)
-		return forkSharedDoneMsg{PendingOpKey: "fork-" + name, Err: err}
+		t, err := m.manager.ForkTask(name, srcSessionID, srcID, cwd, srcFlags, srcSandboxProfile, workspaceDir)
+		if err != nil {
+			return forkSharedDoneMsg{PendingOpKey: "fork-" + name, Err: err}
+		}
+		return forkSharedDoneMsg{PendingOpKey: "fork-" + name, TaskID: t.ID}
 	}
 }
 
@@ -2190,8 +2210,11 @@ func (m Model) wsForkLaunchCmd() tea.Cmd {
 	sandboxProfile := ws.TaskSandboxProfile
 
 	return func() tea.Msg {
-		_, err := m.manager.ForkTask(taskName, sourceSessionID, sourceTaskID, workspaceDir, flags, sandboxProfile, workspaceDir)
-		return wsForkLaunchDoneMsg{Err: err}
+		t, err := m.manager.ForkTask(taskName, sourceSessionID, sourceTaskID, workspaceDir, flags, sandboxProfile, workspaceDir)
+		if err != nil {
+			return wsForkLaunchDoneMsg{Err: err}
+		}
+		return wsForkLaunchDoneMsg{TaskID: t.ID}
 	}
 }
 
@@ -2282,6 +2305,35 @@ func cwdMatchesTask(eventCwd string, t db.Task) bool {
 		return eventCwd == t.WorkspaceDir || strings.HasPrefix(eventCwd, t.WorkspaceDir+"/")
 	}
 	return false
+}
+
+// applyPendingSelection moves the cursor onto the task queued up by
+// selectTaskID, once that task actually shows up in a refresh.
+//
+// refreshTasks reads the database when the command runs, so a refresh
+// issued before the task was created can complete after taskCreatedMsg.
+// The pending selection therefore survives refreshes that don't mention
+// the task at all — otherwise that stale refresh would consume it and
+// the cursor would never move. Once the task is present it is either
+// focused, or abandoned when the active filter or sort mode hides it,
+// so a pending ID can never hijack the cursor later on.
+func (m *Model) applyPendingSelection() {
+	if m.selectTaskID == "" {
+		return
+	}
+	for i, t := range m.filteredTasks() {
+		if t.ID == m.selectTaskID {
+			m.cursor = i
+			m.selectTaskID = ""
+			return
+		}
+	}
+	for _, t := range m.tasks {
+		if t.ID == m.selectTaskID {
+			m.selectTaskID = ""
+			return
+		}
+	}
 }
 
 func (m Model) filteredTasks() []db.Task {
@@ -2457,10 +2509,11 @@ func (m Model) doSummarize() tea.Msg {
 
 func (m Model) createTask(name, prompt, cwd string, flags db.TaskFlags, sandboxProfile string) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := m.manager.CreateTask(name, prompt, cwd, flags, sandboxProfile); err != nil {
+		t, err := m.manager.CreateTask(name, prompt, cwd, flags, sandboxProfile)
+		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		return m.refreshTasks()
+		return taskCreatedMsg{TaskID: t.ID}
 	}
 }
 
@@ -2537,7 +2590,7 @@ func (m Model) wsLaunchTaskCmd() tea.Cmd {
 		if err := m.taskStore.UpdateWorkspaceDir(t.ID, workspaceDir); err != nil {
 			return wsLaunchDoneMsg{Err: err}
 		}
-		return wsLaunchDoneMsg{}
+		return wsLaunchDoneMsg{TaskID: t.ID}
 	}
 }
 
